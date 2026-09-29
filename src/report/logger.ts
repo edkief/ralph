@@ -1,3 +1,5 @@
+import { formatClock } from './time.js';
+
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 
 export type LogLevel = keyof typeof LEVELS;
@@ -15,24 +17,36 @@ export interface LoggerOptions {
   format?: LogFormat;
   stream?: NodeJS.WritableStream;
   color?: boolean;
+  now?: () => Date;
 }
 
 /**
- * Minimal leveled logger. Text for humans at a terminal, JSON lines for k8s
- * log collectors. Everything goes to stderr so stdout stays free for the
- * loop's own reporting.
+ * Minimal leveled logger. Text for humans at a terminal, stamped with the
+ * local time; JSON lines with UTC ISO times for k8s log collectors.
+ * Everything goes to stderr so stdout stays free for the loop's own reporting.
  */
 export class Logger {
   private readonly level: number;
   private readonly format: LogFormat;
   private readonly stream: NodeJS.WritableStream;
   private readonly color: boolean;
+  private readonly now: () => Date;
+  private hook: (() => void) | undefined;
 
   constructor(options: LoggerOptions = {}) {
     this.level = LEVELS[options.level ?? 'info'];
     this.format = options.format ?? 'text';
     this.stream = options.stream ?? process.stderr;
     this.color = options.color ?? Boolean((this.stream as NodeJS.WriteStream).isTTY);
+    this.now = options.now ?? (() => new Date());
+  }
+
+  /**
+   * Run `hook` before each line is written, e.g. to clear a transient status
+   * line on the same terminal so the log line does not land on the end of it.
+   */
+  beforeWrite(hook: (() => void) | undefined): void {
+    this.hook = hook;
   }
 
   debug(message: string, fields?: Record<string, unknown>): void {
@@ -53,17 +67,18 @@ export class Logger {
 
   private write(level: LogLevel, message: string, fields?: Record<string, unknown>): void {
     if (LEVELS[level] < this.level) return;
+    this.hook?.();
+    const now = this.now();
 
     if (this.format === 'json') {
-      this.stream.write(
-        `${JSON.stringify({ time: new Date().toISOString(), level, message, ...fields })}\n`,
-      );
+      this.stream.write(`${JSON.stringify({ time: now.toISOString(), level, message, ...fields })}\n`);
       return;
     }
 
+    const clock = this.color ? `${COLORS.debug}${formatClock(now)}\x1b[0m` : formatClock(now);
     const prefix = this.color ? `${COLORS[level]}${level}\x1b[0m` : level;
     const extra = fields && Object.keys(fields).length > 0 ? ` ${formatFields(fields)}` : '';
-    this.stream.write(`${prefix} ${message}${extra}\n`);
+    this.stream.write(`${clock} ${prefix} ${message}${extra}\n`);
   }
 }
 

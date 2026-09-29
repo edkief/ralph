@@ -192,6 +192,10 @@ The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
 
+Console lines are stamped with the local time, and the banner records the start date and
+time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.
+JSON logs always carry UTC ISO timestamps.
+
 The agent can never push: `git push` stays denied, so it cannot force-push or touch remotes.
 With `git.push` set, Ralph itself runs `git push <remote> HEAD` (never forced, never
 prompting for credentials). A failed push is logged and retried at the next opportunity;
