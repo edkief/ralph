@@ -126,6 +126,50 @@ describe('runIteration', () => {
     expect(server?.interrupts).toBe(1);
   });
 
+  it('treats any session event as activity, such as a model still processing the prompt', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { after: 700, type: 'session.step.started' },
+          { after: 700, type: 'session.step.started' },
+          { after: 700, type: 'session.execution.succeeded' },
+        ],
+      },
+      config({ timeouts: { inactivityMs: 1_200, iterationMs: 60_000 } }),
+    );
+
+    expect(result.status).toBe('progressed');
+  });
+
+  it('keeps the iteration alive while a subagent works, without taking its output', async () => {
+    const child = (type: string, data: Record<string, unknown> = {}) => ({
+      after: 700,
+      type,
+      data: { sessionID: 'ses_child', ...data },
+    });
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_fake_1' } },
+          child('session.text.ended', { text: '<promise>COMPLETE</promise>' }),
+          child('session.permission.requested', {
+            id: 'per_child',
+            action: 'shell',
+            resources: ['npm test'],
+          }),
+          child('session.execution.succeeded'),
+          { after: 700, type: 'session.text.ended', data: { text: 'mine' } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config({ timeouts: { inactivityMs: 1_200, iterationMs: 60_000 } }),
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(result.text).toBe('mine');
+    expect(server?.replies).toEqual([{ requestID: 'per_child', reply: 'once' }]);
+  });
+
   it('answers permission requests from policy and keeps going', async () => {
     const result = await iterate(
       {

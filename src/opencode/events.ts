@@ -79,23 +79,22 @@ export const PermissionRequestSchema = z.looseObject({
 
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 
-/** Event types that prove the agent is alive; they reset the inactivity watchdog. */
-export const PROGRESS_EVENTS = new Set([
-  'session.text.started',
-  'session.text.delta',
-  'session.tool.input.started',
-  'session.tool.input.ended',
-  'session.reasoning.started',
-  'session.text.ended',
-  'session.tool.called',
-  'session.tool.progress',
-  'session.tool.success',
-  'session.tool.error',
-  'session.reasoning.ended',
-  'session.step.ended',
-  'session.step.streamed',
-  'session.usage.updated',
-]);
+/** Carries the parent of a subagent session, so its work can be attributed. */
+export const SessionCreatedSchema = z.looseObject({
+  sessionID: z.string(),
+  parentID: z.string().optional(),
+});
+
+/**
+ * Whether a session-scoped event proves the agent is alive, resetting the
+ * inactivity watchdog. Any `session.*` event counts — a fixed allowlist misses
+ * quiet phases such as `session.step.started` while a local model is still
+ * processing the prompt. Provider retries are the exception: they mean the
+ * agent is stuck, and the retry-storm check counts them separately.
+ */
+export function isActivityEvent(type: string): boolean {
+  return type.startsWith('session.') && type !== 'session.retry.scheduled';
+}
 
 export const EXECUTION_DONE_EVENTS = new Set([
   'session.execution.succeeded',

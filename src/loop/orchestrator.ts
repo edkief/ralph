@@ -202,6 +202,7 @@ async function attemptIteration(context: {
       iteration: context.iteration,
       attempt,
       reason: result.status,
+      ...(result.error ? { detail: result.error } : {}),
     });
     await sleep(config.retries.backoffMs, signal);
   }

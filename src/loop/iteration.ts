@@ -1,14 +1,15 @@
 import type { OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
-  PROGRESS_EVENTS,
   PermissionRequestSchema,
   RetryScheduledSchema,
+  SessionCreatedSchema,
   StepEndedSchema,
   TextEndedSchema,
   ToolCalledSchema,
   ToolInputStartedSchema,
   ToolResultSchema,
+  isActivityEvent,
   readData,
   type OpencodeEvent,
 } from '../opencode/events.js';
@@ -89,6 +90,10 @@ export async function runIteration(args: {
   let executionError: string | undefined;
   let lastProviderError: string | undefined;
   let sessionId = '';
+  // Subagents run in child sessions. Their work keeps the iteration alive and
+  // their permission requests need answers, but their text, tools and
+  // completion are not the iteration's own.
+  const subagentSessions = new Set<string>();
 
   const timer = setInterval(() => {
     const tripped = watchdog.check();
@@ -109,17 +114,29 @@ export async function runIteration(args: {
     logger.debug('prompt sent', { sessionId });
 
     for await (const event of stream) {
+      if (event.type === 'session.created') {
+        const created = readData(event, SessionCreatedSchema);
+        const parent = created?.parentID;
+        if (created && parent && (parent === sessionId || subagentSessions.has(parent))) {
+          subagentSessions.add(created.sessionID);
+          logger.debug('subagent session started', { sessionId: created.sessionID });
+        }
+      }
+
       const eventSession = sessionIdOf(event);
-      if (eventSession && eventSession !== sessionId) continue;
+      const fromSubagent = eventSession !== undefined && subagentSessions.has(eventSession);
+      if (eventSession && eventSession !== sessionId && !fromSubagent) continue;
       hooks.onEvent?.(event);
 
-      if (PROGRESS_EVENTS.has(event.type)) watchdog.recordActivity();
+      if (isActivityEvent(event.type)) watchdog.recordActivity();
 
       if (event.type.includes('permission')) {
         await handlePermission(event, client, config, logger);
         watchdog.recordActivity();
         continue;
       }
+
+      if (fromSubagent && event.type !== 'session.retry.scheduled') continue;
 
       switch (event.type) {
         case 'session.text.ended': {
@@ -183,7 +200,8 @@ export async function runIteration(args: {
     streamAbort.abort();
     if (trip && sessionId) {
       await client.interrupt(sessionId).catch((cause: unknown) => {
-        logger.debug('interrupt failed', { error: (cause as Error).message });
+        // The session may still be running and competing with the retry.
+        logger.warn('interrupt failed', { sessionId, error: (cause as Error).message });
       });
     }
   }
