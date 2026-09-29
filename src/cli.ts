@@ -7,6 +7,7 @@ import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
+import { formatTimestamp } from './report/time.js';
 import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
 
@@ -129,6 +130,8 @@ async function main(argv: string[]): Promise<number> {
 async function runCommand(command: string, config: Config, logger: Logger): Promise<number> {
   const reporter = new ConsoleReporter();
   const controller = new AbortController();
+  // Both write to the terminal: keep log lines off the end of the status line.
+  logger.beforeWrite(() => reporter.clearStatus());
 
   const onSignal = () => {
     logger.warn('signal received, finishing current iteration');
@@ -143,6 +146,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     const checks = await preflight(config, server.client);
     reporter.banner([
       'ralph · opencode loop',
+      `  started ${formatTimestamp(new Date())}`,
       ...checks.map((check) => `  ${check.ok ? '✓' : check.fatal ? '✗' : '!'} ${check.name}: ${check.detail}`),
     ]);
 
@@ -184,6 +188,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   } finally {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    logger.beforeWrite(undefined);
     await server.stop();
   }
 }
