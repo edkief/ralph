@@ -91,7 +91,16 @@ nothing to get wrong.
 | 4 | Bad configuration or failed preflight |
 | 5 | Model provider or opencode server unusable |
 | 6 | Stalled: iterations stopped changing anything |
-| 130 | Interrupted |
+| 130 | Interrupted, or stopped on request |
+
+### Stopping a run
+
+Press Ctrl-C once and Ralph lets the current iteration finish, pushes its commits if
+`git.push` is set, and exits before starting another. Press it again to interrupt the
+iteration and stop now; its work is left uncommitted in the working tree.
+
+Without a terminal, send the same signals: `kill -INT <pid>` for the first, and
+`kill -TERM <pid>` to stop now (as Kubernetes does when a pod is deleted).
 
 ## What a project must provide
 

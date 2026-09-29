@@ -24,7 +24,17 @@ const LISTENING_PATTERN = /listening on (\S+)/;
  */
 export async function startServer(
   config: ServerConfig,
-  options: { cwd: string; logger: Logger },
+  options: {
+    cwd: string;
+    logger: Logger;
+    /**
+     * Run the server in its own process group, so a Ctrl-C meant for Ralph
+     * (which may only ask to stop after the current iteration) does not kill
+     * the server under it. The caller must then handle SIGINT and SIGHUP and
+     * call stop(), since the terminal no longer signals the server itself.
+     */
+    ownProcessGroup?: boolean;
+  },
 ): Promise<ServerHandle> {
   if (config.url) {
     const client = new OpencodeClient({
@@ -41,7 +51,12 @@ export async function startServer(
     cwd: options.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: process.env,
+    detached: options.ownProcessGroup === true,
   });
+  // Detached, it would outlive a Ralph that exits without calling stop().
+  const killOnExit = () => child.kill('SIGTERM');
+  process.once('exit', killOnExit);
+  child.once('exit', () => process.off('exit', killOnExit));
 
   const { url, password } = await readStartupBanner(child, config.startupTimeoutMs, options.logger);
   const client = new OpencodeClient({ baseUrl: url, password });
@@ -149,6 +164,7 @@ async function stopChild(child: ChildProcess, timeoutMs: number): Promise<void> 
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
     const timer = setTimeout(resolve, ms);
     signal?.addEventListener('abort', () => {
       clearTimeout(timer);

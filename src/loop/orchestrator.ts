@@ -14,7 +14,7 @@ import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
 export interface RunResult {
-  status: IterationStatus | 'max-iterations' | 'stalled';
+  status: IterationStatus | 'max-iterations' | 'stalled' | 'stopped';
   iterations: number;
   runId: string;
   historyDir: string;
@@ -31,6 +31,9 @@ export interface RunResult {
  * against the repository: a `TASK-x:DONE` tag with no commit and no flipped
  * `passes` flag counts as no progress, and repeated no-progress iterations
  * stop the run instead of burning the whole budget.
+ *
+ * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
+ * it finish, then ends the run before the next one, still pushing its commits.
  */
 export async function runLoop(args: {
   config: Config;
@@ -38,8 +41,12 @@ export async function runLoop(args: {
   logger: Logger;
   reporter: ConsoleReporter;
   signal: AbortSignal;
+  stop?: AbortSignal;
 }): Promise<RunResult> {
   const { config, client, logger, reporter, signal } = args;
+  const stop = args.stop ?? new AbortController().signal;
+  // Waits between iterations end early for either request.
+  const pause = AbortSignal.any([signal, stop]);
   const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
   const runId = newRunId();
   const recorder = new RunRecorder(
@@ -70,6 +77,13 @@ export async function runLoop(args: {
       break;
     }
 
+    if (stop.aborted) {
+      finalStatus = 'stopped';
+      message = `Stopped on request after ${iteration - 1} iteration${iteration === 2 ? '' : 's'}`;
+      iteration -= 1;
+      break;
+    }
+
     const taskId = summary.next.id;
     reporter.iterationStart(iteration, config.maxIterations, taskId);
     recorder.beginIteration(iteration);
@@ -78,7 +92,7 @@ export async function runLoop(args: {
     const startedAt = new Date().toISOString();
 
     const result = await attemptIteration({
-      args: { client, config, logger, reporter, signal },
+      args: { client, config, logger, reporter, signal, stop },
       recorder,
       iteration,
       prompt: buildPrompt({
@@ -137,9 +151,9 @@ export async function runLoop(args: {
         error: result.lastProviderError ?? 'unknown',
         backoffMs: config.retries.backoffMs,
       });
-      await sleep(config.retries.backoffMs, signal);
+      await sleep(config.retries.backoffMs, pause);
     } else if (config.pauseBetweenIterationsMs > 0) {
-      await sleep(config.pauseBetweenIterationsMs, signal);
+      await sleep(config.pauseBetweenIterationsMs, pause);
     }
   }
 
@@ -180,13 +194,14 @@ async function attemptIteration(context: {
     logger: Logger;
     reporter: ConsoleReporter;
     signal: AbortSignal;
+    stop: AbortSignal;
   };
   recorder: RunRecorder;
   iteration: number;
   prompt: string;
   taskId: string;
 }): Promise<IterationResult> {
-  const { client, config, logger, reporter, signal } = context.args;
+  const { client, config, logger, reporter, signal, stop } = context.args;
   let attempt = 0;
   let result: IterationResult;
 
@@ -208,7 +223,10 @@ async function attemptIteration(context: {
     });
 
     const retryable = result.status === 'provider-error' || result.status === 'timeout';
-    if (!retryable || attempt >= config.retries.iterationRetries || signal.aborted) return result;
+    // A retry is a fresh turn, which a stop request rules out.
+    if (!retryable || attempt >= config.retries.iterationRetries || signal.aborted || stop.aborted) {
+      return result;
+    }
 
     attempt += 1;
     logger.warn('retrying iteration', {
@@ -217,7 +235,8 @@ async function attemptIteration(context: {
       reason: result.status,
       ...(result.error ? { detail: result.error } : {}),
     });
-    await sleep(config.retries.backoffMs, signal);
+    await sleep(config.retries.backoffMs, AbortSignal.any([signal, stop]));
+    if (stop.aborted) return result;
   }
 }
 
