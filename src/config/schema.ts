@@ -60,7 +60,13 @@ const PermissionsSchema = z.object({
 
 export const ConfigSchema = z.object({
   projectRoot: z.string(),
-  agentDir: z.string().default('.agent'),
+  /**
+   * Ralph's project folder, relative to projectRoot. loadConfig resolves it:
+   * an explicit value wins, else `.ralph/`, else a legacy `.agent/`.
+   */
+  ralphDir: z.string().default('.ralph'),
+  /** @deprecated Former name of ralphDir; loadConfig folds it in and drops it. */
+  agentDir: z.string().optional(),
   maxIterations: z.number().int().positive().default(10),
   /** `provider/model` as opencode names it; omitted means server default. */
   model: z.string().optional(),

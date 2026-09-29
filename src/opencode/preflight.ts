@@ -31,13 +31,13 @@ const REQUIRED_OPERATIONS = [
  */
 export async function preflight(config: Config, client: OpencodeClient): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
-  const agentPath = (...parts: string[]) => resolve(config.projectRoot, config.agentDir, ...parts);
+  const ralphPath = (...parts: string[]) => resolve(config.projectRoot, config.ralphDir, ...parts);
 
-  results.push(fileCheck('prompt', agentPath('PROMPT.md'), true));
-  results.push(fileCheck('prd', agentPath('prd', 'PRD.md'), false));
-  results.push(fileCheck('structure', agentPath('STRUCTURE.md'), false));
+  results.push(fileCheck('prompt', ralphPath('PROMPT.md'), true));
+  results.push(fileCheck('prd', ralphPath('prd', 'PRD.md'), false));
+  results.push(fileCheck('structure', ralphPath('STRUCTURE.md'), false));
 
-  const store = TaskStore.forProject(config.projectRoot, config.agentDir);
+  const store = TaskStore.forProject(config.projectRoot, config.ralphDir);
   try {
     const summary = store.reload();
     results.push({

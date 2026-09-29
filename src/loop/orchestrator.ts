@@ -40,10 +40,10 @@ export async function runLoop(args: {
   signal: AbortSignal;
 }): Promise<RunResult> {
   const { config, client, logger, reporter, signal } = args;
-  const tasks = TaskStore.forProject(config.projectRoot, config.agentDir);
+  const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
   const runId = newRunId();
   const recorder = new RunRecorder(
-    resolve(config.projectRoot, config.agentDir, 'history'),
+    resolve(config.projectRoot, config.ralphDir, 'history'),
     runId,
   );
 
@@ -83,7 +83,7 @@ export async function runLoop(args: {
       iteration,
       prompt: buildPrompt({
         projectRoot: config.projectRoot,
-        agentDir: config.agentDir,
+        ralphDir: config.ralphDir,
         iteration,
         maxIterations: config.maxIterations,
         nextTask: summary.next,

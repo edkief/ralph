@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -60,5 +60,78 @@ describe('loadConfig', () => {
     const root = project();
     writeFileSync(resolve(root, 'ralph.config.json'), '{not json');
     expect(() => loadConfig({ projectRoot: root, env: {} })).toThrow(/Could not parse/);
+  });
+});
+
+describe('ralphDir resolution', () => {
+  function load(root: string, options: { env?: NodeJS.ProcessEnv; overrides?: Record<string, unknown> } = {}) {
+    const warnings: string[] = [];
+    const config = loadConfig({
+      projectRoot: root,
+      env: options.env ?? {},
+      ...(options.overrides ? { overrides: options.overrides } : {}),
+      onWarning: (message) => warnings.push(message),
+    });
+    return { config, warnings };
+  }
+
+  it('defaults to .ralph when the project has neither folder', () => {
+    const { config, warnings } = load(project());
+    expect(config.ralphDir).toBe('.ralph');
+    expect(warnings).toEqual([]);
+  });
+
+  it('uses an existing .ralph folder', () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph'));
+    mkdirSync(resolve(root, '.agent'));
+    const { config, warnings } = load(root);
+    expect(config.ralphDir).toBe('.ralph');
+    expect(warnings).toEqual([]);
+  });
+
+  it('falls back to a legacy .agent folder with a deprecation warning', () => {
+    const root = project();
+    mkdirSync(resolve(root, '.agent'));
+    const { config, warnings } = load(root);
+    expect(config.ralphDir).toBe('.agent');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/\.agent\/ is deprecated.*git mv \.agent \.ralph/);
+  });
+
+  it('lets an explicit ralphDir win over folders on disk', () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph'));
+    mkdirSync(resolve(root, '.agent'));
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ ralphDir: 'from-file' }));
+
+    expect(load(root).config.ralphDir).toBe('from-file');
+    expect(load(root, { env: { RALPH_DIR: 'from-env' } }).config.ralphDir).toBe('from-env');
+    expect(
+      load(root, { env: { RALPH_DIR: 'from-env' }, overrides: { ralphDir: 'from-flag' } }).config.ralphDir,
+    ).toBe('from-flag');
+  });
+
+  it('accepts agentDir as a deprecated alias and drops it from the result', () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph'));
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ agentDir: 'legacy' }));
+
+    const { config, warnings } = load(root);
+    expect(config.ralphDir).toBe('legacy');
+    expect(config).not.toHaveProperty('agentDir');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/"agentDir" setting is deprecated/);
+  });
+
+  it('prefers ralphDir when both keys are set', () => {
+    const root = project();
+    writeFileSync(
+      resolve(root, 'ralph.config.json'),
+      JSON.stringify({ agentDir: 'legacy', ralphDir: 'current' }),
+    );
+    const { config, warnings } = load(root);
+    expect(config.ralphDir).toBe('current');
+    expect(warnings[0]).toMatch(/using "ralphDir"/);
   });
 });

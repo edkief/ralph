@@ -39,6 +39,7 @@ function bool(value: string | undefined): boolean | undefined {
  */
 function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
   return {
+    ralphDir: env['RALPH_DIR'] || undefined,
     maxIterations: num(env['RALPH_MAX_ITERATIONS']),
     model: env['RALPH_MODEL'],
     agent: env['RALPH_AGENT'],
@@ -69,6 +70,37 @@ export interface LoadOptions {
   overrides?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   configPath?: string;
+  /** Receives deprecation notices; defaults to stderr. */
+  onWarning?: (message: string) => void;
+}
+
+export const RALPH_DIR = '.ralph';
+export const LEGACY_DIR = '.agent';
+
+/**
+ * Pick Ralph's project folder. An explicit `ralphDir` (or the deprecated
+ * `agentDir`) wins; otherwise `.ralph/` if present, then a legacy `.agent/`,
+ * then `.ralph/` as the default for a project that has neither yet.
+ */
+function resolveRalphDir(
+  projectRoot: string,
+  merged: Record<string, unknown>,
+  warn: (message: string) => void,
+): unknown {
+  if (merged['ralphDir'] !== undefined) {
+    if (merged['agentDir'] !== undefined) warn('both "ralphDir" and the deprecated "agentDir" are set; using "ralphDir"');
+    return merged['ralphDir'];
+  }
+  if (merged['agentDir'] !== undefined) {
+    warn('the "agentDir" setting is deprecated; rename it to "ralphDir"');
+    return merged['agentDir'];
+  }
+  if (existsSync(resolve(projectRoot, RALPH_DIR))) return RALPH_DIR;
+  if (existsSync(resolve(projectRoot, LEGACY_DIR))) {
+    warn(`${LEGACY_DIR}/ is deprecated; rename it with \`git mv ${LEGACY_DIR} ${RALPH_DIR}\``);
+    return LEGACY_DIR;
+  }
+  return RALPH_DIR;
 }
 
 /**
@@ -98,11 +130,15 @@ export function loadConfig(options: LoadOptions): Config {
   const merged = [fileConfig, fromEnv(env), options.overrides ?? {}].reduce(
     (acc, source) => merge(acc, source),
     { projectRoot } as unknown,
-  );
+  ) as Record<string, unknown>;
 
-  const parsed = ConfigSchema.safeParse(merged);
+  const warn = options.onWarning ?? ((message: string) => process.stderr.write(`warn ${message}\n`));
+  const ralphDir = resolveRalphDir(projectRoot, merged, warn);
+
+  const parsed = ConfigSchema.safeParse({ ...merged, ralphDir });
   if (!parsed.success) {
     throw new ConfigError(`Invalid Ralph configuration:\n${z.prettifyError(parsed.error)}`);
   }
-  return parsed.data;
+  const { agentDir: _alias, ...config } = parsed.data;
+  return config;
 }

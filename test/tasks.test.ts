@@ -6,8 +6,8 @@ import { TaskStore, TaskStoreError } from '../src/tasks/store.js';
 
 function storeWith(content: string): TaskStore {
   const root = mkdtempSync(resolve(tmpdir(), 'ralph-tasks-'));
-  mkdirSync(resolve(root, '.agent'), { recursive: true });
-  const file = resolve(root, '.agent/tasks.json');
+  mkdirSync(resolve(root, '.ralph'), { recursive: true });
+  const file = resolve(root, '.ralph/tasks.json');
   writeFileSync(file, content);
   return new TaskStore(file);
 }

@@ -8,6 +8,7 @@ import { OpencodeClient } from '../src/opencode/client.js';
 import { runLoop } from '../src/loop/orchestrator.js';
 import { ConsoleReporter } from '../src/report/console.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
+import { loadConfig } from '../src/config/load.js';
 import { Logger } from '../src/report/logger.js';
 
 const sink = { write: () => true } as NodeJS.WriteStream;
@@ -21,20 +22,20 @@ afterEach(async () => {
   server = undefined;
 });
 
-/** A throwaway git project with the .agent layout Ralph expects. */
-function project(tasks: Array<{ id: string; passes: boolean }>): string {
+/** A throwaway git project with the .ralph layout Ralph expects. */
+function project(tasks: Array<{ id: string; passes: boolean }>, dir = '.ralph'): string {
   const root = mkdtempSync(resolve(tmpdir(), 'ralph-loop-'));
-  mkdirSync(resolve(root, '.agent'), { recursive: true });
-  writeFileSync(resolve(root, '.agent/PROMPT.md'), 'Do one task.');
-  writeFileSync(resolve(root, '.agent/tasks.json'), JSON.stringify(tasks));
+  mkdirSync(resolve(root, dir), { recursive: true });
+  writeFileSync(resolve(root, dir, 'PROMPT.md'), 'Do one task.');
+  writeFileSync(resolve(root, dir, 'tasks.json'), JSON.stringify(tasks));
   execFileSync('git', ['init', '-q'], { cwd: root });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root });
   return root;
 }
 
-function markPassing(root: string, taskId: string): void {
-  const file = resolve(root, '.agent/tasks.json');
+function markPassing(root: string, taskId: string, dir = '.ralph'): void {
+  const file = resolve(root, dir, 'tasks.json');
   const tasks = JSON.parse(readFileSync(file, 'utf8')) as Array<{ id: string; passes: boolean }>;
   for (const task of tasks) if (task.id === taskId) task.passes = true;
   writeFileSync(file, JSON.stringify(tasks));
@@ -282,5 +283,27 @@ describe('runLoop', () => {
 
     expect(result.status).toBe('max-iterations');
     expect(result.tasksPassed).toBe(2);
+  });
+
+  it('still runs a legacy .agent/ project, found through config resolution', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }], '.agent');
+    const warnings: string[] = [];
+    const cfg = loadConfig({
+      projectRoot: root,
+      env: {},
+      overrides: { maxIterations: 2, pauseBetweenIterationsMs: 0 },
+      onWarning: (message) => warnings.push(message),
+    });
+
+    const result = await loop(root, cfg, {
+      onPrompt: () => markPassing(root, 'TASK-1', '.agent'),
+      script: say('<promise>TASK-1:DONE</promise>'),
+    });
+
+    expect(cfg.ralphDir).toBe('.agent');
+    expect(warnings.join('\n')).toMatch(/deprecated/);
+    expect(result.status).toBe('complete');
+    expect(result.historyDir.startsWith(resolve(root, '.agent', 'history'))).toBe(true);
+    expect(existsSync(resolve(root, '.ralph'))).toBe(false);
   });
 });

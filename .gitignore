@@ -3,4 +3,5 @@ dist/
 *.tsbuildinfo
 
 # Loop run artefacts, when running against a project in place
+.ralph/history/
 .agent/history/

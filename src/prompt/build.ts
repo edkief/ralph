@@ -4,7 +4,7 @@ import type { Task } from '../tasks/store.js';
 
 export interface PromptContext {
   projectRoot: string;
-  agentDir: string;
+  ralphDir: string;
   iteration: number;
   maxIterations: number;
   nextTask?: Task | undefined;
@@ -23,7 +23,7 @@ export class PromptError extends Error {}
  * loop already knows.
  */
 export function buildPrompt(context: PromptContext): string {
-  const promptFile = resolve(context.projectRoot, context.agentDir, 'PROMPT.md');
+  const promptFile = resolve(context.projectRoot, context.ralphDir, 'PROMPT.md');
   if (!existsSync(promptFile)) {
     throw new PromptError(`Prompt file not found: ${promptFile}`);
   }

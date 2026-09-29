@@ -22,6 +22,7 @@ Options:
   -m, --model <id>          provider/model, e.g. ollama/qwen3-coder
   -a, --agent <name>        opencode agent profile
   -C, --cwd <path>          Project root (default: current directory)
+      --ralph-dir <path>    Ralph's project folder (default: .ralph)
       --config <path>       Config file (default: <root>/ralph.config.json)
       --server <url>        Attach to an existing opencode server
       --no-pin-task         Let the agent choose its own task
@@ -43,6 +44,7 @@ async function main(argv: string[]): Promise<number> {
       model: { type: 'string', short: 'm' },
       agent: { type: 'string', short: 'a' },
       cwd: { type: 'string', short: 'C' },
+      'ralph-dir': { type: 'string' },
       config: { type: 'string' },
       server: { type: 'string' },
       'pin-task': { type: 'boolean', default: true },
@@ -67,6 +69,7 @@ async function main(argv: string[]): Promise<number> {
     ...(values['max-iterations'] ? { maxIterations: Number(values['max-iterations']) } : {}),
     ...(values.model ? { model: values.model } : {}),
     ...(values.agent ? { agent: values.agent } : {}),
+    ...(values['ralph-dir'] ? { ralphDir: values['ralph-dir'] } : {}),
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
     ...(command === 'once' ? { maxIterations: 1 } : {}),
     ...(values.server ? { server: { url: values.server } } : {}),
@@ -76,22 +79,26 @@ async function main(argv: string[]): Promise<number> {
     },
   };
 
+  // The logger's format comes from the config, so hold warnings until it exists.
+  const warnings: string[] = [];
   const config = loadConfig({
     projectRoot: values.cwd ?? process.cwd(),
     overrides,
+    onWarning: (message) => warnings.push(message),
     ...(values.config ? { configPath: values.config } : {}),
   });
+  const logger = new Logger({ level: config.log.level, format: config.log.format });
+  for (const warning of warnings) logger.warn(warning);
 
   if (command === 'config') {
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
     return 0;
   }
 
-  return runCommand(command, config);
+  return runCommand(command, config, logger);
 }
 
-async function runCommand(command: string, config: Config): Promise<number> {
-  const logger = new Logger({ level: config.log.level, format: config.log.format });
+async function runCommand(command: string, config: Config, logger: Logger): Promise<number> {
   const reporter = new ConsoleReporter();
   const controller = new AbortController();
 

@@ -27,14 +27,14 @@ export interface TaskSummary {
 }
 
 /**
- * Reads `.agent/tasks.json` fresh on demand. The agent edits the file between
+ * Reads `.ralph/tasks.json` fresh on demand. The agent edits the file between
  * iterations, so nothing is cached across an iteration boundary.
  */
 export class TaskStore {
   constructor(private readonly tasksFile: string) {}
 
-  static forProject(projectRoot: string, agentDir: string): TaskStore {
-    return new TaskStore(resolve(projectRoot, agentDir, 'tasks.json'));
+  static forProject(projectRoot: string, ralphDir: string): TaskStore {
+    return new TaskStore(resolve(projectRoot, ralphDir, 'tasks.json'));
   }
 
   get path(): string {
