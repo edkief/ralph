@@ -18,7 +18,11 @@ function config(overrides: Record<string, unknown> = {}): Config {
   return ConfigSchema.parse({ projectRoot: process.cwd(), ...overrides });
 }
 
-async function iterate(scenario: Parameters<typeof startFakeServer>[0], cfg: Config) {
+async function iterate(
+  scenario: Parameters<typeof startFakeServer>[0],
+  cfg: Config,
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions'> = {},
+) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
     baseUrl: server.url,
@@ -31,6 +35,7 @@ async function iterate(scenario: Parameters<typeof startFakeServer>[0], cfg: Con
     title: 'test',
     logger,
     signal: new AbortController().signal,
+    ...extra,
   });
 }
 
@@ -263,5 +268,37 @@ describe('runIteration', () => {
       agent: 'build',
       model: { providerID: 'ollama', modelID: 'qwen3' },
     });
+  });
+
+  it('continues an existing session instead of opening a new one', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.text.ended', data: { text: 'second turn' } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+      { sessionId: 'ses_fake_1' },
+    );
+
+    expect(server?.sessionsCreated).toBe(0);
+    expect(result.sessionId).toBe('ses_fake_1');
+    expect(result.text).toBe('second turn');
+  });
+
+  it('answers permissions from a caller-supplied policy', async () => {
+    await iterate(
+      {
+        script: [
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['ls'] } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+      { permissions: () => ({ reply: 'reject', reason: 'outside-scope' }) },
+    );
+
+    expect(server?.replies).toEqual([{ requestID: 'per_1', reply: 'reject' }]);
   });
 });

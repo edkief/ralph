@@ -24,6 +24,7 @@ export interface FakeServer {
   /** Permission replies the loop sent, in order. */
   replies: Array<{ requestID: string; reply: string }>;
   interrupts: number;
+  sessionsCreated: number;
   prompts: Array<Record<string, unknown>>;
   close(): Promise<void>;
 }
@@ -37,6 +38,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
   const state = {
     replies: [] as Array<{ requestID: string; reply: string }>,
     interrupts: 0,
+    sessionsCreated: 0,
     prompts: [] as Array<Record<string, unknown>>,
     listeners: new Set<ServerResponse>(),
     sessionId: 'ses_fake_1',
@@ -88,6 +90,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     }
 
     if (path === '/api/session' && req.method === 'POST') {
+      state.sessionsCreated += 1;
       return json(res, { data: { id: state.sessionId } });
     }
 
@@ -139,6 +142,9 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     },
     get interrupts() {
       return state.interrupts;
+    },
+    get sessionsCreated() {
+      return state.sessionsCreated;
     },
     get prompts() {
       return state.prompts;

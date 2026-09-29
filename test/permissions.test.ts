@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decidePermission } from '../src/loop/permissions.js';
+import { decidePermission, restrictWrites } from '../src/loop/permissions.js';
 import { ConfigSchema } from '../src/config/schema.js';
 
 const defaults = ConfigSchema.parse({ projectRoot: '/tmp' }).permissions;
@@ -42,5 +42,35 @@ describe('decidePermission', () => {
   it('matches case-insensitively across action, resources and message', () => {
     const config = { ...defaults, deny: ['SHUTDOWN'] };
     expect(decidePermission(request('shell', ['sudo shutdown now']), config).reply).toBe('reject');
+  });
+});
+
+describe('restrictWrites', () => {
+  const policy = restrictWrites(defaults, '/project', '.ralph');
+
+  it('allows writes inside the scope, by relative or absolute path', () => {
+    expect(policy(request('edit', ['.ralph/prd/PRD.md'])).reply).toBe('once');
+    expect(policy(request('write', ['/project/.ralph/tasks.json'])).reply).toBe('once');
+  });
+
+  it('rejects a write that reaches outside the scope', () => {
+    const decision = policy(request('edit', ['.ralph/tasks.json', 'src/index.ts']));
+    expect(decision).toEqual({ reply: 'reject', matched: 'src/index.ts', reason: 'outside-scope' });
+    expect(policy(request('edit', ['.ralph/../package.json'])).reply).toBe('reject');
+    expect(policy(request('patch', ['/elsewhere/.ralph/x'])).reply).toBe('reject');
+  });
+
+  it('does not mistake a sibling with the same prefix for the scope', () => {
+    expect(policy(request('edit', ['.ralph-old/notes.md'])).reply).toBe('reject');
+    expect(policy(request('edit', ['.ralph/..notes.md'])).reply).toBe('once');
+  });
+
+  it('leaves reads and other actions to the base policy, deny rules included', () => {
+    expect(policy(request('read', ['src/index.ts'])).reply).toBe('once');
+    expect(policy(request('shell', ['git push'])).reply).toBe('reject');
+  });
+
+  it('falls back to the base policy for a write that names no path', () => {
+    expect(policy(request('edit', [])).reply).toBe('once');
   });
 });

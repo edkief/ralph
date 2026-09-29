@@ -1,5 +1,4 @@
 {
-  "model": "ollama/qwen3-coder",
   "maxIterations": 20,
   "pinTask": true,
   "timeouts": {

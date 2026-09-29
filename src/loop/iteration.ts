@@ -12,8 +12,9 @@ import {
   isActivityEvent,
   readData,
   type OpencodeEvent,
+  type PermissionRequest,
 } from '../opencode/events.js';
-import { decidePermission } from './permissions.js';
+import { decidePermission, type PermissionDecision } from './permissions.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
 import type { Config } from '../config/schema.js';
@@ -48,9 +49,12 @@ export interface IterationHooks {
   onEvent?: (event: OpencodeEvent) => void;
 }
 
+export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;
+
 /**
- * Run one agent turn: open a session, send the prompt, and consume the event
- * stream until the execution finishes or a watchdog trips.
+ * Run one agent turn: open a session (or continue `sessionId`), send the
+ * prompt, and consume the event stream until the execution finishes or a
+ * watchdog trips.
  *
  * The stream is subscribed *before* the prompt is sent so no early event can
  * be missed in the gap.
@@ -60,11 +64,16 @@ export async function runIteration(args: {
   config: Config;
   prompt: string;
   title: string;
+  /** Continue this session instead of opening a new one, for multi-turn conversations. */
+  sessionId?: string;
+  /** Answers permission requests; defaults to the configured policy. */
+  permissions?: PermissionPolicy;
   logger: Logger;
   hooks?: IterationHooks;
   signal: AbortSignal;
 }): Promise<IterationResult> {
   const { client, config, logger, hooks = {}, signal } = args;
+  const policy = args.permissions ?? ((request) => decidePermission(request, config.permissions));
   const startedAt = Date.now();
 
   const watchdogOptions = {
@@ -106,7 +115,7 @@ export async function runIteration(args: {
   try {
     // Subscribe before prompting so no early event is missed.
     const stream = await client.connectEvents(streamAbort.signal);
-    sessionId = await client.createSession(args.title);
+    sessionId = args.sessionId ?? (await client.createSession(args.title));
     await client.prompt(sessionId, args.prompt, {
       ...(config.model ? { model: config.model } : {}),
       ...(config.agent ? { agent: config.agent } : {}),
@@ -137,7 +146,7 @@ export async function runIteration(args: {
       if (isActivityEvent(event.type)) watchdog.recordActivity();
 
       if (event.type.includes('permission')) {
-        await handlePermission(event, client, config, logger);
+        await handlePermission(event, client, policy, logger);
         watchdog.recordActivity();
         continue;
       }
@@ -272,13 +281,13 @@ async function lookupParent(
 async function handlePermission(
   event: OpencodeEvent,
   client: OpencodeClient,
-  config: Config,
+  policy: PermissionPolicy,
   logger: Logger,
 ): Promise<void> {
   const request = readData(event, PermissionRequestSchema);
   if (!request) return;
 
-  const decision = decidePermission(request, config.permissions);
+  const decision = policy(request);
   logger.info('permission decided', {
     action: request.action,
     reply: decision.reply,
