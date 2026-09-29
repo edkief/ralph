@@ -1,0 +1,16 @@
+[
+  {
+    "id": "TASK-1",
+    "title": "Short description of the first unit of work",
+    "category": "setup",
+    "specFilePath": ".agent/tasks/TASK-1.json",
+    "passes": false
+  },
+  {
+    "id": "TASK-2",
+    "title": "Short description of the second unit of work",
+    "category": "functional",
+    "specFilePath": ".agent/tasks/TASK-2.json",
+    "passes": false
+  }
+]

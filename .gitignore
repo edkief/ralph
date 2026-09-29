@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Loop run artefacts, when running against a project in place
+.agent/history/

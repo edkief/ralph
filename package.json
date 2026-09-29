@@ -1,0 +1,27 @@
+{
+  "name": "@edkief/ralph",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Long-running agent loop that drives opencode through its HTTP API",
+  "license": "MIT",
+  "bin": { "ralph": "./dist/cli.js" },
+  "files": ["dist", "templates", "README.md"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

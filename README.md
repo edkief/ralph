@@ -1,0 +1,187 @@
+# ralph
+
+A long-running agent loop that drives [opencode](https://opencode.ai) through its HTTP API.
+
+Ralph picks the next unfinished task from a project's `.agent/tasks.json`, runs one agent turn
+against it, verifies what actually changed in the repository, and repeats until the backlog is
+done, the agent needs a human, or progress stops.
+
+It is built for unattended runs against self-hosted models: no TTY, no sandbox, structured
+logs, and watchdogs for the ways an agent turn dies quietly.
+
+## Install
+
+```bash
+git clone <this repo> ~/Dev/ralph
+cd ~/Dev/ralph
+npm install
+npm run build
+npm link          # optional, puts `ralph` on your PATH
+```
+
+## Usage
+
+Run it from the project you want worked on:
+
+```bash
+ralph                       # run the loop in the current directory
+ralph once                  # a single iteration
+ralph doctor                # check the environment, run nothing
+ralph config                # print the resolved configuration
+
+ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
+```
+
+Without `npm link`, substitute `node ~/Dev/ralph/dist/cli.js`.
+
+Start with `ralph doctor`. It reports every check it makes and runs no model, so it costs
+nothing to get wrong.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every task passes |
+| 1 | Iteration budget exhausted with work outstanding |
+| 2 | Agent raised `BLOCKED` |
+| 3 | Agent raised `DECIDE` |
+| 4 | Bad configuration or failed preflight |
+| 5 | Model provider or opencode server unusable |
+| 6 | Stalled: iterations stopped changing anything |
+| 130 | Interrupted |
+
+## What a project must provide
+
+Ralph expects this layout in the project it runs against. `templates/` holds starting points.
+
+```
+.agent/
+  PROMPT.md        # required — the instructions sent each iteration
+  tasks.json       # required — the backlog; a bare array of tasks
+  tasks/           # optional — per-task specs referenced by specFilePath
+  prd/PRD.md       # optional
+  STEERING.md      # optional — work to do before feature tasks
+  logs/LOG.md      # optional — the agent's own running log
+  history/         # written by ralph
+ralph.config.json  # optional
+```
+
+A task needs only an `id` and a `passes` flag; `title` and `specFilePath` are used when
+present. A `{ "tasks": [...] }` wrapper is accepted in place of a bare array.
+
+The agent signals back with promise tags in its replies:
+
+| Tag | Effect |
+| --- | --- |
+| `<promise>TASK-7:DONE</promise>` | Claims a task; checked against the repository |
+| `<promise>COMPLETE</promise>` | Backlog finished |
+| `<promise>BLOCKED:reason</promise>` | Stops the run, exit 2 |
+| `<promise>DECIDE:question</promise>` | Stops the run, exit 3 |
+
+## Configuration
+
+Resolution order is defaults < `ralph.config.json` < `RALPH_*` environment < CLI flags.
+See `templates/ralph.config.json` for a complete file.
+
+```jsonc
+{
+  "model": "ollama/qwen3-coder",   // provider/model, as opencode names it
+  "maxIterations": 20,
+  "pinTask": true,                 // name the task in the prompt instead of letting the model choose
+  "timeouts": {
+    "iterationMs": 2700000,        // hard ceiling for one turn
+    "inactivityMs": 300000         // no events for this long means the agent is wedged
+  },
+  "retries": {
+    "providerRetriesPerIteration": 3,
+    "iterationRetries": 1,
+    "backoffMs": 15000
+  },
+  "stall": { "maxUnproductiveIterations": 3 },
+  "permissions": {
+    "fallback": "allow",           // unattended runs need to proceed without a human
+    "deny": ["git push", "git remote"]
+  },
+  "server": { "url": "http://opencode:4096" }  // attach instead of spawning
+}
+```
+
+The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_MAX_ITERATIONS`,
+`RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_LOG_FORMAT=json`.
+
+## How it works
+
+Ralph spawns `opencode serve` (or attaches to one with `server.url`), then per iteration:
+
+1. Reads `.agent/tasks.json` and picks the first task with `passes: false`.
+2. Builds the prompt from `.agent/PROMPT.md`, naming that task.
+3. Opens a session, subscribes to `/api/event`, and sends the prompt.
+4. Consumes the SSE stream, answering permission requests from policy.
+5. Snapshots git and the task list before and after, and compares.
+
+Pinning the task matters for smaller self-hosted models: "work on TASK-7" is a far more
+reliable instruction than "pick the highest-priority task with `passes: false`", which asks
+the model to re-derive selection logic the loop already knows. Set `pinTask: false` to hand
+that choice back to the agent.
+
+When Ralph spawns the server it captures the generated password from the server's own stdout
+banner, so credentials are never scraped from `opencode pair`.
+
+### Why the repository is the source of truth
+
+The agent's `<promise>TASK-7:DONE</promise>` is a claim, not evidence. An iteration counts as
+progress only when something actually changed: a commit landed, a `passes` flag flipped, or
+files were modified. A run whose iterations stop changing anything ends as `stalled` rather
+than quietly burning the whole budget.
+
+### Failure modes it watches for
+
+| Watchdog | What it catches |
+| --- | --- |
+| `retry-storm` | Provider unreachable or rate limited. opencode retries with backoff, emitting no text and no error — the loop would otherwise hang indefinitely. |
+| `inactivity` | Agent produced no events at all for `inactivityMs`. |
+| `iteration-timeout` | Turn exceeded its hard budget. |
+
+All three interrupt the session server-side rather than killing a process, so opencode can
+clean up. Provider failures and timeouts retry the whole turn (`retries.iterationRetries`);
+they say nothing about the task itself.
+
+Permission requests are answered from policy, never left waiting for a human. Deny rules beat
+allow rules, so a broad allow list cannot re-enable something explicitly forbidden.
+
+## Run artefacts
+
+Each run writes to the project's `.agent/history/<runId>/`:
+
+- `iteration-NNN.events.jsonl` — every event received, for debugging
+- `iterations.jsonl` — one record per iteration with outcome, usage and repository delta
+- `run.json` — the run summary
+
+## Notes on the opencode API
+
+- Health is probed with `/api/location`. `/api/status` exists only on the background service,
+  not on a standalone `opencode serve`.
+- Skills register asynchronously after startup: an immediate query returns an empty list.
+  Preflight waits for the count to settle so the first iteration is not silently skill-less.
+- Preflight asserts the operationIds the loop calls still exist in the server's live
+  `/openapi.json`, so a version mismatch fails loudly instead of at runtime.
+- A tool's name arrives on `session.tool.input.started` while its input arrives on
+  `session.tool.called`; they are correlated by call id.
+
+The published `@opencode-ai/sdk` lags the v2 API, so this package deliberately does not depend
+on it.
+
+## Development
+
+```bash
+npm test          # unit + integration tests against a fake opencode server
+npm run typecheck
+```
+
+`test/helpers/fake-server.ts` is a stand-in for opencode's HTTP API that makes the failure
+paths — retry storms, timeouts, permission policy, stalls — deterministic and fast.
+
+`test/fixtures/session-events.jsonl` is a real captured session, scrubbed of identifying
+paths. The event parser is tested against it so schema drift in opencode shows up as a test
+failure rather than a silent no-op at runtime.

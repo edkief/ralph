@@ -1,0 +1,25 @@
+{
+  "model": "ollama/qwen3-coder",
+  "maxIterations": 20,
+  "pinTask": true,
+  "timeouts": {
+    "iterationMs": 2700000,
+    "inactivityMs": 300000
+  },
+  "retries": {
+    "providerRetriesPerIteration": 3,
+    "iterationRetries": 1,
+    "backoffMs": 15000
+  },
+  "stall": {
+    "maxUnproductiveIterations": 3
+  },
+  "permissions": {
+    "fallback": "allow",
+    "deny": ["git push", "git remote", "rm -rf /", "shutdown", "reboot"]
+  },
+  "log": {
+    "format": "text",
+    "level": "info"
+  }
+}
