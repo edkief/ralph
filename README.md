@@ -21,20 +21,45 @@ npm link          # optional, puts `ralph` on your PATH
 
 ## Getting started
 
-Scaffold the files Ralph needs in the project you want worked on:
+Run `ralph init` in the project you want worked on and plan it with the agent:
 
 ```bash
 cd /path/to/project
-ralph init                  # or: ralph init -C /path/to/project
+ralph init                        # scaffold, then plan with the agent
+ralph init -m anthropic/claude-x  # plan with a different model than the loop uses
 ```
 
-This creates `.ralph/` from `templates/`, writes `ralph.config.json` at the project root and
-adds `.ralph/history/` to `.gitignore`. It never overwrites a file: anything already there is
-reported as skipped, so running it again is harmless. It starts no server and needs no model.
+First it scaffolds: it creates `.ralph/` from `templates/`, writes `ralph.config.json` at the
+project root and adds `.ralph/history/` to `.gitignore`. Scaffolding never overwrites a file,
+so running it again is harmless.
 
-Then describe the project in `.ralph/prd/PRD.md`, replace the example task in
-`.ralph/tasks.json` and `.ralph/tasks/TASK-1.json`, set `model` in `ralph.config.json`, and
-run `ralph doctor`.
+Then, in a terminal, it starts an interview with the configured opencode agent:
+
+1. You describe the project in a few sentences.
+2. The agent reads the repository and asks what it still needs to know: goals, scope,
+   stack, what done looks like. It asks a few questions at a time and suggests defaults.
+3. It writes `prd/PRD.md`, `tasks.json` and one spec per task in `tasks/`, sized so each
+   task fits one loop iteration.
+4. Ralph checks the result: task ids the loop can recognise, a spec with acceptance criteria
+   for every task, no template content left. If something is wrong, the agent is sent back
+   to fix it.
+
+End each message with an empty line, so pasted text arrives whole. Type `/done` to have the
+agent stop asking and write the plan with its assumptions noted in the PRD. Ctrl-C stops.
+
+The agent may write only inside `.ralph/`. Ralph rejects any write it is asked to approve
+elsewhere, but opencode asks only about what its own permission config marks `ask`, so Ralph
+also compares `git status` before and after and lists any file changed outside `.ralph/`.
+
+Review the plan, commit `.ralph/`, then run `ralph doctor` and `ralph`.
+
+Once a plan exists, `ralph init` leaves it alone; `ralph init --replan` revises it with the
+agent, keeping completed tasks and existing ids. `ralph init --no-interview` only scaffolds,
+as does any run outside a terminal. Then write the PRD, tasks and specs by hand.
+
+Planning is a one-off that rewards a stronger model than the loop may need. Set
+`plan.model` (or `RALPH_PLAN_MODEL`, or `-m` on `init`) to use one; it defaults to `model`,
+then the opencode server's default.
 
 ## Usage
 
@@ -45,7 +70,7 @@ ralph                       # run the loop in the current directory
 ralph once                  # a single iteration
 ralph doctor                # check the environment, run nothing
 ralph config                # print the resolved configuration
-ralph init                  # scaffold .ralph/ and ralph.config.json
+ralph init                  # scaffold .ralph/, then plan the project with the agent
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -151,11 +176,19 @@ See `templates/ralph.config.json` for a complete file.
     "push": "never",               // never | iteration (after each commit) | end (once, when the run finishes)
     "remote": "origin"
   },
-  "server": { "url": "http://opencode:4096" }  // attach instead of spawning
+  "server": { "url": "http://opencode:4096" }, // attach instead of spawning
+  "plan": {
+    "model": "anthropic/claude-x", // for the `ralph init` interview; defaults to `model`
+    "maxTurns": 30,                // agent turns before the interview gives up
+    "maxFixAttempts": 2            // times the agent is sent back to fix an invalid plan
+  }
 }
 ```
 
-The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
+The template leaves `model` unset, so both the loop and the interview use the opencode
+server's default until you choose one.
+
+The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
 
