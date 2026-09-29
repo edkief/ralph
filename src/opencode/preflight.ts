@@ -35,7 +35,6 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
 
   results.push(fileCheck('prompt', ralphPath('PROMPT.md'), true));
   results.push(fileCheck('prd', ralphPath('prd', 'PRD.md'), false));
-  results.push(fileCheck('structure', ralphPath('STRUCTURE.md'), false));
 
   const store = TaskStore.forProject(config.projectRoot, config.ralphDir);
   try {
