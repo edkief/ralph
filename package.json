@@ -1,7 +1,7 @@
 {
   "name": "@edkief/ralph",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "Long-running agent loop that drives opencode through its HTTP API",
   "license": "MIT",
