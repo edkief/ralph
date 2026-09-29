@@ -12,6 +12,8 @@ export interface FakeServerOptions {
   /** Events emitted once a prompt arrives. `{sessionID}` is filled in. */
   script: ScriptedEvent[] | ((promptCount: number) => ScriptedEvent[]);
   password?: string;
+  /** Session records served by `GET /api/session/{id}`, keyed by id. */
+  sessions?: Record<string, { parentID?: string }>;
   /** Side effects a real agent would have, e.g. editing tasks.json. */
   onPrompt?: (promptCount: number) => void | Promise<void>;
 }
@@ -73,6 +75,16 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
       state.listeners.add(res);
       req.on('close', () => state.listeners.delete(res));
       return;
+    }
+
+    const sessionMatch = /^\/api\/session\/([^/]+)$/.exec(path);
+    if (sessionMatch && req.method === 'GET') {
+      const record = options.sessions?.[sessionMatch[1]!];
+      if (!record) {
+        res.writeHead(404).end('not found');
+        return;
+      }
+      return json(res, { data: { id: sessionMatch[1], ...record } });
     }
 
     if (path === '/api/session' && req.method === 'POST') {

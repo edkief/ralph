@@ -94,6 +94,15 @@ export class OpencodeClient {
     await this.json('POST', `/api/session/${sessionID}/prompt`, body);
   }
 
+  /** Look up a session, e.g. to learn whether it is a subagent of ours. */
+  async getSession(sessionID: string): Promise<{ id?: string; parentID?: string }> {
+    const body = await this.json<{ data?: { id?: string; parentID?: string } }>(
+      'GET',
+      `/api/session/${sessionID}`,
+    );
+    return body.data ?? {};
+  }
+
   async interrupt(sessionID: string): Promise<void> {
     await this.json('POST', `/api/session/${sessionID}/interrupt`, {});
   }

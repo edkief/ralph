@@ -115,12 +115,18 @@ export async function runIteration(args: {
 
     for await (const event of stream) {
       if (event.type === 'session.created') {
+        // Recorded whatever the session, so history shows every session the
+        // server started during the turn — subagents included.
+        hooks.onEvent?.(event);
         const created = readData(event, SessionCreatedSchema);
-        const parent = created?.parentID;
-        if (created && parent && (parent === sessionId || subagentSessions.has(parent))) {
-          subagentSessions.add(created.sessionID);
-          logger.debug('subagent session started', { sessionId: created.sessionID });
+        if (created && created.sessionID !== sessionId) {
+          const parent = created.parentID ?? (await lookupParent(client, created.sessionID, logger));
+          if (parent && (parent === sessionId || subagentSessions.has(parent))) {
+            subagentSessions.add(created.sessionID);
+            logger.debug('subagent session started', { sessionId: created.sessionID });
+          }
         }
+        continue;
       }
 
       const eventSession = sessionIdOf(event);
@@ -243,6 +249,24 @@ function classify(args: {
   if (args.tags.complete) return 'complete';
   if (args.executionError) return 'failed';
   return 'progressed';
+}
+
+/**
+ * The event payload is not documented to carry `parentID`, but the session
+ * record is, so fall back to fetching it. A failed lookup just means the
+ * session is not treated as ours.
+ */
+async function lookupParent(
+  client: OpencodeClient,
+  sessionID: string,
+  logger: Logger,
+): Promise<string | undefined> {
+  try {
+    return (await client.getSession(sessionID)).parentID;
+  } catch (cause) {
+    logger.debug('session lookup failed', { sessionId: sessionID, error: (cause as Error).message });
+    return undefined;
+  }
 }
 
 async function handlePermission(

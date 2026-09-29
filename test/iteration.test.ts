@@ -170,6 +170,39 @@ describe('runIteration', () => {
     expect(server?.replies).toEqual([{ requestID: 'per_child', reply: 'once' }]);
   });
 
+  it('finds a subagent by looking up its session when the event omits the parent', async () => {
+    const seen: string[] = [];
+    server = await startFakeServer({
+      sessions: { ses_child: { parentID: 'ses_fake_1' }, ses_stranger: {} },
+      script: [
+        { type: 'session.created', data: { sessionID: 'ses_stranger' } },
+        { type: 'session.created', data: { sessionID: 'ses_child' } },
+        { after: 700, type: 'session.step.started', data: { sessionID: 'ses_child' } },
+        { after: 700, type: 'session.step.started', data: { sessionID: 'ses_child' } },
+        { type: 'session.step.started', data: { sessionID: 'ses_stranger' } },
+        { after: 700, type: 'session.execution.succeeded' },
+      ],
+    });
+    const client = new OpencodeClient({ baseUrl: server.url });
+    const result = await runIteration({
+      client,
+      config: config({ timeouts: { inactivityMs: 1_200, iterationMs: 60_000 } }),
+      prompt: 'p',
+      title: 't',
+      logger,
+      signal: new AbortController().signal,
+      hooks: {
+        onEvent: (event) =>
+          seen.push(`${event.type}:${(event.data as { sessionID: string }).sessionID}`),
+      },
+    });
+
+    expect(result.status).toBe('progressed');
+    expect(seen).toContain('session.created:ses_stranger');
+    expect(seen).toContain('session.step.started:ses_child');
+    expect(seen).not.toContain('session.step.started:ses_stranger');
+  });
+
   it('answers permission requests from policy and keeps going', async () => {
     const result = await iterate(
       {
