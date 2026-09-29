@@ -2,7 +2,7 @@
 
 A long-running agent loop that drives [opencode](https://opencode.ai) through its HTTP API.
 
-Ralph picks the next unfinished task from a project's `.agent/tasks.json`, runs one agent turn
+Ralph picks the next unfinished task from a project's `.ralph/tasks.json`, runs one agent turn
 against it, verifies what actually changed in the repository, and repeats until the backlog is
 done, the agent needs a human, or progress stops.
 
@@ -19,6 +19,23 @@ npm run build
 npm link          # optional, puts `ralph` on your PATH
 ```
 
+## Getting started
+
+Scaffold the files Ralph needs in the project you want worked on:
+
+```bash
+cd /path/to/project
+ralph init                  # or: ralph init -C /path/to/project
+```
+
+This creates `.ralph/` from `templates/`, writes `ralph.config.json` at the project root and
+adds `.ralph/history/` to `.gitignore`. It never overwrites a file: anything already there is
+reported as skipped, so running it again is harmless. It starts no server and needs no model.
+
+Then describe the project in `.ralph/prd/PRD.md`, replace the example task in
+`.ralph/tasks.json` and `.ralph/tasks/TASK-1.json`, set `model` in `ralph.config.json`, and
+run `ralph doctor`.
+
 ## Usage
 
 Run it from the project you want worked on:
@@ -28,6 +45,7 @@ ralph                       # run the loop in the current directory
 ralph once                  # a single iteration
 ralph doctor                # check the environment, run nothing
 ralph config                # print the resolved configuration
+ralph init                  # scaffold .ralph/ and ralph.config.json
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -52,22 +70,48 @@ nothing to get wrong.
 
 ## What a project must provide
 
-Ralph expects this layout in the project it runs against. `templates/` holds starting points.
+Ralph expects this layout in the project it runs against. `ralph init` creates it from
+`templates/`.
 
 ```
-.agent/
+.ralph/
   PROMPT.md        # required — the instructions sent each iteration
   tasks.json       # required — the backlog; a bare array of tasks
   tasks/           # optional — per-task specs referenced by specFilePath
-  prd/PRD.md       # optional
+  prd/PRD.md       # optional — what the project is for
   STEERING.md      # optional — work to do before feature tasks
   logs/LOG.md      # optional — the agent's own running log
-  history/         # written by ralph
+  history/         # written by ralph; ignore it in git
 ralph.config.json  # optional
 ```
 
 A task needs only an `id` and a `passes` flag; `title` and `specFilePath` are used when
 present. A `{ "tasks": [...] }` wrapper is accepted in place of a bare array.
+
+`PROMPT.md` can write `{{RALPH_DIR}}` wherever it refers to the folder; Ralph replaces it with
+the resolved folder, relative to the project root, so the prompt follows `ralphDir`.
+
+The folder is resolved in this order:
+
+1. `ralphDir` set explicitly, by `ralph.config.json`, `RALPH_DIR` or `--ralph-dir`
+2. `.ralph/`, if it exists
+3. `.agent/`, if it exists, with a deprecation warning
+4. `.ralph/`
+
+### Migrating from `.agent/`
+
+Earlier versions used `.agent/`. Such projects keep working without changes: when there is
+no `.ralph/`, Ralph falls back to `.agent/` and warns on each run. To migrate:
+
+```bash
+git mv .agent .ralph
+```
+
+Then, in `.ralph/PROMPT.md`, `.ralph/tasks.json` and any task specs, replace paths that say
+`.agent/` (in `PROMPT.md`, `{{RALPH_DIR}}` keeps it independent of the name), rename
+`agentDir` to `ralphDir` in `ralph.config.json` if you set it, and change `.agent/history/`
+to `.ralph/history/` in `.gitignore`. The `agentDir` key still works, with a warning.
+`ralph init` refuses to scaffold next to an unmigrated `.agent/` folder.
 
 The agent signals back with promise tags in its replies:
 
@@ -86,6 +130,7 @@ See `templates/ralph.config.json` for a complete file.
 ```jsonc
 {
   "model": "ollama/qwen3-coder",   // provider/model, as opencode names it
+  "ralphDir": ".ralph",            // project folder; omit to detect .ralph/ (or a legacy .agent/)
   "maxIterations": 20,
   "pinTask": true,                 // name the task in the prompt instead of letting the model choose
   "timeouts": {
@@ -110,7 +155,7 @@ See `templates/ralph.config.json` for a complete file.
 }
 ```
 
-The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_MAX_ITERATIONS`,
+The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
 
@@ -123,8 +168,8 @@ it does not stop the run.
 
 Ralph spawns `opencode serve` (or attaches to one with `server.url`), then per iteration:
 
-1. Reads `.agent/tasks.json` and picks the first task with `passes: false`.
-2. Builds the prompt from `.agent/PROMPT.md`, naming that task.
+1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
+2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.
 3. Opens a session, subscribes to `/api/event`, and sends the prompt.
 4. Consumes the SSE stream, answering permission requests from policy.
 5. Snapshots git and the task list before and after, and compares.
@@ -161,7 +206,7 @@ allow rules, so a broad allow list cannot re-enable something explicitly forbidd
 
 ## Run artefacts
 
-Each run writes to the project's `.agent/history/<runId>/`:
+Each run writes to the project's `.ralph/history/<runId>/`:
 
 - `iteration-NNN.events.jsonl` — every event received, for debugging
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta

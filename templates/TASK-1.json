@@ -1,0 +1,15 @@
+{
+  "id": "TASK-1",
+  "title": "Short description of the first unit of work",
+  "category": "setup",
+  "description": "What this task delivers and why, in a few sentences. Link the PRD section it serves.",
+  "steps": [
+    "First concrete step",
+    "Second concrete step"
+  ],
+  "acceptanceCriteria": [
+    "An observable result a reviewer can check",
+    "Tests covering the new behaviour pass"
+  ],
+  "notes": "Constraints, pitfalls, or files worth reading first. Delete if empty."
+}

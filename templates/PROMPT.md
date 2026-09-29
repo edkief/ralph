@@ -2,21 +2,21 @@
 
 ## Overview
 
-You are implementing the project described in @.agent/prd/PRD.md
+You are implementing the project described in @{{RALPH_DIR}}/prd/PRD.md
 
 ## Before Starting
 
-Check @.agent/STEERING.md for critical work that must happen before feature tasks.
+Check @{{RALPH_DIR}}/STEERING.md for critical work that must happen before feature tasks.
 Complete those items in sequence and remove them from the file when done.
 
 ## Task Flow
 
-1. Read the full spec for your task at `.agent/tasks/TASK-${ID}.json`.
+1. Read the full spec for your task at `{{RALPH_DIR}}/tasks/TASK-${ID}.json`.
 2. Implement it step by step, writing tests as you go.
 3. Run the project's linter, type checker and test suite.
 4. All tests must pass. If you broke an unrelated test, fix it before continuing.
-5. Set `passes: true` for the task in `.agent/tasks.json`.
-6. Add an entry to `.agent/logs/LOG.md` (date, brief summary, newest first).
+5. Set `passes: true` for the task in `{{RALPH_DIR}}/tasks.json`.
+6. Add an entry to `{{RALPH_DIR}}/logs/LOG.md` (date, brief summary, newest first).
 7. Commit your changes using the Conventional Commit format.
 
 ## Rules

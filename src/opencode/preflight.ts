@@ -31,13 +31,12 @@ const REQUIRED_OPERATIONS = [
  */
 export async function preflight(config: Config, client: OpencodeClient): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
-  const agentPath = (...parts: string[]) => resolve(config.projectRoot, config.agentDir, ...parts);
+  const ralphPath = (...parts: string[]) => resolve(config.projectRoot, config.ralphDir, ...parts);
 
-  results.push(fileCheck('prompt', agentPath('PROMPT.md'), true));
-  results.push(fileCheck('prd', agentPath('prd', 'PRD.md'), false));
-  results.push(fileCheck('structure', agentPath('STRUCTURE.md'), false));
+  results.push(fileCheck('prompt', ralphPath('PROMPT.md'), true, 'run `ralph init` to scaffold one'));
+  results.push(fileCheck('prd', ralphPath('prd', 'PRD.md'), false));
 
-  const store = TaskStore.forProject(config.projectRoot, config.agentDir);
+  const store = TaskStore.forProject(config.projectRoot, config.ralphDir);
   try {
     const summary = store.reload();
     results.push({
@@ -70,9 +69,9 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
   return results;
 }
 
-function fileCheck(name: string, path: string, fatal: boolean): CheckResult {
+function fileCheck(name: string, path: string, fatal: boolean, hint?: string): CheckResult {
   const ok = existsSync(path);
-  return { name, ok, detail: ok ? path : `missing: ${path}`, fatal };
+  return { name, ok, detail: ok ? path : `missing: ${path}${hint ? ` — ${hint}` : ''}`, fatal };
 }
 
 async function operationsCheck(client: OpencodeClient): Promise<CheckResult> {

@@ -14,7 +14,7 @@ export interface IterationRecord {
 }
 
 /**
- * Persists what each iteration did under `.agent/history/<runId>/`:
+ * Persists what each iteration did under `<ralphDir>/history/<runId>/`:
  * the raw event stream for debugging, and a compact record per iteration.
  * Replaces the old ANSI-stripped terminal transcripts, which were unparseable.
  */

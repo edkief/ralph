@@ -4,6 +4,7 @@ import { loadConfig, ConfigError } from './config/load.js';
 import { startServer } from './opencode/server.js';
 import { preflight } from './opencode/preflight.js';
 import { runLoop } from './loop/orchestrator.js';
+import { scaffold } from './init/scaffold.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
 import { ExitCode } from './exit.js';
@@ -16,12 +17,14 @@ Usage:
   ralph once [options]      Run exactly one iteration
   ralph doctor [options]    Check the environment and exit
   ralph config [options]    Print the resolved configuration
+  ralph init [-C <path>]    Scaffold .ralph/ and ralph.config.json; never overwrites
 
 Options:
   -n, --max-iterations <n>  Iteration budget (default 10)
   -m, --model <id>          provider/model, e.g. ollama/qwen3-coder
   -a, --agent <name>        opencode agent profile
   -C, --cwd <path>          Project root (default: current directory)
+      --ralph-dir <path>    Ralph's project folder (default: .ralph)
       --config <path>       Config file (default: <root>/ralph.config.json)
       --server <url>        Attach to an existing opencode server
       --no-pin-task         Let the agent choose its own task
@@ -43,6 +46,7 @@ async function main(argv: string[]): Promise<number> {
       model: { type: 'string', short: 'm' },
       agent: { type: 'string', short: 'a' },
       cwd: { type: 'string', short: 'C' },
+      'ralph-dir': { type: 'string' },
       config: { type: 'string' },
       server: { type: 'string' },
       'pin-task': { type: 'boolean', default: true },
@@ -58,15 +62,19 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
+
+  // Scaffolding needs no config, server or preflight: it runs where those would fail.
+  if (command === 'init') return runInit(values.cwd ?? process.cwd());
 
   const overrides: Record<string, unknown> = {
     ...(values['max-iterations'] ? { maxIterations: Number(values['max-iterations']) } : {}),
     ...(values.model ? { model: values.model } : {}),
     ...(values.agent ? { agent: values.agent } : {}),
+    ...(values['ralph-dir'] ? { ralphDir: values['ralph-dir'] } : {}),
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
     ...(command === 'once' ? { maxIterations: 1 } : {}),
     ...(values.server ? { server: { url: values.server } } : {}),
@@ -76,22 +84,26 @@ async function main(argv: string[]): Promise<number> {
     },
   };
 
+  // The logger's format comes from the config, so hold warnings until it exists.
+  const warnings: string[] = [];
   const config = loadConfig({
     projectRoot: values.cwd ?? process.cwd(),
     overrides,
+    onWarning: (message) => warnings.push(message),
     ...(values.config ? { configPath: values.config } : {}),
   });
+  const logger = new Logger({ level: config.log.level, format: config.log.format });
+  for (const warning of warnings) logger.warn(warning);
 
   if (command === 'config') {
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
     return 0;
   }
 
-  return runCommand(command, config);
+  return runCommand(command, config, logger);
 }
 
-async function runCommand(command: string, config: Config): Promise<number> {
-  const logger = new Logger({ level: config.log.level, format: config.log.format });
+async function runCommand(command: string, config: Config, logger: Logger): Promise<number> {
   const reporter = new ConsoleReporter();
   const controller = new AbortController();
 
@@ -151,6 +163,31 @@ async function runCommand(command: string, config: Config): Promise<number> {
     process.off('SIGTERM', onSignal);
     await server.stop();
   }
+}
+
+function runInit(projectRoot: string): number {
+  const result = scaffold(projectRoot);
+  if (result.status === 'legacy') {
+    process.stderr.write(`${result.message}\n`);
+    return ExitCode.ConfigError;
+  }
+
+  const lines = [
+    ...result.created.map((path) => `  created  ${path}`),
+    ...result.updated.map((path) => `  updated  ${path}`),
+    ...result.skipped.map(
+      (path) => `  skipped  ${path} (${path === '.gitignore' ? 'already ignores .ralph/history/' : 'exists'})`,
+    ),
+  ];
+  const changed = result.created.length + result.updated.length > 0;
+  process.stdout.write(
+    `${lines.join('\n')}\n\n${
+      changed
+        ? 'Next: describe the project in .ralph/prd/PRD.md, fill in .ralph/tasks.json, then run `ralph doctor`.'
+        : 'Nothing to do: the project is already set up.'
+    }\n`,
+  );
+  return 0;
 }
 
 function summaryTitle(status: string): string {
