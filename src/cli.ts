@@ -41,6 +41,8 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
+    // Boolean options default on and are turned off with --no-<name>.
+    allowNegative: true,
     options: {
       'max-iterations': { type: 'string', short: 'n' },
       model: { type: 'string', short: 'm' },
