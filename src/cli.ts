@@ -4,7 +4,7 @@ import { loadConfig, ConfigError } from './config/load.js';
 import { startServer } from './opencode/server.js';
 import { preflight } from './opencode/preflight.js';
 import { runLoop } from './loop/orchestrator.js';
-import { scaffold } from './init/scaffold.js';
+import { runInit } from './init/command.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
 import { ExitCode } from './exit.js';
@@ -17,7 +17,12 @@ Usage:
   ralph once [options]      Run exactly one iteration
   ralph doctor [options]    Check the environment and exit
   ralph config [options]    Print the resolved configuration
-  ralph init [-C <path>]    Scaffold .ralph/ and ralph.config.json; never overwrites
+  ralph init [options]      Scaffold .ralph/, then plan the project with the agent
+
+Init options:
+      --no-interview        Only scaffold; also the default outside a terminal
+      --replan              Revise an existing plan with the agent
+  -m, --model <id>          Model for the planning interview (default: plan.model, then model)
 
 Options:
   -n, --max-iterations <n>  Iteration budget (default 10)
@@ -54,6 +59,8 @@ async function main(argv: string[]): Promise<number> {
       'pin-task': { type: 'boolean', default: true },
       'log-format': { type: 'string' },
       'log-level': { type: 'string' },
+      interview: { type: 'boolean', default: true },
+      replan: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -69,12 +76,10 @@ async function main(argv: string[]): Promise<number> {
     return ExitCode.ConfigError;
   }
 
-  // Scaffolding needs no config, server or preflight: it runs where those would fail.
-  if (command === 'init') return runInit(values.cwd ?? process.cwd());
-
   const overrides: Record<string, unknown> = {
     ...(values['max-iterations'] ? { maxIterations: Number(values['max-iterations']) } : {}),
-    ...(values.model ? { model: values.model } : {}),
+    // For init, -m picks the planning model rather than the loop's.
+    ...(values.model ? (command === 'init' ? { plan: { model: values.model } } : { model: values.model }) : {}),
     ...(values.agent ? { agent: values.agent } : {}),
     ...(values['ralph-dir'] ? { ralphDir: values['ralph-dir'] } : {}),
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
@@ -82,20 +87,36 @@ async function main(argv: string[]): Promise<number> {
     ...(values.server ? { server: { url: values.server } } : {}),
     log: {
       ...(values['log-format'] ? { format: values['log-format'] } : {}),
-      ...(values['log-level'] ? { level: values['log-level'] } : {}),
+      // Info logs would interleave with the planning conversation.
+      ...(values['log-level'] ? { level: values['log-level'] } : command === 'init' ? { level: 'warn' } : {}),
     },
   };
 
-  // The logger's format comes from the config, so hold warnings until it exists.
-  const warnings: string[] = [];
-  const config = loadConfig({
-    projectRoot: values.cwd ?? process.cwd(),
-    overrides,
-    onWarning: (message) => warnings.push(message),
-    ...(values.config ? { configPath: values.config } : {}),
-  });
-  const logger = new Logger({ level: config.log.level, format: config.log.format });
-  for (const warning of warnings) logger.warn(warning);
+  const load = () => {
+    // The logger's format comes from the config, so hold warnings until it exists.
+    const warnings: string[] = [];
+    const config = loadConfig({
+      projectRoot: values.cwd ?? process.cwd(),
+      overrides,
+      onWarning: (message) => warnings.push(message),
+      ...(values.config ? { configPath: values.config } : {}),
+    });
+    const logger = new Logger({ level: config.log.level, format: config.log.format });
+    for (const warning of warnings) logger.warn(warning);
+    return { config, logger };
+  };
+
+  // Scaffolding needs no config, server or preflight; only the interview loads them.
+  if (command === 'init') {
+    return runInit({
+      projectRoot: values.cwd ?? process.cwd(),
+      interview: values.interview !== false,
+      replan: values.replan === true,
+      load,
+    });
+  }
+
+  const { config, logger } = load();
 
   if (command === 'config') {
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
@@ -165,31 +186,6 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     process.off('SIGTERM', onSignal);
     await server.stop();
   }
-}
-
-function runInit(projectRoot: string): number {
-  const result = scaffold(projectRoot);
-  if (result.status === 'legacy') {
-    process.stderr.write(`${result.message}\n`);
-    return ExitCode.ConfigError;
-  }
-
-  const lines = [
-    ...result.created.map((path) => `  created  ${path}`),
-    ...result.updated.map((path) => `  updated  ${path}`),
-    ...result.skipped.map(
-      (path) => `  skipped  ${path} (${path === '.gitignore' ? 'already ignores .ralph/history/' : 'exists'})`,
-    ),
-  ];
-  const changed = result.created.length + result.updated.length > 0;
-  process.stdout.write(
-    `${lines.join('\n')}\n\n${
-      changed
-        ? 'Next: describe the project in .ralph/prd/PRD.md, fill in .ralph/tasks.json, then run `ralph doctor`.'
-        : 'Nothing to do: the project is already set up.'
-    }\n`,
-  );
-  return 0;
 }
 
 function summaryTitle(status: string): string {

@@ -54,6 +54,9 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       iterationMs: num(env['RALPH_ITERATION_TIMEOUT_MS']),
       inactivityMs: num(env['RALPH_INACTIVITY_TIMEOUT_MS']),
     },
+    plan: {
+      model: env['RALPH_PLAN_MODEL'],
+    },
     git: {
       push: env['RALPH_GIT_PUSH'],
       remote: env['RALPH_GIT_REMOTE'],

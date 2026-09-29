@@ -58,6 +58,16 @@ const PermissionsSchema = z.object({
   allow: z.array(z.string()).default([]),
 });
 
+/** The `ralph init` interview, in which the agent writes the plan with the user. */
+const PlanSchema = z.object({
+  /** Planning is a one-off that rewards a stronger model than the loop needs; defaults to `model`. */
+  model: z.string().optional(),
+  /** Agent turns before the interview gives up, fix-up turns included. */
+  maxTurns: z.number().int().positive().default(30),
+  /** Times the agent is sent back to fix a plan that fails validation. */
+  maxFixAttempts: z.number().int().min(0).default(2),
+});
+
 export const ConfigSchema = z.object({
   projectRoot: z.string(),
   /**
@@ -81,6 +91,7 @@ export const ConfigSchema = z.object({
   stall: StallSchema.prefault({}),
   permissions: PermissionsSchema.prefault({}),
   git: GitSchema.prefault({}),
+  plan: PlanSchema.prefault({}),
   log: z
     .object({
       format: z.enum(['text', 'json']).default('text'),
