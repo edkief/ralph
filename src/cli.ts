@@ -40,7 +40,11 @@ Options:
 
 Exit codes:
   0 complete · 1 budget exhausted · 2 blocked · 3 decision needed
-  4 config/preflight · 5 provider · 6 stalled · 130 interrupted
+  4 config/preflight · 5 provider · 6 stalled · 130 interrupted or stopped
+
+Stopping:
+  Ctrl-C once to stop after the current iteration, twice to stop now.
+  Unattended, send SIGINT for the first and SIGTERM for the second.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -129,18 +133,28 @@ async function main(argv: string[]): Promise<number> {
 
 async function runCommand(command: string, config: Config, logger: Logger): Promise<number> {
   const reporter = new ConsoleReporter();
+  // `stop` lets the current iteration finish; `controller` interrupts it.
+  const stop = new AbortController();
   const controller = new AbortController();
   // Both write to the terminal: keep log lines off the end of the status line.
   logger.beforeWrite(() => reporter.clearStatus());
 
-  const onSignal = () => {
-    logger.warn('signal received, finishing current iteration');
+  const onTerminate = () => {
+    if (controller.signal.aborted) return;
+    logger.warn('stopping now, interrupting the current iteration');
     controller.abort();
   };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
+  // The first Ctrl-C asks to stop after the current iteration; a second one stops now.
+  const onInterrupt = () => {
+    if (stop.signal.aborted) return onTerminate();
+    logger.warn('stopping after the current iteration; press Ctrl-C again to stop now');
+    stop.abort();
+  };
+  process.on('SIGINT', onInterrupt);
+  process.on('SIGTERM', onTerminate);
+  process.on('SIGHUP', onTerminate);
 
-  const server = await startServer(config.server, { cwd: config.projectRoot, logger });
+  const server = await startServer(config.server, { cwd: config.projectRoot, logger, ownProcessGroup: true });
 
   try {
     const checks = await preflight(config, server.client);
@@ -171,6 +185,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
       logger,
       reporter,
       signal: controller.signal,
+      stop: stop.signal,
     });
 
     reporter.summary(
@@ -186,8 +201,9 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
 
     return exitCodeFor(result.status);
   } finally {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onInterrupt);
+    process.off('SIGTERM', onTerminate);
+    process.off('SIGHUP', onTerminate);
     logger.beforeWrite(undefined);
     await server.stop();
   }
@@ -205,6 +221,8 @@ function summaryTitle(status: string): string {
       return '⚠️  Stalled — no progress';
     case 'interrupted':
       return '■ Interrupted';
+    case 'stopped':
+      return '■ Stopped on request';
     default:
       return '⚠️  Ralph stopped';
   }
@@ -229,6 +247,7 @@ function exitCodeFor(status: string): number {
     case 'stalled':
       return ExitCode.Stalled;
     case 'interrupted':
+    case 'stopped':
       return ExitCode.Interrupted;
     default:
       return ExitCode.MaxIterations;

@@ -50,10 +50,22 @@ function config(root: string, overrides: Record<string, unknown> = {}): Config {
   });
 }
 
-async function loop(root: string, cfg: Config, options: Parameters<typeof startFakeServer>[0]) {
+async function loop(
+  root: string,
+  cfg: Config,
+  options: Parameters<typeof startFakeServer>[0],
+  stop?: AbortSignal,
+) {
   server = await startFakeServer(options);
   const client = new OpencodeClient({ baseUrl: server.url });
-  return runLoop({ config: cfg, client, logger, reporter, signal: new AbortController().signal });
+  return runLoop({
+    config: cfg,
+    client,
+    logger,
+    reporter,
+    signal: new AbortController().signal,
+    ...(stop ? { stop } : {}),
+  });
 }
 
 const say = (text: string): ScriptedEvent[] => [
@@ -231,6 +243,74 @@ describe('runLoop', () => {
 
       expect(result.status).toBe('max-iterations');
       expect(result.iterations).toBe(2);
+    });
+  });
+
+  describe('stopping on request', () => {
+    it('finishes the current iteration, then stops', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+      const stop = new AbortController();
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 5 }),
+        {
+          onPrompt: (count) => {
+            if (count === 1) stop.abort();
+            markPassing(root, `TASK-${count}`);
+          },
+          script: (count) => say(`<promise>TASK-${count}:DONE</promise>`),
+        },
+        stop.signal,
+      );
+
+      expect(result.status).toBe('stopped');
+      expect(result.iterations).toBe(1);
+      expect(result.tasksPassed).toBe(1);
+      expect(result.message).toBe('Stopped on request after 1 iteration');
+      expect(server?.prompts).toHaveLength(1);
+    });
+
+    it('does not retry a timed-out iteration once a stop is requested', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const stop = new AbortController();
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          timeouts: { inactivityMs: 1_000 },
+          retries: { backoffMs: 0, iterationRetries: 2 },
+        }),
+        { onPrompt: () => stop.abort(), script: [] },
+        stop.signal,
+      );
+
+      expect(result.status).toBe('stopped');
+      expect(server?.prompts).toHaveLength(1);
+    });
+
+    it('lets a finished backlog win over the stop request', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const stop = new AbortController();
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 5 }),
+        {
+          onPrompt: () => {
+            stop.abort();
+            markPassing(root, 'TASK-1');
+          },
+          script: say('<promise>TASK-1:DONE</promise>'),
+        },
+        stop.signal,
+      );
+
+      expect(result.status).toBe('complete');
     });
   });
 
