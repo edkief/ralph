@@ -31,6 +31,17 @@ const StallSchema = z.object({
 });
 
 /**
+ * Publishing commits. The loop pushes, never the agent, whose `git push` stays
+ * denied. `iteration` pushes after every iteration that committed; `end`
+ * pushes once when the run finishes.
+ */
+const GitSchema = z.object({
+  push: z.enum(['never', 'iteration', 'end']).default('never'),
+  remote: z.string().default('origin'),
+  pushTimeoutMs: z.number().int().positive().default(120_000),
+});
+
+/**
  * Permission policy for unattended runs. `deny` wins over `allow`; anything
  * unmatched follows `fallback`. Patterns are matched against the permission
  * action and its resources.
@@ -63,6 +74,7 @@ export const ConfigSchema = z.object({
   retries: RetriesSchema.prefault({}),
   stall: StallSchema.prefault({}),
   permissions: PermissionsSchema.prefault({}),
+  git: GitSchema.prefault({}),
   log: z
     .object({
       format: z.enum(['text', 'json']).default('text'),

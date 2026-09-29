@@ -143,6 +143,96 @@ describe('runLoop', () => {
     expect(result.iterations).toBe(2);
   });
 
+  describe('pushing', () => {
+    /** Attach a bare repository as `origin`, returning its path. */
+    function withRemote(root: string): string {
+      const remote = mkdtempSync(resolve(tmpdir(), 'ralph-remote-'));
+      execFileSync('git', ['init', '-q', '--bare'], { cwd: remote });
+      execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: root });
+      return remote;
+    }
+
+    const commitWork = (root: string) => (count: number) => {
+      writeFileSync(resolve(root, `work-${count}.txt`), 'progress');
+      execFileSync('git', ['add', '-A'], { cwd: root });
+      execFileSync('git', ['commit', '-qm', `feat: work ${count}`], { cwd: root });
+    };
+
+    /** The remote's HEAD commit, or null while nothing has been pushed. */
+    const remoteHead = (remote: string): string | null => {
+      try {
+        return execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], {
+          cwd: remote,
+          encoding: 'utf8',
+        }).trim();
+      } catch {
+        return null;
+      }
+    };
+    const localHead = (root: string) =>
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+
+    it('does not push by default', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const remote = withRemote(root);
+
+      await loop(root, config(root, { maxIterations: 1 }), {
+        onPrompt: commitWork(root),
+        script: say('committed'),
+      });
+
+      expect(remoteHead(remote)).toBeNull();
+    });
+
+    it('pushes after each committing iteration', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const remote = withRemote(root);
+      const pushedHeads: Array<string | null> = [];
+
+      await loop(root, config(root, { maxIterations: 2, git: { push: 'iteration' } }), {
+        onPrompt: (count) => {
+          // Before the second commit, the first must already be on the remote.
+          if (count === 2) pushedHeads.push(remoteHead(remote));
+          commitWork(root)(count);
+        },
+        script: say('committed'),
+      });
+
+      expect(pushedHeads[0]).not.toBeNull();
+      expect(remoteHead(remote)).toBe(localHead(root));
+    });
+
+    it('pushes once at the end of the run', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const remote = withRemote(root);
+      let remoteDuringRun: string | null = null;
+
+      await loop(root, config(root, { maxIterations: 2, git: { push: 'end' } }), {
+        onPrompt: (count) => {
+          if (count === 2) remoteDuringRun = remoteHead(remote);
+          commitWork(root)(count);
+        },
+        script: say('committed'),
+      });
+
+      expect(remoteDuringRun).toBeNull();
+      expect(remoteHead(remote)).toBe(localHead(root));
+    });
+
+    it('keeps running when a push fails', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 2, git: { push: 'iteration', remote: 'nowhere' } }),
+        { onPrompt: commitWork(root), script: say('committed') },
+      );
+
+      expect(result.status).toBe('max-iterations');
+      expect(result.iterations).toBe(2);
+    });
+  });
+
   it('stops immediately when the agent is blocked', async () => {
     const root = project([{ id: 'TASK-1', passes: false }]);
 

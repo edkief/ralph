@@ -18,6 +18,10 @@
     "fallback": "allow",
     "deny": ["git push", "git remote", "rm -rf /", "shutdown", "reboot"]
   },
+  "git": {
+    "push": "never",
+    "remote": "origin"
+  },
   "log": {
     "format": "text",
     "level": "info"

@@ -102,13 +102,22 @@ See `templates/ralph.config.json` for a complete file.
     "fallback": "allow",           // unattended runs need to proceed without a human
     "deny": ["git push", "git remote"]
   },
+  "git": {
+    "push": "never",               // never | iteration (after each commit) | end (once, when the run finishes)
+    "remote": "origin"
+  },
   "server": { "url": "http://opencode:4096" }  // attach instead of spawning
 }
 ```
 
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
-`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_LOG_FORMAT=json`.
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
+
+The agent can never push: `git push` stays denied, so it cannot force-push or touch remotes.
+With `git.push` set, Ralph itself runs `git push <remote> HEAD` (never forced, never
+prompting for credentials). A failed push is logged and retried at the next opportunity;
+it does not stop the run.
 
 ## How it works
 

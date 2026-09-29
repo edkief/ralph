@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
+import { pushBranch } from './push.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
@@ -47,6 +48,9 @@ export async function runLoop(args: {
   );
 
   let unproductive = 0;
+  // Commits the loop has not yet published. A failed push leaves this set,
+  // so the next push attempt (or the one at run end) catches up.
+  let unpushed = false;
   let iteration = 0;
   let finalStatus: RunResult['status'] = 'max-iterations';
   let message = `Reached the ${config.maxIterations} iteration budget with work outstanding`;
@@ -108,6 +112,11 @@ export async function runLoop(args: {
       endedAt: new Date().toISOString(),
     });
 
+    if (delta.committed) unpushed = true;
+    if (config.git.push === 'iteration' && unpushed) {
+      unpushed = !(await publish(config, logger, { iteration }));
+    }
+
     if (TERMINAL_STATUSES.has(status)) {
       finalStatus = status;
       message = terminalMessage(status, result);
@@ -132,6 +141,10 @@ export async function runLoop(args: {
     } else if (config.pauseBetweenIterationsMs > 0) {
       await sleep(config.pauseBetweenIterationsMs, signal);
     }
+  }
+
+  if (config.git.push !== 'never' && unpushed && !signal.aborted) {
+    await publish(config, logger, {});
   }
 
   const finalSummary = tasks.reload();
@@ -206,6 +219,22 @@ async function attemptIteration(context: {
     });
     await sleep(config.retries.backoffMs, signal);
   }
+}
+
+/** Push the branch, logging the outcome. A failed push never stops the run. */
+async function publish(
+  config: Config,
+  logger: Logger,
+  context: { iteration?: number },
+): Promise<boolean> {
+  const { remote, pushTimeoutMs } = config.git;
+  const result = await pushBranch(config.projectRoot, remote, pushTimeoutMs);
+  if (result.ok) {
+    logger.info('pushed commits', { remote, ...context });
+  } else {
+    logger.warn('push failed', { remote, ...context, error: result.error });
+  }
+  return result.ok;
 }
 
 /** An iteration that ran cleanly but changed nothing is not progress. */
