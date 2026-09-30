@@ -78,7 +78,7 @@ export function buildPrompt(context: PromptContext): string {
       [
         `## Resuming ${context.nextTask.id}`,
         ``,
-        `An earlier attempt at this task ran out of time and left the handoff below (\`${path}\`).`,
+        `An earlier attempt at this task was cut short and left the handoff below (\`${path}\`).`,
         `Pick up from it instead of starting over, and check the working tree it describes.`,
         `Delete the handoff file in the commit that completes the task.`,
         ``,

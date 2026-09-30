@@ -6,8 +6,8 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 
 /**
- * A handoff is the note an agent leaves when an iteration runs out of time,
- * so the next attempt at the task resumes instead of starting over. It lives
+ * A handoff is the note an agent leaves when an iteration runs out of time or
+ * context, so the next attempt at the task resumes instead of starting over. It lives
  * at `<ralphDir>/handoff/<taskId>.md` and uses these headings.
  */
 export const HANDOFF_HEADINGS = [
@@ -23,6 +23,15 @@ export const HANDOFF_HEADINGS = [
 const MAX_PROMPT_BYTES = 8_000;
 /** The most of an earlier handoff, or of the agent's last words, kept in a fallback. */
 const MAX_QUOTED_CHARS = 3_000;
+
+export type CutShortBy = 'time' | 'context';
+
+/** For the attempt after one whose conversation outgrew the model's context window. */
+const CONTEXT_ADVICE = [
+  `The last attempt filled the model's context window. Keep this one lean: read files in`,
+  `ranges rather than whole, trim command output (\`| tail -n 50\`, quiet test reporters), avoid`,
+  `re-reading what you already know, and commit each working step so little rides on one session.`,
+].join('\n');
 
 export function handoffDir(ralphDir: string): string {
   return `${ralphDir.replace(/\/+$/, '')}/handoff`;
@@ -49,7 +58,7 @@ export function readHandoff(path: string): string | undefined {
 }
 
 /**
- * Make sure a timed-out attempt leaves a usable handoff. The agent's own is
+ * Make sure an attempt that was cut short leaves a usable handoff. The agent's own is
  * kept when it was written during this attempt and has every heading;
  * otherwise Ralph writes one from what it saw, keeping whatever was there.
  */
@@ -63,6 +72,8 @@ export async function ensureHandoff(args: {
   /** HEAD when the iteration started, to list the commits it made. */
   sinceHead: string | null;
   reason: string;
+  /** What the attempt ran out of, which shapes the advice for the next one. */
+  cutShortBy?: CutShortBy;
   agentText: string;
 }): Promise<'agent' | 'fallback'> {
   const existing = existsSync(args.path) ? readFileSync(args.path, 'utf8') : undefined;
@@ -84,8 +95,8 @@ export async function ensureHandoff(args: {
   const document = [
     `# Handoff: ${args.taskId}`,
     ``,
-    `Written by Ralph: the agent ran out of time without leaving a complete handoff, so this`,
-    `records what the loop could see.`,
+    `Written by Ralph: the agent ran out of ${args.cutShortBy ?? 'time'} without leaving a complete handoff,`,
+    `so this records what the loop could see.`,
     ``,
     `## Status`,
     ``,
@@ -103,6 +114,7 @@ export async function ensureHandoff(args: {
     ``,
     `Read the agent's last messages below and any uncommitted changes, decide what is worth`,
     `keeping, then continue the task.`,
+    ...(args.cutShortBy === 'context' ? [``, CONTEXT_ADVICE] : []),
     ``,
     `## Dead ends`,
     ``,

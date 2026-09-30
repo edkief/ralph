@@ -180,7 +180,7 @@ See `templates/ralph.config.json` for a complete file.
   },
   "stall": {
     "maxUnproductiveIterations": 3,
-    "maxTimeoutsPerTask": 2        // a task that runs out of time this often stops the run
+    "maxTimeoutsPerTask": 2        // a task that runs out of time or context this often stops the run
   },
   "permissions": {
     "fallback": "allow",           // unattended runs need to proceed without a human
@@ -245,7 +245,7 @@ than quietly burning the whole budget.
 | Watchdog | What it catches |
 | --- | --- |
 | `retry-storm` | Provider unreachable or rate limited. opencode retries with backoff, emitting no text and no error — the loop would otherwise hang indefinitely. |
-| `inactivity` | Agent produced no events at all for `inactivityMs`. |
+| `inactivity` | Agent produced no events at all for `inactivityMs`. Not checked while opencode compacts the conversation, which is silent until it ends. |
 | `iteration-timeout` | Turn used up its working time, `iterationMs`. |
 
 A retry storm interrupts the session server-side rather than killing a process, so opencode
@@ -285,6 +285,29 @@ changes alone do not count as progress, and a task that runs out of time
 too big for one iteration and needs splitting. Set `wrapUpMs: 0` to interrupt outright as
 before; the handoff is still written.
 
+### Running out of context
+
+opencode keeps a long session inside the model's context window on its own: before each model
+call it summarises older turns once the request nears the limit, and after a provider rejects
+a request as too long it compacts and tries once more. Configure it under `compaction` in the
+opencode config, not here. It cannot help when:
+
+- opencode does not know the model's context size, which is common for self-hosted models.
+  Declare `limit.context` for the model in the opencode config.
+- the provider truncates the prompt silently instead of rejecting it. Ollama does this
+  whenever the conversation outgrows `num_ctx`, so set `num_ctx` to what the model supports.
+- compaction is off (`compaction.auto: false`) or the summary itself fails.
+
+When the turn still fails, the iteration ends as `context-overflow`, with the provider's
+message as its error. Ralph treats it like running out of time: it writes the handoff from
+what it saw, adds advice to keep the next session lean, and retries in a fresh session that
+resumes from the handoff. There is no wrap-up turn, since the full session has no room left for
+one. Overflows count toward `stall.maxTimeoutsPerTask` along with timeouts, so a task too big
+for one context stops the run with advice to split it.
+
+Compaction sends no events until it is done, so the inactivity watchdog does not trip while it
+runs; the iteration and wrap-up budgets still apply. Iteration records count the compactions.
+
 Permission requests are answered from policy, never left waiting for a human. Deny rules beat
 allow rules, so a broad allow list cannot re-enable something explicitly forbidden.
 
@@ -294,7 +317,7 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 
 - `iteration-NNN.events.jsonl` — every event received, for debugging
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
-  plus the wrap-up and who wrote the handoff when it ran out of time
+  plus the wrap-up and who wrote the handoff when it ran out of time or context
 - `run.json` — the run summary
 
 ## Notes on the opencode API

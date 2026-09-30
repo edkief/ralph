@@ -374,6 +374,64 @@ describe('runLoop', () => {
     });
   });
 
+  describe('running out of context', () => {
+    const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
+    const overflow: ScriptedEvent[] = [
+      { type: 'session.text.ended', data: { text: 'Reading the whole parser.' } },
+      {
+        type: 'session.step.failed',
+        data: { error: { type: 'unknown', message: 'prompt is too long: 140000 tokens > 131072 maximum' } },
+      },
+      { type: 'session.execution.failed' },
+    ];
+
+    it('retries in a fresh session that resumes from a handoff', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 3, retries: { backoffMs: 0, iterationRetries: 1 } }),
+        {
+          onPrompt: (count) => {
+            if (count === 2) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? overflow : say('<promise>TASK-1:DONE</promise>')),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(1);
+      expect(server?.sessionsCreated).toBe(2);
+      const retry = String(server?.prompts[1]?.['text']);
+      expect(retry).toContain('## Resuming TASK-1');
+      expect(retry).toContain('ran out of context');
+      expect(retry).toContain('prompt is too long');
+      expect(retry).toContain("filled the model's context window");
+
+      const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(records[0]).toMatchObject({ result: { status: 'progressed' } });
+    });
+
+    it('stops a task that keeps outgrowing the context window', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          retries: { backoffMs: 0, iterationRetries: 1 },
+          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5 },
+        }),
+        { script: overflow },
+      );
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(1);
+      expect(result.message).toBe('TASK-1 ran out of context 2 times; split it into smaller tasks (handoff: .ralph/handoff/TASK-1.md)');
+      expect(readFileSync(handoff(root), 'utf8')).toContain('Written by Ralph: the agent ran out of context');
+    });
+  });
+
   it('stops immediately when the agent is blocked', async () => {
     const root = project([{ id: 'TASK-1', passes: false }]);
 

@@ -22,6 +22,7 @@ const STATUS_ICON: Record<IterationStatus, string> = {
   'provider-error': '⚡',
   timeout: '⏱',
   'wrapped-up': '⏸',
+  'context-overflow': '⧉',
   failed: '✗',
   interrupted: '■',
 };
@@ -94,6 +95,7 @@ export class ConsoleReporter {
     if (delta.committed) parts.push('committed');
     if (delta.tasksPassedDelta > 0) parts.push(`+${delta.tasksPassedDelta} task`);
     if (result.providerRetries > 0) parts.push(`${result.providerRetries} retries`);
+    if (result.compactions > 0) parts.push(`compacted ×${result.compactions}`);
 
     const stamp = this.stamp();
     this.stream.write(`${stamp}   ${icon} ${status} ${this.paint(`· ${parts.join(' · ')}`, C.dim)}\n`);

@@ -1,20 +1,24 @@
 import type { OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
+  ExecutionEndedSchema,
   PermissionRequestSchema,
   RetryScheduledSchema,
   SessionCreatedSchema,
   StepEndedSchema,
+  StepFailedSchema,
   TextEndedSchema,
   ToolCalledSchema,
   ToolInputStartedSchema,
   ToolResultSchema,
+  errorMessage,
   isActivityEvent,
   readData,
   type OpencodeEvent,
   type PermissionRequest,
 } from '../opencode/events.js';
 import { decidePermission, type PermissionDecision } from './permissions.js';
+import { isContextOverflow } from '../opencode/overflow.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
 import { sleep } from '../opencode/server.js';
@@ -40,6 +44,8 @@ export interface IterationResult {
   filesTouched: string[];
   providerRetries: number;
   lastProviderError?: string;
+  /** Times opencode summarised the conversation to fit the context window. */
+  compactions: number;
   error?: string;
   /** Set when the iteration ran out of time and the agent was asked to hand off. */
   wrapUp?: WrapUpRecord;
@@ -120,7 +126,11 @@ export async function runIteration(args: {
   const toolNames = new Map<string, string>();
   let trip: WatchdogTrip | null = null;
   let executionError: string | undefined;
+  // Why the last model call failed, e.g. a context overflow; the execution's
+  // own end event does not always repeat it.
+  let stepFailure: string | undefined;
   let lastProviderError: string | undefined;
+  let compactions = 0;
   let sessionId = '';
   // Subagents run in child sessions. Their work keeps the iteration alive and
   // their permission requests need answers, but their text, tools and
@@ -215,6 +225,10 @@ export async function runIteration(args: {
       hooks.onEvent?.(event);
 
       if (isActivityEvent(event.type)) watchdog.recordActivity();
+      // Compaction is quiet until it ends, whichever session it is for.
+      if (event.type === 'session.compaction.started' || event.type === 'session.compaction.delta') {
+        watchdog.beginCompaction();
+      }
 
       if (event.type.includes('permission')) {
         await handlePermission(event, client, policy, logger);
@@ -256,6 +270,18 @@ export async function runIteration(args: {
           for (const file of data?.files ?? []) filesTouched.add(file);
           break;
         }
+        case 'session.step.failed': {
+          stepFailure = errorMessage(readData(event, StepFailedSchema)?.error) ?? stepFailure;
+          logger.warn('model call failed', { error: stepFailure ?? 'unknown' });
+          break;
+        }
+        case 'session.compaction.started':
+          logger.info('compacting the conversation to fit the context window');
+          break;
+        case 'session.compaction.ended':
+          compactions += 1;
+          logger.info('conversation compacted', { compactions });
+          break;
         case 'session.retry.scheduled': {
           const data = readData(event, RetryScheduledSchema);
           watchdog.recordProviderRetry();
@@ -277,7 +303,10 @@ export async function runIteration(args: {
           wrapUp.onInterruptedEnd?.();
           continue;
         }
-        if (event.type !== 'session.execution.succeeded') {
+        if (event.type === 'session.execution.failed') {
+          const ended = readData(event, ExecutionEndedSchema);
+          executionError = errorMessage(ended?.error) ?? stepFailure ?? 'execution failed';
+        } else if (event.type !== 'session.execution.succeeded') {
           executionError = `execution ${event.type.split('.').pop()}`;
         }
         if (wrapUp.state) wrapUp.state.completed = !executionError;
@@ -315,6 +344,7 @@ export async function runIteration(args: {
     filesTouched: [...filesTouched],
     providerRetries: watchdog.providerRetries,
     ...(lastProviderError ? { lastProviderError } : {}),
+    compactions,
     ...(reasons.length > 0 ? { error: reasons.join('; ') } : {}),
     ...(executionError && reasons.length === 0 ? { error: executionError } : {}),
     ...(wrapped
@@ -350,7 +380,7 @@ function classify(args: {
   // Out of time: whatever else the agent claimed, the task was cut short.
   if (args.wrapUp) return args.wrapUp.completed ? 'wrapped-up' : 'timeout';
   if (args.tags.complete) return 'complete';
-  if (args.executionError) return 'failed';
+  if (args.executionError) return isContextOverflow(args.executionError) ? 'context-overflow' : 'failed';
   return 'progressed';
 }
 

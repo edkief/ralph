@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
-import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
+import { ensureHandoff, handoffDir, handoffPath, readHandoff, type CutShortBy } from './handoff.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
@@ -35,8 +35,9 @@ export interface RunResult {
  * `passes` flag counts as no progress, and repeated no-progress iterations
  * stop the run instead of burning the whole budget.
  *
- * An iteration that runs out of time leaves a handoff for the next attempt at
- * its task, and a task that keeps running out of time stops the run.
+ * An iteration that runs out of time or context leaves a handoff for the next
+ * attempt at its task, and a task that keeps running out of either stops the
+ * run: it is too big for one iteration.
  *
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
@@ -61,7 +62,8 @@ export async function runLoop(args: {
   );
 
   let unproductive = 0;
-  const timeoutsByTask = new Map<string, number>();
+  // What each task's attempts ran out of, in order.
+  const cutShortByTask = new Map<string, CutShortBy[]>();
   // Handoff notes are how a task resumes, not progress on it.
   const notProgress = [handoffDir(config.ralphDir)];
   // Commits the loop has not yet published. A failed push leaves this set,
@@ -102,7 +104,7 @@ export async function runLoop(args: {
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
     const startedAt = new Date().toISOString();
 
-    const { result, timeouts, handoff } = await attemptIteration({
+    const { result, cutShort, handoff } = await attemptIteration({
       args: { client, config, logger, reporter, signal, stop },
       recorder,
       iteration,
@@ -126,9 +128,9 @@ export async function runLoop(args: {
       taskId,
       handoffFile,
       sinceHead: before.head,
-      timeoutsLeft: config.stall.maxTimeoutsPerTask - (timeoutsByTask.get(taskId) ?? 0),
+      cutShortLeft: config.stall.maxTimeoutsPerTask - (cutShortByTask.get(taskId)?.length ?? 0),
     });
-    if (timeouts > 0) timeoutsByTask.set(taskId, (timeoutsByTask.get(taskId) ?? 0) + timeouts);
+    if (cutShort.length > 0) cutShortByTask.set(taskId, [...(cutShortByTask.get(taskId) ?? []), ...cutShort]);
 
     const after = await snapshotRepo(config.projectRoot, tasks, notProgress);
     const delta = diffSnapshots(before, after);
@@ -166,10 +168,12 @@ export async function runLoop(args: {
       break;
     }
 
-    const timedOut = timeoutsByTask.get(taskId) ?? 0;
-    if (timedOut >= config.stall.maxTimeoutsPerTask) {
+    const cutShortTimes = cutShortByTask.get(taskId) ?? [];
+    if (cutShortTimes.length >= config.stall.maxTimeoutsPerTask) {
+      const count = cutShortTimes.length;
+      const what = [...new Set(cutShortTimes)].join(' or ');
       finalStatus = 'stalled';
-      message = `${taskId} ran out of time ${timedOut} time${timedOut === 1 ? '' : 's'}; split it into smaller tasks (handoff: ${display(config, handoffFile)})`;
+      message = `${taskId} ran out of ${what} ${count} time${count === 1 ? '' : 's'}; split it into smaller tasks (handoff: ${display(config, handoffFile)})`;
       break;
     }
 
@@ -220,10 +224,12 @@ export async function runLoop(args: {
 }
 
 /**
- * Run an iteration, retrying the whole turn when the provider failed or the
- * agent timed out — those say nothing about the task, only about the runtime.
- * An attempt that runs out of time leaves a handoff, and is not retried when
- * the agent wrapped up: the next iteration resumes from its handoff instead.
+ * Run an iteration, retrying the whole turn when the provider failed, the
+ * agent timed out or its conversation outgrew the context window — those say
+ * little about the task, mostly about the runtime. An attempt that runs out of
+ * time or context leaves a handoff, so a retry starts a fresh session from it
+ * rather than from nothing. One that wrapped up is not retried: the next
+ * iteration resumes from its handoff instead.
  */
 async function attemptIteration(context: {
   args: {
@@ -240,13 +246,13 @@ async function attemptIteration(context: {
   taskId: string;
   handoffFile: string;
   sinceHead: string | null;
-  /** Attempts that may still run out of time before the task is given up on. */
-  timeoutsLeft: number;
-}): Promise<{ result: IterationResult; timeouts: number; handoff?: 'agent' | 'fallback' }> {
+  /** Attempts that may still run out of time or context before the task is given up on. */
+  cutShortLeft: number;
+}): Promise<{ result: IterationResult; cutShort: CutShortBy[]; handoff?: 'agent' | 'fallback' }> {
   const { client, config, logger, reporter, signal, stop } = context.args;
   const handoffShown = display(config, context.handoffFile);
   let attempt = 0;
-  let timeouts = 0;
+  const cutShort: CutShortBy[] = [];
   let result: IterationResult;
   let handoff: 'agent' | 'fallback' | undefined;
 
@@ -282,8 +288,9 @@ async function attemptIteration(context: {
     });
 
     handoff = undefined;
-    if (result.status === 'wrapped-up' || result.status === 'timeout') {
-      timeouts += 1;
+    const cutShortBy = cutShortReason(result.status);
+    if (cutShortBy) {
+      cutShort.push(cutShortBy);
       handoff = await ensureHandoff({
         path: context.handoffFile,
         projectRoot: config.projectRoot,
@@ -292,6 +299,7 @@ async function attemptIteration(context: {
         since,
         sinceHead: context.sinceHead,
         reason: result.error ?? result.status,
+        cutShortBy,
         agentText: result.text,
       });
       logger.info(handoff === 'agent' ? 'agent left a handoff' : 'agent left no handoff; wrote one from what the loop saw', {
@@ -299,13 +307,14 @@ async function attemptIteration(context: {
       });
     }
 
-    const done = { result, timeouts, ...(handoff ? { handoff } : {}) };
-    const retryable = result.status === 'provider-error' || result.status === 'timeout';
+    const done = { result, cutShort, ...(handoff ? { handoff } : {}) };
+    const retryable =
+      result.status === 'provider-error' || result.status === 'timeout' || result.status === 'context-overflow';
     // A retry is a fresh turn, which a stop request rules out.
     if (
       !retryable ||
       attempt >= config.retries.iterationRetries ||
-      timeouts >= context.timeoutsLeft ||
+      cutShort.length >= context.cutShortLeft ||
       signal.aborted ||
       stop.aborted
     ) {
@@ -322,6 +331,13 @@ async function attemptIteration(context: {
     await sleep(config.retries.backoffMs, AbortSignal.any([signal, stop]));
     if (stop.aborted) return done;
   }
+}
+
+/** What an attempt ran out of, if it was cut short before finishing its task. */
+function cutShortReason(status: IterationStatus): CutShortBy | undefined {
+  if (status === 'wrapped-up' || status === 'timeout') return 'time';
+  if (status === 'context-overflow') return 'context';
+  return undefined;
 }
 
 function taskPasses(tasks: TaskStore, taskId: string): boolean {

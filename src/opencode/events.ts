@@ -69,6 +69,25 @@ export const ExecutionEndedSchema = z.looseObject({
   error: z.unknown().optional(),
 });
 
+/** A model call that failed, e.g. because the request overflowed the context window. */
+export const StepFailedSchema = z.looseObject({
+  error: z.unknown().optional(),
+});
+
+/**
+ * The message of an error on the event stream. v2 sends `{ type, message }`,
+ * v1 `{ name, data: { message } }`, and some paths a bare string.
+ */
+export function errorMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') return error || undefined;
+  if (!error || typeof error !== 'object') return undefined;
+  const record = error as { message?: unknown; data?: { message?: unknown }; name?: unknown; type?: unknown };
+  for (const candidate of [record.message, record.data?.message, record.name, record.type]) {
+    if (typeof candidate === 'string' && candidate) return candidate;
+  }
+  return undefined;
+}
+
 export const PermissionRequestSchema = z.looseObject({
   id: z.string(),
   sessionID: z.string(),

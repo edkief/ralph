@@ -51,6 +51,8 @@ export type IterationStatus =
   | 'timeout'
   /** Ran out of time or went quiet, then handed off its work in the wrap-up. */
   | 'wrapped-up'
+  /** The conversation outgrew the model's context window and compaction did not save it. */
+  | 'context-overflow'
   /** The execution itself failed server-side. */
   | 'failed'
   | 'interrupted';
