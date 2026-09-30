@@ -80,6 +80,11 @@ export function Overview({ status }: { status: StatusView }) {
                     </span>
                     <span className="task-id">{task.id}</span>
                     <span className="task-title">{task.title || <span className="muted">untitled</span>}</span>
+                    {task.splitFrom ? (
+                      <span className="task-split" title={`Split from ${task.splitFrom}, which kept running out of time`}>
+                        from {task.splitFrom}
+                      </span>
+                    ) : null}
                     {task.category ? <span className="task-category">{task.category}</span> : null}
                     {task.specFilePath ? (
                       <a className="task-spec" href={href('files', task.specFilePath)} title="Open the spec">

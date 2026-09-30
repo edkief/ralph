@@ -32,7 +32,7 @@ function project(): string {
     resolve(ralph, 'tasks.json'),
     JSON.stringify([
       { id: 'TASK-1', title: 'Scaffold', passes: true },
-      { id: 'TASK-2', title: 'Feature', passes: false },
+      { id: 'TASK-2', title: 'Feature', passes: false, splitFrom: 'TASK-0', splitDepth: 1 },
     ]),
   );
   writeFileSync(resolve(ralph, 'prd', 'PRD.md'), '# The product\n');
@@ -124,6 +124,7 @@ describe('web UI server', () => {
     const { body } = await get<StatusView>('/api/status');
 
     expect(body.tasks).toMatchObject({ total: 2, passed: 1, next: 'TASK-2' });
+    expect(body.tasks.items[1]).toEqual({ id: 'TASK-2', title: 'Feature', passes: false, splitFrom: 'TASK-0' });
     expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: true, iteration: 2, taskId: 'TASK-2' });
   });
 

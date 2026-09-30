@@ -17,6 +17,22 @@ export interface IterationRecord {
   endedAt: string;
 }
 
+/** A split turn the loop ran for a task that kept running out of time or context. */
+export interface SplitRecord {
+  /** The iteration after which the task stalled. */
+  iteration: number;
+  taskId: string;
+  /** What each attempt at the task ran out of. */
+  causes: string[];
+  /** `applied` and `proposed` name the new tasks; `declined` and `failed` give the reason. */
+  status: 'proposed' | 'applied' | 'declined' | 'failed';
+  children?: string[];
+  reason?: string;
+  committed?: boolean;
+  startedAt: string;
+  endedAt: string;
+}
+
 /**
  * Where a run stands, rewritten as it moves so a reader (the web UI) can
  * follow a run in progress; `run.json` only appears once it is over.
@@ -64,6 +80,16 @@ export class RunRecorder {
   beginIteration(iteration: number): void {
     this.current = resolve(this.dir, `iteration-${String(iteration).padStart(3, '0')}.events.jsonl`);
     writeFileSync(this.current, '');
+  }
+
+  /** Events from here on belong to the split turn for `taskId`. */
+  beginSplit(taskId: string): void {
+    this.current = resolve(this.dir, `split-${taskId}.events.jsonl`);
+    writeFileSync(this.current, '');
+  }
+
+  recordSplit(record: SplitRecord): void {
+    appendFileSync(resolve(this.dir, 'splits.jsonl'), `${JSON.stringify(record)}\n`);
   }
 
   recordEvent(event: OpencodeEvent): void {

@@ -74,6 +74,7 @@ export class RalphProject {
         passes: task.passes,
         ...(task.category ? { category: task.category } : {}),
         ...(task.specFilePath ? { specFilePath: task.specFilePath } : {}),
+        ...(task.splitFrom ? { splitFrom: task.splitFrom } : {}),
       }));
       return {
         total: items.length,

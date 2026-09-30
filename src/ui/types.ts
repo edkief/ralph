@@ -9,6 +9,8 @@ export interface TaskView {
   category?: string;
   specFilePath?: string;
   passes: boolean;
+  /** The task this one was split from, when Ralph split one that kept running out of time. */
+  splitFrom?: string;
 }
 
 export interface TasksView {

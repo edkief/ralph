@@ -4,7 +4,7 @@ import { TaskStore } from '../tasks/store.js';
 import { TEMPLATES_DIR } from './scaffold.js';
 
 /** Must match the loop's `<promise>TASK-x:DONE</promise>` tag, or progress is never recognised. */
-const TASK_ID = /^TASK-[A-Za-z0-9._-]+$/;
+export const TASK_ID = /^TASK-[A-Za-z0-9._-]+$/;
 
 /**
  * `template` while the PRD and task list are still what `ralph init` laid
@@ -79,7 +79,8 @@ export function validatePlan(
   return problems;
 }
 
-function checkSpec(path: string, shown: string, taskId: string, template: string): string[] {
+/** Problems with one task's spec file, labelled with the task id. */
+export function checkSpec(path: string, shown: string, taskId: string, template: string): string[] {
   const label = `task ${taskId}`;
   if (!existsSync(path)) return [`${label}: spec ${shown} does not exist`];
 
@@ -109,7 +110,7 @@ function checkSpec(path: string, shown: string, taskId: string, template: string
   return problems;
 }
 
-function readTemplate(templatesDir: string, name: string): string {
+export function readTemplate(templatesDir: string, name: string): string {
   return readFileSync(resolve(templatesDir, name), 'utf8');
 }
 

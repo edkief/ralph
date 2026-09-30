@@ -51,6 +51,8 @@ export interface IterationResult {
   error?: string;
   /** Set when the iteration ran out of time and the agent was asked to hand off. */
   wrapUp?: WrapUpRecord;
+  /** The watchdog budget that ended the turn, if one did. */
+  trip?: WatchdogTrip;
   durationMs: number;
 }
 
@@ -347,6 +349,7 @@ export async function runIteration(args: {
     providerRetries: watchdog.providerRetries,
     ...(lastProviderError ? { lastProviderError } : {}),
     compactions,
+    ...(trip ? { trip } : {}),
     ...(reasons.length > 0 ? { error: reasons.join('; ') } : {}),
     ...(executionError && reasons.length === 0 ? { error: executionError } : {}),
     ...(wrapped

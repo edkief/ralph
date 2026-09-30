@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { handoffDir } from '../loop/handoff.js';
+import { readProposal, splitDir } from '../loop/split.js';
 import type { OpencodeClient } from './client.js';
 import type { Config } from '../config/schema.js';
 import { TaskStore } from '../tasks/store.js';
@@ -52,6 +53,8 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
 
   const handoffs = handoffCheck(config);
   if (handoffs) results.push(handoffs);
+  const splits = splitCheck(config);
+  if (splits) results.push(splits);
 
   try {
     const location = await client.health();
@@ -104,6 +107,40 @@ export function handoffCheck(config: Config): CheckResult | undefined {
     };
   }
   return { name: 'handoffs', ok: true, detail: `resuming from a handoff: ${resuming.join(', ')}`, fatal: false };
+}
+
+/**
+ * A split proposed for a task still in the plan waits on a person, and the
+ * loop would otherwise run the task as it is again. Returns nothing when no
+ * proposal is waiting.
+ */
+export function splitCheck(config: Config): CheckResult | undefined {
+  const root = resolve(config.projectRoot, config.ralphDir, 'split');
+  if (!existsSync(root)) return undefined;
+
+  let tasks;
+  try {
+    tasks = TaskStore.forProject(config.projectRoot, config.ralphDir).readTasks();
+  } catch {
+    return undefined;
+  }
+  const outstanding = new Set(tasks.filter((task) => !task.passes).map((task) => task.id));
+  const waiting = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && outstanding.has(entry.name))
+    .map((entry) => entry.name)
+    .filter((id) => {
+      const read = readProposal(config.projectRoot, config.ralphDir, id, tasks);
+      return read.status !== 'missing' && !(read.status === 'ok' && (read.proposal.appliedAt || !read.proposal.splittable));
+    });
+  if (waiting.length === 0) return undefined;
+  return {
+    name: 'splits',
+    ok: false,
+    detail: `proposed but not applied, so the loop runs the task as it is: ${waiting
+      .map((id) => `${id} (\`ralph split ${id} --apply\`, or delete ${splitDir(config.ralphDir, id)}/)`)
+      .join(', ')}`,
+    fatal: false,
+  };
 }
 
 function fileCheck(name: string, path: string, fatal: boolean, hint?: string): CheckResult {
