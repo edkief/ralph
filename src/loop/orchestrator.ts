@@ -442,7 +442,7 @@ async function handleStall(context: {
     );
   }
 
-  const task = new TaskStore(resolve(config.projectRoot, config.ralphDir, 'tasks.json'))
+  const task = TaskStore.forProject(config.projectRoot, config.ralphDir)
     .readTasks()
     .find((candidate) => candidate.id === taskId);
   const depth = task?.splitDepth ?? 0;
