@@ -14,6 +14,8 @@ import {
   errorMessage,
   isActivityEvent,
   readData,
+  sessionIdOf,
+  toolName,
   type OpencodeEvent,
   type PermissionRequest,
 } from '../opencode/events.js';
@@ -437,18 +439,6 @@ function addUsage(
   usage.reasoning += tokens?.reasoning ?? 0;
   usage.cacheRead += tokens?.cache?.read ?? 0;
   usage.cost += data.cost ?? 0;
-}
-
-function sessionIdOf(event: OpencodeEvent): string | undefined {
-  const data = event.data as { sessionID?: unknown } | undefined;
-  return typeof data?.sessionID === 'string' ? data.sessionID : undefined;
-}
-
-function toolName(event: OpencodeEvent): string {
-  const data = event.data as { tool?: unknown; name?: unknown } | undefined;
-  if (typeof data?.tool === 'string') return data.tool;
-  if (typeof data?.name === 'string') return data.name;
-  return 'tool';
 }
 
 function describeInput(input: Record<string, unknown> | undefined): string {

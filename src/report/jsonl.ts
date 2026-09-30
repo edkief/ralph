@@ -26,6 +26,8 @@ export interface RunState {
   /** `running` until the run ends, then its final status. */
   status: string;
   pid: number;
+  /** Where `pid` lives; a reader on another host cannot check it. */
+  hostname: string;
   startedAt: string;
   updatedAt: string;
   maxIterations: number;

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
 import { ensureHandoff, handoffDir, handoffPath, readHandoff, type CutShortBy } from './handoff.js';
@@ -56,6 +57,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     runId,
     status: 'running',
     pid: process.pid,
+    hostname: hostname(),
     startedAt,
     updatedAt: startedAt,
     maxIterations: config.maxIterations,
