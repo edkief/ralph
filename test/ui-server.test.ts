@@ -82,12 +82,13 @@ function project(): string {
   return root;
 }
 
-async function start(root: string, extra: { webRoot?: string; host?: string } = {}): Promise<UiServer> {
+async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string } = {}): Promise<UiServer> {
   server = await startUiServer({
     projectRoot: root,
     ralphDir: '.ralph',
     host: extra.host ?? '127.0.0.1',
     port: 0,
+    ...(extra.basePath !== undefined ? { basePath: extra.basePath } : {}),
     logger,
     pollMs: 50,
     webRoot: extra.webRoot ?? resolve(root, 'no-web'),
@@ -185,6 +186,26 @@ describe('web UI server', () => {
     expect(await raw('/api/status', { method: 'POST' })).toBe(405);
     expect(await raw('/api/status', { host: 'attacker.example' })).toBe(403);
     expect(await raw('/api/status', { host: 'localhost:1234' })).toBe(200);
+  });
+
+  it('serves everything under a proxy prefix', async () => {
+    const root = project();
+    const web = resolve(root, 'web');
+    mkdirSync(resolve(web, 'assets'), { recursive: true });
+    writeFileSync(resolve(web, 'index.html'), '<div id="root"></div>');
+    writeFileSync(resolve(web, 'assets', 'app.js'), 'console.log(1)');
+    await start(root, { webRoot: web, basePath: '/ralph/ws-1/' });
+
+    expect((await get<StatusView>('/ralph/ws-1/api/status')).body.tasks).toMatchObject({ total: 2 });
+    expect(await (await fetch(`${server!.url}/ralph/ws-1/`)).text()).toBe('<div id="root"></div>');
+    expect((await fetch(`${server!.url}/ralph/ws-1/assets/app.js`)).headers.get('content-type')).toContain('javascript');
+
+    const bare = await fetch(`${server!.url}/ralph/ws-1?x=1`, { redirect: 'manual' });
+    expect(bare.status).toBe(308);
+    expect(bare.headers.get('location')).toBe('/ralph/ws-1/?x=1');
+
+    expect((await get('/api/status')).status).toBe(404);
+    expect((await get('/ralph/ws-10/api/status')).status).toBe(404);
   });
 
   it('serves the app, falling back to it for client routes', async () => {

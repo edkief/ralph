@@ -66,6 +66,7 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       enabled: bool(env['RALPH_UI']),
       host: env['RALPH_UI_HOST'] || undefined,
       port: num(env['RALPH_UI_PORT']),
+      basePath: env['RALPH_UI_BASE_PATH'] || undefined,
     },
     log: {
       format: env['RALPH_LOG_FORMAT'],

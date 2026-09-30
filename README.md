@@ -69,6 +69,7 @@ Run it from the project you want worked on:
 ralph                       # run the loop in the current directory
 ralph once                  # a single iteration
 ralph doctor                # check the environment, run nothing
+ralph --version             # print the installed version
 ralph config                # print the resolved configuration
 ralph init                  # scaffold .ralph/, then plan the project with the agent
 ralph ui                    # serve the web UI to watch runs and browse .ralph/
@@ -121,6 +122,11 @@ Set the address with `--ui-host`/`--ui-port`, `ui.host`/`ui.port`, or
 secrets from the repository or the environment, so it listens on `127.0.0.1` only, and refuses
 requests addressed to any other host name. Binding it elsewhere logs a warning. From a
 Kubernetes pod, prefer `kubectl port-forward pod/<pod> 4280` over exposing it.
+
+Behind a reverse proxy that serves the UI under a path prefix, set that prefix with
+`--ui-base-path`, `ui.basePath` or `RALPH_UI_BASE_PATH` (e.g. `/ralph/ws-1`). The server
+strips it from every request and redirects the bare prefix to itself plus a slash; the app's
+own URLs are relative, so the proxy rewrites nothing. Requests outside the prefix get 404.
 
 ### Stopping a run
 
@@ -228,7 +234,8 @@ See `templates/ralph.config.json` for a complete file.
   "ui": {
     "enabled": false,              // serve the web UI beside the loop, like --ui
     "host": "127.0.0.1",           // no authentication: keep it on loopback
-    "port": 4280
+    "port": 4280,
+    "basePath": ""                 // path prefix behind a reverse proxy, e.g. /ralph/ws-1
   }
 }
 ```
@@ -239,7 +246,7 @@ server's default until you choose one.
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
-`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`.
+`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.

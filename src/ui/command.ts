@@ -10,6 +10,7 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     ralphDir: config.ralphDir,
     host: config.ui.host,
     port: config.ui.port,
+    basePath: config.ui.basePath,
     logger,
   });
   if (!isLoopback(config.ui.host)) {

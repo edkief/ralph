@@ -38,6 +38,8 @@ export interface UiServerOptions {
   ralphDir: string;
   host: string;
   port: number;
+  /** Path prefix a reverse proxy serves the UI under; '' serves it at the root. */
+  basePath?: string;
   logger: Logger;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
@@ -65,6 +67,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
   const pollMs = options.pollMs ?? POLL_MS;
   const loopbackOnly = isLoopback(options.host);
+  const basePath = (options.basePath ?? '').replace(/\/+$/, '');
   const streams = new Set<() => void>();
 
   const server = createServer((req, res) => {
@@ -89,7 +92,17 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     }
 
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const path = url.pathname;
+    let path = url.pathname;
+    if (basePath) {
+      // The app's URLs are relative to the page, so the prefix must end in a
+      // slash for them to resolve inside it.
+      if (path === basePath) {
+        res.writeHead(308, { ...SECURITY_HEADERS, Location: `${basePath}/${url.search}` });
+        return res.end();
+      }
+      if (!path.startsWith(`${basePath}/`)) return sendJson(res, 404, { error: 'Not found' });
+      path = path.slice(basePath.length);
+    }
     if (!path.startsWith('/api/')) return serveStatic(res, webRoot, path);
 
     if (path === '/api/status') return sendJson(res, 200, project.status());
