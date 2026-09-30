@@ -22,10 +22,15 @@ export interface ProgressDelta {
  * Snapshot the facts the loop uses to verify the agent's claims: what the
  * agent says it did matters less than what the repository shows.
  */
-export async function snapshotRepo(cwd: string, tasks: TaskStore): Promise<RepoSnapshot> {
+export async function snapshotRepo(
+  cwd: string,
+  tasks: TaskStore,
+  /** Paths whose changes are not progress, such as handoff notes. */
+  exclude: string[] = [],
+): Promise<RepoSnapshot> {
   return {
     head: await gitHead(cwd),
-    dirtyFiles: await gitDirtyCount(cwd),
+    dirtyFiles: await gitDirtyCount(cwd, exclude),
     tasksPassed: tasks.reload().passedCount,
   };
 }
@@ -52,9 +57,10 @@ async function gitHead(cwd: string): Promise<string | null> {
   }
 }
 
-async function gitDirtyCount(cwd: string): Promise<number> {
+async function gitDirtyCount(cwd: string, exclude: string[]): Promise<number> {
+  const pathspec = exclude.length > 0 ? ['--', '.', ...exclude.map((path) => `:(exclude)${path}`)] : [];
   try {
-    const { stdout } = await run('git', ['status', '--porcelain'], { cwd });
+    const { stdout } = await run('git', ['status', '--porcelain', ...pathspec], { cwd });
     return stdout.split('\n').filter((line) => line.trim() !== '').length;
   } catch {
     return 0;

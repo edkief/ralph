@@ -103,4 +103,38 @@ describe('buildPrompt', () => {
     expect(prompt).not.toContain('{{');
     expect(prompt).not.toContain('.agent/');
   });
+
+  it('states the time budget and when it ends', () => {
+    const prompt = buildPrompt({
+      projectRoot: project(),
+      ralphDir: '.ralph',
+      iteration: 1,
+      maxIterations: 5,
+      pinTask: true,
+      nextTask: task,
+      timeBudget: { ms: 45 * 60_000, until: new Date(2026, 8, 30, 14, 3) },
+    });
+
+    expect(prompt).toContain('You have about 45 minutes, until 14:03:00');
+    expect(prompt).toContain('commit working checkpoints');
+  });
+
+  it('hands the next attempt the handoff an earlier one left', () => {
+    const root = project();
+    const prompt = buildPrompt({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      iteration: 3,
+      maxIterations: 5,
+      pinTask: true,
+      nextTask: task,
+      handoff: { path: resolve(root, '.ralph/handoff/TASK-4.md'), text: '## Status\n\nHalfway there.' },
+    });
+
+    expect(prompt).toContain('## Resuming TASK-4');
+    expect(prompt).toContain('`.ralph/handoff/TASK-4.md`');
+    expect(prompt).toContain('Halfway there.');
+    // Before the project prompt, next to the task it belongs to.
+    expect(prompt.indexOf('## Resuming')).toBeLessThan(prompt.indexOf('# Do the work'));
+  });
 });

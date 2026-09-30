@@ -9,6 +9,8 @@ export interface IterationRecord {
   taskId: string | null;
   result: IterationResult;
   delta: ProgressDelta;
+  /** Who wrote the handoff when the iteration ran out of time. */
+  handoff?: 'agent' | 'fallback';
   startedAt: string;
   endedAt: string;
 }

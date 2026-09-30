@@ -1,10 +1,13 @@
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
+import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
+import { buildWrapUpPrompt } from '../prompt/wrapup.js';
 import { sleep } from '../opencode/server.js';
 import { RunRecorder, newRunId } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
@@ -32,6 +35,9 @@ export interface RunResult {
  * `passes` flag counts as no progress, and repeated no-progress iterations
  * stop the run instead of burning the whole budget.
  *
+ * An iteration that runs out of time leaves a handoff for the next attempt at
+ * its task, and a task that keeps running out of time stops the run.
+ *
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
  */
@@ -55,6 +61,9 @@ export async function runLoop(args: {
   );
 
   let unproductive = 0;
+  const timeoutsByTask = new Map<string, number>();
+  // Handoff notes are how a task resumes, not progress on it.
+  const notProgress = [handoffDir(config.ralphDir)];
   // Commits the loop has not yet published. A failed push leaves this set,
   // so the next push attempt (or the one at run end) catches up.
   let unpushed = false;
@@ -84,29 +93,44 @@ export async function runLoop(args: {
       break;
     }
 
-    const taskId = summary.next.id;
+    const next = summary.next;
+    const taskId = next.id;
+    const handoffFile = handoffPath(config.projectRoot, config.ralphDir, taskId);
     reporter.iterationStart(iteration, config.maxIterations, taskId);
     recorder.beginIteration(iteration);
 
-    const before = await snapshotRepo(config.projectRoot, tasks);
+    const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
     const startedAt = new Date().toISOString();
 
-    const result = await attemptIteration({
+    const { result, timeouts, handoff } = await attemptIteration({
       args: { client, config, logger, reporter, signal, stop },
       recorder,
       iteration,
-      prompt: buildPrompt({
-        projectRoot: config.projectRoot,
-        ralphDir: config.ralphDir,
-        iteration,
-        maxIterations: config.maxIterations,
-        nextTask: summary.next,
-        pinTask: config.pinTask,
-      }),
+      // Built per attempt, so a retry sees the handoff the failed one left.
+      prompt: () => {
+        const text = readHandoff(handoffFile);
+        return buildPrompt({
+          projectRoot: config.projectRoot,
+          ralphDir: config.ralphDir,
+          iteration,
+          maxIterations: config.maxIterations,
+          nextTask: next,
+          pinTask: config.pinTask,
+          timeBudget: {
+            ms: config.timeouts.iterationMs,
+            until: new Date(Date.now() + config.timeouts.iterationMs),
+          },
+          ...(text ? { handoff: { path: handoffFile, text } } : {}),
+        });
+      },
       taskId,
+      handoffFile,
+      sinceHead: before.head,
+      timeoutsLeft: config.stall.maxTimeoutsPerTask - (timeoutsByTask.get(taskId) ?? 0),
     });
+    if (timeouts > 0) timeoutsByTask.set(taskId, (timeoutsByTask.get(taskId) ?? 0) + timeouts);
 
-    const after = await snapshotRepo(config.projectRoot, tasks);
+    const after = await snapshotRepo(config.projectRoot, tasks, notProgress);
     const delta = diffSnapshots(before, after);
     const status = refineStatus(result, delta);
 
@@ -122,9 +146,14 @@ export async function runLoop(args: {
       taskId,
       result,
       delta,
+      ...(handoff ? { handoff } : {}),
       startedAt,
       endedAt: new Date().toISOString(),
     });
+
+    if (delta.tasksPassedDelta > 0 && existsSync(handoffFile) && taskPasses(tasks, taskId)) {
+      logger.warn('handoff left behind for a passing task', { path: display(config, handoffFile) });
+    }
 
     if (delta.committed) unpushed = true;
     if (config.git.push === 'iteration' && unpushed) {
@@ -134,6 +163,13 @@ export async function runLoop(args: {
     if (TERMINAL_STATUSES.has(status)) {
       finalStatus = status;
       message = terminalMessage(status, result);
+      break;
+    }
+
+    const timedOut = timeoutsByTask.get(taskId) ?? 0;
+    if (timedOut >= config.stall.maxTimeoutsPerTask) {
+      finalStatus = 'stalled';
+      message = `${taskId} ran out of time ${timedOut} time${timedOut === 1 ? '' : 's'}; split it into smaller tasks (handoff: ${display(config, handoffFile)})`;
       break;
     }
 
@@ -186,6 +222,8 @@ export async function runLoop(args: {
 /**
  * Run an iteration, retrying the whole turn when the provider failed or the
  * agent timed out — those say nothing about the task, only about the runtime.
+ * An attempt that runs out of time leaves a handoff, and is not retried when
+ * the agent wrapped up: the next iteration resumes from its handoff instead.
  */
 async function attemptIteration(context: {
   args: {
@@ -198,21 +236,42 @@ async function attemptIteration(context: {
   };
   recorder: RunRecorder;
   iteration: number;
-  prompt: string;
+  prompt: () => string;
   taskId: string;
-}): Promise<IterationResult> {
+  handoffFile: string;
+  sinceHead: string | null;
+  /** Attempts that may still run out of time before the task is given up on. */
+  timeoutsLeft: number;
+}): Promise<{ result: IterationResult; timeouts: number; handoff?: 'agent' | 'fallback' }> {
   const { client, config, logger, reporter, signal, stop } = context.args;
+  const handoffShown = display(config, context.handoffFile);
   let attempt = 0;
+  let timeouts = 0;
   let result: IterationResult;
+  let handoff: 'agent' | 'fallback' | undefined;
 
   for (;;) {
+    const since = Date.now();
     result = await runIteration({
       client,
       config,
       logger,
       signal,
-      prompt: context.prompt,
+      prompt: context.prompt(),
       title: `ralph ${context.iteration} · ${context.taskId}`,
+      ...(config.timeouts.wrapUpMs > 0
+        ? {
+            wrapUp: {
+              prompt: (trigger) =>
+                buildWrapUpPrompt({
+                  taskId: context.taskId,
+                  handoffPath: handoffShown,
+                  trigger,
+                  wrapUpMs: config.timeouts.wrapUpMs,
+                }),
+            },
+          }
+        : {}),
       hooks: {
         onEvent: (event) => context.recorder.recordEvent(event),
         onText: (text) => reporter.status(truncate(text, 100)),
@@ -222,10 +281,35 @@ async function attemptIteration(context: {
       },
     });
 
+    handoff = undefined;
+    if (result.status === 'wrapped-up' || result.status === 'timeout') {
+      timeouts += 1;
+      handoff = await ensureHandoff({
+        path: context.handoffFile,
+        projectRoot: config.projectRoot,
+        taskId: context.taskId,
+        iteration: context.iteration,
+        since,
+        sinceHead: context.sinceHead,
+        reason: result.error ?? result.status,
+        agentText: result.text,
+      });
+      logger.info(handoff === 'agent' ? 'agent left a handoff' : 'agent left no handoff; wrote one from what the loop saw', {
+        path: handoffShown,
+      });
+    }
+
+    const done = { result, timeouts, ...(handoff ? { handoff } : {}) };
     const retryable = result.status === 'provider-error' || result.status === 'timeout';
     // A retry is a fresh turn, which a stop request rules out.
-    if (!retryable || attempt >= config.retries.iterationRetries || signal.aborted || stop.aborted) {
-      return result;
+    if (
+      !retryable ||
+      attempt >= config.retries.iterationRetries ||
+      timeouts >= context.timeoutsLeft ||
+      signal.aborted ||
+      stop.aborted
+    ) {
+      return done;
     }
 
     attempt += 1;
@@ -236,8 +320,17 @@ async function attemptIteration(context: {
       ...(result.error ? { detail: result.error } : {}),
     });
     await sleep(config.retries.backoffMs, AbortSignal.any([signal, stop]));
-    if (stop.aborted) return result;
+    if (stop.aborted) return done;
   }
+}
+
+function taskPasses(tasks: TaskStore, taskId: string): boolean {
+  return tasks.readTasks().some((task) => task.id === taskId && task.passes);
+}
+
+/** A path as the agent and the user see it: relative to the project, with forward slashes. */
+function display(config: Config, path: string): string {
+  return relative(config.projectRoot, path).split(sep).join('/');
 }
 
 /** Push the branch, logging the outcome. A failed push never stops the run. */
