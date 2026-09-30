@@ -107,6 +107,18 @@ describe('Watchdog wrap-up phase', () => {
     expect(watchdog.check()).toBe('inactivity');
   });
 
+  it('states budgets in minutes, or seconds when they are short', () => {
+    expect(describeTrip('iteration-timeout', { ...options(Date.now), iterationMs: 2_700_000 })).toBe(
+      'Iteration exceeded its 45m budget',
+    );
+    expect(describeTrip('iteration-timeout', { ...options(Date.now), iterationMs: 90_000 })).toBe(
+      'Iteration exceeded its 1m30s budget',
+    );
+    expect(describeTrip('wrap-up-timeout', { ...options(Date.now), wrapUpMs: 2_000 })).toBe(
+      'Wrap-up exceeded its 2s budget',
+    );
+  });
+
   it('describes a wrap-up timeout', () => {
     expect(describeTrip('wrap-up-timeout', { ...options(Date.now), wrapUpMs: 600_000 })).toBe(
       'Wrap-up exceeded its 10m budget',

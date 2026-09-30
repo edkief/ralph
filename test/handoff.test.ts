@@ -107,6 +107,7 @@ describe('handoff', () => {
     const text = readFileSync(path, 'utf8');
     expect(who).toBe('fallback');
     expect(text).toContain('## An earlier handoff');
+    expect(text).toContain('## Working tree\n\nClean.');
     expect(text).toContain('> From attempt one.');
   });
 });

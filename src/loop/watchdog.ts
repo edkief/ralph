@@ -87,10 +87,18 @@ export function describeTrip(trip: WatchdogTrip, options: WatchdogOptions): stri
     case 'inactivity':
       return `No activity from the agent for ${Math.round(options.inactivityMs / 1000)}s`;
     case 'iteration-timeout':
-      return `Iteration exceeded its ${Math.round(options.iterationMs / 60_000)}m budget`;
+      return `Iteration exceeded its ${formatBudget(options.iterationMs)} budget`;
     case 'retry-storm':
       return `Provider retried more than ${options.maxProviderRetries} times without progress`;
     case 'wrap-up-timeout':
-      return `Wrap-up exceeded its ${Math.round((options.wrapUpMs ?? 0) / 60_000)}m budget`;
+      return `Wrap-up exceeded its ${formatBudget(options.wrapUpMs ?? 0)} budget`;
   }
+}
+
+/** `45m`, `90s` or `1m30s`: whole minutes when the budget is in minutes. */
+function formatBudget(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const rest = seconds % 60;
+  return `${Math.floor(seconds / 60)}m${rest === 0 ? '' : `${String(rest).padStart(2, '0')}s`}`;
 }

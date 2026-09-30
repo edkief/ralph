@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -77,7 +77,7 @@ export async function ensureHandoff(args: {
       '20',
       ...(args.sinceHead ? [`${args.sinceHead}..HEAD`] : []),
     ]),
-    git(args.projectRoot, ['status', '--short']),
+    git(args.projectRoot, ['status', '--short', '--', '.', `:(exclude)${relative(args.projectRoot, dirname(args.path))}`]),
   ]);
 
   const lastWords = args.agentText.trim().slice(-MAX_QUOTED_CHARS);
