@@ -11,6 +11,8 @@ import {
   readHandoff,
 } from '../src/loop/handoff.js';
 import { buildWrapUpPrompt } from '../src/prompt/wrapup.js';
+import { handoffCheck } from '../src/opencode/preflight.js';
+import { ConfigSchema } from '../src/config/schema.js';
 
 const complete = HANDOFF_HEADINGS.map((heading) => `## ${heading}\n\nSomething.`).join('\n\n');
 
@@ -128,5 +130,34 @@ describe('buildWrapUpPrompt', () => {
     });
     expect(prompt).toContain('Do not run that command again');
     expect(prompt).toContain('about 1 minute to');
+  });
+});
+
+describe('handoffCheck', () => {
+  const setup = (tasks: Array<{ id: string; passes: boolean }>, handoffs: string[]) => {
+    const root = mkdtempSync(resolve(tmpdir(), 'ralph-doctor-'));
+    mkdirSync(resolve(root, '.ralph', 'handoff'), { recursive: true });
+    writeFileSync(resolve(root, '.ralph', 'tasks.json'), JSON.stringify(tasks));
+    for (const id of handoffs) writeFileSync(resolve(root, '.ralph', 'handoff', `${id}.md`), complete);
+    return ConfigSchema.parse({ projectRoot: root });
+  };
+
+  it('says nothing when no task has a handoff', () => {
+    expect(handoffCheck(setup([{ id: 'TASK-1', passes: false }], []))).toBeUndefined();
+  });
+
+  it('lists the tasks that will resume', () => {
+    expect(handoffCheck(setup([{ id: 'TASK-1', passes: false }], ['TASK-1']))).toMatchObject({
+      ok: true,
+      detail: 'resuming from a handoff: TASK-1',
+    });
+  });
+
+  it('warns about handoffs left behind', () => {
+    const result = handoffCheck(
+      setup([{ id: 'TASK-1', passes: true }, { id: 'TASK-2', passes: false }], ['TASK-1', 'TASK-2', 'TASK-9']),
+    );
+    expect(result).toMatchObject({ ok: false, fatal: false });
+    expect(result?.detail).toMatch(/delete them: TASK-1, TASK-9$/);
   });
 });

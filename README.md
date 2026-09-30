@@ -115,6 +115,7 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   prd/PRD.md       # optional — what the project is for
   STEERING.md      # optional — work to do before feature tasks
   logs/LOG.md      # optional — the agent's own running log
+  handoff/         # written when a task runs out of time; commit it with the work
   history/         # written by ralph; ignore it in git
 ralph.config.json  # optional
 ```
@@ -168,15 +169,19 @@ See `templates/ralph.config.json` for a complete file.
   "maxIterations": 20,
   "pinTask": true,                 // name the task in the prompt instead of letting the model choose
   "timeouts": {
-    "iterationMs": 2700000,        // hard ceiling for one turn
-    "inactivityMs": 300000         // no events for this long means the agent is wedged
+    "iterationMs": 2700000,        // working time for one turn, then the agent is asked to wrap up
+    "inactivityMs": 300000,        // no events for this long means the agent is wedged
+    "wrapUpMs": 600000             // time to hand off after either, on top of iterationMs; 0 = interrupt outright
   },
   "retries": {
     "providerRetriesPerIteration": 3,
     "iterationRetries": 1,
     "backoffMs": 15000
   },
-  "stall": { "maxUnproductiveIterations": 3 },
+  "stall": {
+    "maxUnproductiveIterations": 3,
+    "maxTimeoutsPerTask": 2        // a task that runs out of time this often stops the run
+  },
   "permissions": {
     "fallback": "allow",           // unattended runs need to proceed without a human
     "deny": ["git push", "git remote"]
@@ -199,7 +204,7 @@ server's default until you choose one.
 
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
-`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.
@@ -241,11 +246,44 @@ than quietly burning the whole budget.
 | --- | --- |
 | `retry-storm` | Provider unreachable or rate limited. opencode retries with backoff, emitting no text and no error — the loop would otherwise hang indefinitely. |
 | `inactivity` | Agent produced no events at all for `inactivityMs`. |
-| `iteration-timeout` | Turn exceeded its hard budget. |
+| `iteration-timeout` | Turn used up its working time, `iterationMs`. |
 
-All three interrupt the session server-side rather than killing a process, so opencode can
-clean up. Provider failures and timeouts retry the whole turn (`retries.iterationRetries`);
-they say nothing about the task itself.
+A retry storm interrupts the session server-side rather than killing a process, so opencode
+can clean up, and retries the whole turn (`retries.iterationRetries`): it says nothing about
+the task itself.
+
+### Running out of time
+
+Timeouts and inactivity are handled in two stages, so an agent that runs out of time hands
+its work over instead of losing it:
+
+1. **Soft limit.** At `iterationMs`, or after `inactivityMs` without events, Ralph sends a
+   wrap-up prompt into the same session: stop, commit the work as `wip(TASK-x): …`, and write
+   `.ralph/handoff/TASK-x.md` for whoever picks the task up next, under fixed headings
+   (Status, Done, Working tree, Next steps, Dead ends, How to verify). The agent must not
+   mark the task as passing.
+   - A working agent is *steered*: the prompt reaches it at its next step and the tool it is
+     running is left to finish. This needs a server whose prompt API offers
+     `delivery: "steer"`; otherwise the agent is interrupted first.
+   - A quiet agent is stuck in a tool, so it is always interrupted first, and told not to
+     run the command that hung again.
+2. **Hard limit.** The wrap-up gets `wrapUpMs` (default 10 minutes), so an iteration never
+   runs longer than `iterationMs + wrapUpMs`. A wrap-up that overruns or goes quiet is
+   interrupted like any timeout, and is retried.
+
+If the agent leaves no complete handoff, Ralph writes one itself from what it saw: the commits
+made, the uncommitted changes, the agent's last messages and any earlier handoff. The next
+iteration on the task gets the handoff in its prompt, under "Resuming", and deletes it in the
+commit that completes the task. `ralph doctor` warns about handoffs left behind.
+
+Every prompt also states the time budget and when it ends, and asks for checkpoint commits,
+so that running out of time costs little.
+
+An iteration that wrapped up is not retried; the next one resumes from the handoff. Handoff
+changes alone do not count as progress, and a task that runs out of time
+`stall.maxTimeoutsPerTask` times (default 2) stops the run as stalled, since it is probably
+too big for one iteration and needs splitting. Set `wrapUpMs: 0` to interrupt outright as
+before; the handoff is still written.
 
 Permission requests are answered from policy, never left waiting for a human. Deny rules beat
 allow rules, so a broad allow list cannot re-enable something explicitly forbidden.
@@ -255,7 +293,8 @@ allow rules, so a broad allow list cannot re-enable something explicitly forbidd
 Each run writes to the project's `.ralph/history/<runId>/`:
 
 - `iteration-NNN.events.jsonl` — every event received, for debugging
-- `iterations.jsonl` — one record per iteration with outcome, usage and repository delta
+- `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
+  plus the wrap-up and who wrote the handoff when it ran out of time
 - `run.json` — the run summary
 
 ## Notes on the opencode API

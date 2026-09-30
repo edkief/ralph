@@ -3,7 +3,8 @@
   "pinTask": true,
   "timeouts": {
     "iterationMs": 2700000,
-    "inactivityMs": 300000
+    "inactivityMs": 300000,
+    "wrapUpMs": 600000
   },
   "retries": {
     "providerRetriesPerIteration": 3,
@@ -11,7 +12,8 @@
     "backoffMs": 15000
   },
   "stall": {
-    "maxUnproductiveIterations": 3
+    "maxUnproductiveIterations": 3,
+    "maxTimeoutsPerTask": 2
   },
   "permissions": {
     "fallback": "allow",
