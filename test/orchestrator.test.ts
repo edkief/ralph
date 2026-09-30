@@ -467,6 +467,42 @@ describe('runLoop', () => {
     expect(events).toContain('session.text.ended');
   });
 
+  it('keeps the run state and its log lines beside the history', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    server = await startFakeServer({ script: say('<promise>TASK-1:DONE</promise>') });
+    const infoLogger = new Logger({ level: 'info', stream: sink });
+    const result = await runLoop({
+      config: config(root, { maxIterations: 1 }),
+      client: new OpencodeClient({ baseUrl: server.url }),
+      logger: infoLogger,
+      reporter,
+      signal: new AbortController().signal,
+    });
+    infoLogger.warn('after the run');
+
+    const state = JSON.parse(readFileSync(resolve(result.historyDir, 'state.json'), 'utf8'));
+    expect(state).toMatchObject({
+      runId: result.runId,
+      status: 'max-iterations',
+      pid: process.pid,
+      iteration: 1,
+      taskId: 'TASK-1',
+      lastStatus: 'no-progress',
+      tasksPassed: 0,
+      tasksTotal: 1,
+      message: result.message,
+    });
+
+    const log = readFileSync(resolve(result.historyDir, 'log.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(log).toContainEqual(
+      expect.objectContaining({ level: 'warn', message: 'agent claimed a task without marking it passing' }),
+    );
+    expect(log.map((line) => line.message)).not.toContain('after the run');
+  });
+
   it('exhausts the budget when work continues past it', async () => {
     const root = project([
       { id: 'TASK-1', passes: false },

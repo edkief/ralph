@@ -9,7 +9,7 @@ import { TaskStore } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
 import { sleep } from '../opencode/server.js';
-import { RunRecorder, newRunId } from '../report/jsonl.js';
+import { RunRecorder, newRunId, type RunState } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
 import type { ConsoleReporter } from '../report/console.js';
 import type { OpencodeClient } from '../opencode/client.js';
@@ -42,24 +42,73 @@ export interface RunResult {
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
  */
-export async function runLoop(args: {
+export async function runLoop(args: LoopArgs): Promise<RunResult> {
+  const { config, logger } = args;
+  const runId = newRunId();
+  const recorder = new RunRecorder(
+    resolve(config.projectRoot, config.ralphDir, 'history'),
+    runId,
+  );
+  // The run's history keeps its log and where it stands, for the web UI.
+  const detach = logger.addSink((entry) => recorder.recordLog(entry));
+  const startedAt = new Date().toISOString();
+  const state: RunState = {
+    runId,
+    status: 'running',
+    pid: process.pid,
+    startedAt,
+    updatedAt: startedAt,
+    maxIterations: config.maxIterations,
+    iteration: 0,
+    taskId: null,
+    iterationStartedAt: null,
+    lastStatus: null,
+    tasksPassed: 0,
+    tasksTotal: 0,
+  };
+  const saveState = (patch: Partial<RunState>) => {
+    Object.assign(state, patch, { updatedAt: new Date().toISOString() });
+    recorder.recordState(state);
+  };
+  saveState({});
+
+  try {
+    const result = await loop(args, recorder, saveState);
+    saveState({
+      status: result.status,
+      tasksPassed: result.tasksPassed,
+      tasksTotal: result.tasksTotal,
+      message: result.message,
+    });
+    return result;
+  } catch (cause) {
+    saveState({ status: 'crashed', message: cause instanceof Error ? cause.message : String(cause) });
+    throw cause;
+  } finally {
+    detach();
+  }
+}
+
+interface LoopArgs {
   config: Config;
   client: OpencodeClient;
   logger: Logger;
   reporter: ConsoleReporter;
   signal: AbortSignal;
   stop?: AbortSignal;
-}): Promise<RunResult> {
+}
+
+async function loop(
+  args: LoopArgs,
+  recorder: RunRecorder,
+  saveState: (patch: Partial<RunState>) => void,
+): Promise<RunResult> {
   const { config, client, logger, reporter, signal } = args;
   const stop = args.stop ?? new AbortController().signal;
   // Waits between iterations end early for either request.
   const pause = AbortSignal.any([signal, stop]);
   const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
-  const runId = newRunId();
-  const recorder = new RunRecorder(
-    resolve(config.projectRoot, config.ralphDir, 'history'),
-    runId,
-  );
+  const runId = recorder.runId;
 
   let unproductive = 0;
   // What each task's attempts ran out of, in order.
@@ -100,9 +149,16 @@ export async function runLoop(args: {
     const handoffFile = handoffPath(config.projectRoot, config.ralphDir, taskId);
     reporter.iterationStart(iteration, config.maxIterations, taskId);
     recorder.beginIteration(iteration);
+    const startedAt = new Date().toISOString();
+    saveState({
+      iteration,
+      taskId,
+      iterationStartedAt: startedAt,
+      tasksPassed: summary.passedCount,
+      tasksTotal: summary.total,
+    });
 
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
-    const startedAt = new Date().toISOString();
 
     const { result, cutShort, handoff } = await attemptIteration({
       args: { client, config, logger, reporter, signal, stop },
@@ -152,6 +208,7 @@ export async function runLoop(args: {
       startedAt,
       endedAt: new Date().toISOString(),
     });
+    saveState({ lastStatus: status, ...taskCounts(tasks) });
 
     if (delta.tasksPassedDelta > 0 && existsSync(handoffFile) && taskPasses(tasks, taskId)) {
       logger.warn('handoff left behind for a passing task', { path: display(config, handoffFile) });
@@ -338,6 +395,16 @@ function cutShortReason(status: IterationStatus): CutShortBy | undefined {
   if (status === 'wrapped-up' || status === 'timeout') return 'time';
   if (status === 'context-overflow') return 'context';
   return undefined;
+}
+
+/** Current task counts; none when the agent left tasks.json unreadable, which the next iteration reports. */
+function taskCounts(tasks: TaskStore): { tasksPassed?: number; tasksTotal?: number } {
+  try {
+    const summary = tasks.reload();
+    return { tasksPassed: summary.passedCount, tasksTotal: summary.total };
+  } catch {
+    return {};
+  }
 }
 
 function taskPasses(tasks: TaskStore, taskId: string): boolean {

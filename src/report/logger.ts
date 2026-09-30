@@ -12,6 +12,14 @@ const COLORS: Record<LogLevel, string> = {
   error: '\x1b[31m',
 };
 
+/** One log line as a sink receives it: UTC time, whatever the output format. */
+export interface LogEntry {
+  time: string;
+  level: LogLevel;
+  message: string;
+  fields?: Record<string, unknown>;
+}
+
 export interface LoggerOptions {
   level?: LogLevel;
   format?: LogFormat;
@@ -32,6 +40,7 @@ export class Logger {
   private readonly color: boolean;
   private readonly now: () => Date;
   private hook: (() => void) | undefined;
+  private readonly sinks = new Set<(entry: LogEntry) => void>();
 
   constructor(options: LoggerOptions = {}) {
     this.level = LEVELS[options.level ?? 'info'];
@@ -47,6 +56,15 @@ export class Logger {
    */
   beforeWrite(hook: (() => void) | undefined): void {
     this.hook = hook;
+  }
+
+  /**
+   * Also hand every line that passes the level to `sink`, e.g. to keep a
+   * run's log on disk. Returns a function that detaches it.
+   */
+  addSink(sink: (entry: LogEntry) => void): () => void {
+    this.sinks.add(sink);
+    return () => this.sinks.delete(sink);
   }
 
   debug(message: string, fields?: Record<string, unknown>): void {
@@ -69,6 +87,9 @@ export class Logger {
     if (LEVELS[level] < this.level) return;
     this.hook?.();
     const now = this.now();
+    for (const sink of this.sinks) {
+      sink({ time: now.toISOString(), level, message, ...(fields && Object.keys(fields).length > 0 ? { fields } : {}) });
+    }
 
     if (this.format === 'json') {
       this.stream.write(`${JSON.stringify({ time: now.toISOString(), level, message, ...fields })}\n`);
