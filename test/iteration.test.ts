@@ -21,7 +21,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -300,5 +300,81 @@ describe('runIteration', () => {
     );
 
     expect(server?.replies).toEqual([{ requestID: 'per_1', reply: 'reject' }]);
+  });
+
+  describe('wrap-up', () => {
+    const wrapUp = { prompt: (trigger: string) => `Time is up (${trigger}), hand off.` };
+    const say = (text: string) => [
+      { type: 'session.text.ended', data: { text } },
+      { type: 'session.execution.succeeded' },
+    ];
+    // The working turn would run far past every budget in these tests.
+    const endless = [{ after: 60_000, type: 'session.execution.succeeded' }];
+
+    it('steers a working agent into the wrap-up when the server supports it', async () => {
+      const result = await iterate(
+        { steer: true, script: (count) => (count === 1 ? endless : say('handoff written')) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.wrapUp).toMatchObject({ trigger: 'iteration-timeout', delivery: 'steer', completed: true });
+      expect(result.error).toMatch(/^Iteration exceeded/);
+      expect(result.text).toBe('handoff written');
+      expect(server?.prompts[1]).toMatchObject({ text: 'Time is up (iteration-timeout), hand off.', delivery: 'steer' });
+      expect(server?.interrupts).toBe(0);
+    });
+
+    it('interrupts first when the server cannot steer', async () => {
+      const result = await iterate(
+        { script: (count) => (count === 1 ? endless : say('handoff written')) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.wrapUp).toMatchObject({ delivery: 'interrupt', completed: true });
+      expect(server?.interrupts).toBe(1);
+      expect(server?.prompts[1]).not.toHaveProperty('delivery');
+    });
+
+    it('interrupts a quiet agent, which is stuck in a tool, even when steering is available', async () => {
+      const result = await iterate(
+        { steer: true, script: (count) => (count === 1 ? endless : say('handoff written')) },
+        config({ timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.wrapUp).toMatchObject({ trigger: 'inactivity', delivery: 'interrupt' });
+      expect(result.error).toMatch(/No activity/);
+      expect(server?.prompts[1]?.['text']).toContain('inactivity');
+    });
+
+    it('gives up at the wrap-up budget and reports a timeout', async () => {
+      const result = await iterate(
+        { steer: true, script: (count) => (count === 1 ? endless : []) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 2_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('timeout');
+      expect(result.wrapUp).toMatchObject({ completed: false });
+      expect(result.error).toMatch(/Wrap-up exceeded/);
+      expect(server?.interrupts).toBe(1);
+    });
+
+    it('interrupts outright when the wrap-up budget is 0', async () => {
+      const result = await iterate(
+        { steer: true, script: endless },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 0 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('timeout');
+      expect(result.wrapUp).toBeUndefined();
+      expect(server?.prompts).toHaveLength(1);
+    });
   });
 });

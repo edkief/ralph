@@ -49,6 +49,8 @@ export type IterationStatus =
   | 'provider-error'
   /** Hit the hard iteration timeout or went quiet. */
   | 'timeout'
+  /** Ran out of time or went quiet, then handed off its work in the wrap-up. */
+  | 'wrapped-up'
   /** The execution itself failed server-side. */
   | 'failed'
   | 'interrupted';

@@ -17,6 +17,8 @@ import {
 import { decidePermission, type PermissionDecision } from './permissions.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
+import { sleep } from '../opencode/server.js';
+import type { WrapUpTrigger } from '../prompt/wrapup.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -39,8 +41,22 @@ export interface IterationResult {
   providerRetries: number;
   lastProviderError?: string;
   error?: string;
+  /** Set when the iteration ran out of time and the agent was asked to hand off. */
+  wrapUp?: WrapUpRecord;
   durationMs: number;
 }
+
+export interface WrapUpRecord {
+  trigger: WrapUpTrigger;
+  /** `steer` reached the agent at its next step; `interrupt` stopped it first. */
+  delivery: 'steer' | 'interrupt';
+  /** The wrap-up turn ran to its end within the wrap-up budget. */
+  completed: boolean;
+  durationMs: number;
+}
+
+/** How long to wait for an interrupted execution to report that it ended. */
+const INTERRUPT_SETTLE_MS = 15_000;
 
 export interface IterationHooks {
   onText?: (text: string) => void;
@@ -68,6 +84,12 @@ export async function runIteration(args: {
   sessionId?: string;
   /** Answers permission requests; defaults to the configured policy. */
   permissions?: PermissionPolicy;
+  /**
+   * When the iteration runs out of time or goes quiet, send this prompt into
+   * the same session and give the agent `timeouts.wrapUpMs` to act on it,
+   * instead of interrupting it outright.
+   */
+  wrapUp?: { prompt: (trigger: WrapUpTrigger) => string };
   logger: Logger;
   hooks?: IterationHooks;
   signal: AbortSignal;
@@ -80,6 +102,7 @@ export async function runIteration(args: {
     iterationMs: config.timeouts.iterationMs,
     inactivityMs: config.timeouts.inactivityMs,
     maxProviderRetries: config.retries.providerRetriesPerIteration,
+    wrapUpMs: config.timeouts.wrapUpMs,
   };
   const watchdog = new Watchdog(watchdogOptions);
 
@@ -103,23 +126,71 @@ export async function runIteration(args: {
   // their permission requests need answers, but their text, tools and
   // completion are not the iteration's own.
   const subagentSessions = new Set<string>();
+  const promptOptions = {
+    ...(config.model ? { model: config.model } : {}),
+    ...(config.agent ? { agent: config.agent } : {}),
+  };
+
+  // The wrap-up is sent once, from the timer; `sent` flips before the prompt
+  // goes out so the event loop knows which execution end is the wrap-up's.
+  const wrapUp = {
+    state: null as (Omit<WrapUpRecord, 'durationMs'> & { startedAt: number; sent: boolean }) | null,
+    onInterruptedEnd: null as (() => void) | null,
+  };
+
+  const startWrapUp = async (trigger: WrapUpTrigger) => {
+    const state: NonNullable<typeof wrapUp.state> = {
+      trigger,
+      delivery: 'interrupt',
+      completed: false,
+      startedAt: Date.now(),
+      sent: false,
+    };
+    wrapUp.state = state;
+    // The time budget can steer a working agent; a quiet one is stuck in a
+    // tool, which only an interrupt ends.
+    if (trigger === 'iteration-timeout' && (await client.supportsSteering())) state.delivery = 'steer';
+    // The iteration may have ended while this was waiting.
+    if (streamAbort.signal.aborted) return;
+    logger.warn('asking the agent to wrap up', { reason: trigger, delivery: state.delivery });
+    if (state.delivery === 'interrupt') {
+      const ended = new Promise<void>((resolve) => (wrapUp.onInterruptedEnd = resolve));
+      await client.interrupt(sessionId);
+      await Promise.race([ended, sleep(INTERRUPT_SETTLE_MS, streamAbort.signal)]);
+      wrapUp.onInterruptedEnd = null;
+      if (streamAbort.signal.aborted) return;
+    }
+    state.sent = true;
+    await client.prompt(sessionId, args.wrapUp!.prompt(trigger), {
+      ...promptOptions,
+      ...(state.delivery === 'steer' ? { delivery: 'steer' as const } : {}),
+    });
+  };
 
   const timer = setInterval(() => {
     const tripped = watchdog.check();
-    if (tripped) {
-      trip = tripped;
-      streamAbort.abort();
+    if (!tripped) return;
+    const canWrapUp =
+      args.wrapUp && config.timeouts.wrapUpMs > 0 && sessionId && !watchdog.wrappingUp &&
+      (tripped === 'iteration-timeout' || tripped === 'inactivity');
+    if (canWrapUp) {
+      watchdog.beginWrapUp();
+      startWrapUp(tripped).catch((cause: unknown) => {
+        logger.warn('wrap-up request failed', { error: (cause as Error).message });
+        trip = tripped;
+        streamAbort.abort();
+      });
+      return;
     }
+    trip = tripped;
+    streamAbort.abort();
   }, 1_000);
 
   try {
     // Subscribe before prompting so no early event is missed.
     const stream = await client.connectEvents(streamAbort.signal);
     sessionId = args.sessionId ?? (await client.createSession(args.title));
-    await client.prompt(sessionId, args.prompt, {
-      ...(config.model ? { model: config.model } : {}),
-      ...(config.agent ? { agent: config.agent } : {}),
-    });
+    await client.prompt(sessionId, args.prompt, promptOptions);
     logger.debug('prompt sent', { sessionId });
 
     for await (const event of stream) {
@@ -201,9 +272,15 @@ export async function runIteration(args: {
       }
 
       if (EXECUTION_DONE_EVENTS.has(event.type)) {
+        // The end of the execution interrupted to make way for the wrap-up.
+        if (wrapUp.state && !wrapUp.state.sent) {
+          wrapUp.onInterruptedEnd?.();
+          continue;
+        }
         if (event.type !== 'session.execution.succeeded') {
           executionError = `execution ${event.type.split('.').pop()}`;
         }
+        if (wrapUp.state) wrapUp.state.completed = !executionError;
         break;
       }
     }
@@ -223,10 +300,14 @@ export async function runIteration(args: {
 
   const text = texts.join('\n');
   const tags = parsePromiseTags(text);
+  const wrapped = wrapUp.state;
+  const reasons = [wrapped?.trigger, trip].flatMap((reason) =>
+    reason ? [describeTrip(reason, watchdogOptions)] : [],
+  );
 
   return {
     sessionId,
-    status: classify({ trip, signal, executionError, tags }),
+    status: classify({ trip, signal, executionError, tags, wrapUp: wrapped }),
     text,
     tags,
     usage,
@@ -234,8 +315,18 @@ export async function runIteration(args: {
     filesTouched: [...filesTouched],
     providerRetries: watchdog.providerRetries,
     ...(lastProviderError ? { lastProviderError } : {}),
-    ...(trip ? { error: describeTrip(trip, watchdogOptions) } : {}),
-    ...(executionError && !trip ? { error: executionError } : {}),
+    ...(reasons.length > 0 ? { error: reasons.join('; ') } : {}),
+    ...(executionError && reasons.length === 0 ? { error: executionError } : {}),
+    ...(wrapped
+      ? {
+          wrapUp: {
+            trigger: wrapped.trigger,
+            delivery: wrapped.delivery,
+            completed: wrapped.completed && !trip,
+            durationMs: Date.now() - wrapped.startedAt,
+          },
+        }
+      : {}),
     durationMs: Date.now() - startedAt,
   };
 }
@@ -249,12 +340,15 @@ function classify(args: {
   signal: AbortSignal;
   executionError: string | undefined;
   tags: PromiseTags;
+  wrapUp: { completed: boolean } | null;
 }): IterationStatus {
   if (args.signal.aborted) return 'interrupted';
   if (args.trip === 'retry-storm') return 'provider-error';
   if (args.trip) return 'timeout';
   if (args.tags.blockedReason) return 'blocked';
   if (args.tags.decideQuestion) return 'decide';
+  // Out of time: whatever else the agent claimed, the task was cut short.
+  if (args.wrapUp) return args.wrapUp.completed ? 'wrapped-up' : 'timeout';
   if (args.tags.complete) return 'complete';
   if (args.executionError) return 'failed';
   return 'progressed';
