@@ -26,6 +26,7 @@ export class OpencodeClient {
   private readonly baseUrl: string;
   private readonly authHeader: string | undefined;
   private readonly requestTimeoutMs: number;
+  private steering: Promise<boolean> | undefined;
 
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -46,6 +47,29 @@ export class OpencodeClient {
    */
   async health(): Promise<{ directory?: string }> {
     return this.json('GET', '/api/location');
+  }
+
+  /**
+   * Whether prompts accept `delivery: "steer"`. A steered prompt reaches the
+   * agent at its next step, without stopping the tool that is running; a
+   * plain prompt to a busy session waits until the whole turn ends. Read from
+   * the live spec once, since older v2 servers reject the field.
+   */
+  supportsSteering(): Promise<boolean> {
+    this.steering ??= this.openapi()
+      .then((spec) => {
+        const operation = spec.paths?.['/api/session/{sessionID}/prompt']?.['post'];
+        if (!operation) return false;
+        // The request body may be a $ref into the shared schemas.
+        const text = JSON.stringify(operation);
+        const schemas = (spec as { components?: { schemas?: Record<string, unknown> } }).components?.schemas;
+        const referenced = [...text.matchAll(/#\/components\/schemas\/([\w.-]+)/g)].map((match) =>
+          JSON.stringify(schemas?.[match[1]!] ?? {}),
+        );
+        return [text, ...referenced].some((part) => part.includes('"steer"'));
+      })
+      .catch(() => false);
+    return this.steering;
   }
 
   async openapi(): Promise<{ paths: Record<string, Record<string, { operationId?: string }>> }> {
@@ -85,10 +109,11 @@ export class OpencodeClient {
   async prompt(
     sessionID: string,
     text: string,
-    options: { model?: string; agent?: string } = {},
+    options: { model?: string; agent?: string; delivery?: 'steer' } = {},
   ): Promise<void> {
     const body: Record<string, unknown> = { text };
     if (options.agent) body['agent'] = options.agent;
+    if (options.delivery) body['delivery'] = options.delivery;
     const model = parseModel(options.model);
     if (model) body['model'] = model;
     await this.json('POST', `/api/session/${sessionID}/prompt`, body);

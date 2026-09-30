@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import type { Task } from '../tasks/store.js';
+import { formatClock } from '../report/time.js';
 
 export interface PromptContext {
   projectRoot: string;
@@ -9,6 +10,10 @@ export interface PromptContext {
   maxIterations: number;
   nextTask?: Task | undefined;
   pinTask: boolean;
+  /** Working time before the agent is asked to wrap up, and when it ends. */
+  timeBudget?: { ms: number; until: Date };
+  /** A handoff left by an earlier attempt at the next task. */
+  handoff?: { path: string; text: string };
 }
 
 export class PromptError extends Error {}
@@ -37,6 +42,19 @@ export function buildPrompt(context: PromptContext): string {
     `RALPH_ITERATION=${context.iteration} of ${context.maxIterations}`,
   ];
 
+  if (context.timeBudget) {
+    const minutes = Math.round(context.timeBudget.ms / 60_000);
+    sections.push(
+      [
+        `## Time`,
+        ``,
+        `You have about ${minutes} minutes, until ${formatClock(context.timeBudget.until)} (check with \`date\`).`,
+        `When the time is up you will be asked to stop and hand off, so commit working checkpoints`,
+        `as you go: anything committed survives.`,
+      ].join('\n'),
+    );
+  }
+
   if (context.pinTask && context.nextTask) {
     sections.push(
       [
@@ -51,6 +69,21 @@ export function buildPrompt(context: PromptContext): string {
       ]
         .filter((line) => line !== undefined)
         .join('\n'),
+    );
+  }
+
+  if (context.handoff && context.nextTask) {
+    const path = relative(context.projectRoot, context.handoff.path).split(sep).join('/');
+    sections.push(
+      [
+        `## Resuming ${context.nextTask.id}`,
+        ``,
+        `An earlier attempt at this task ran out of time and left the handoff below (\`${path}\`).`,
+        `Pick up from it instead of starting over, and check the working tree it describes.`,
+        `Delete the handoff file in the commit that completes the task.`,
+        ``,
+        context.handoff.text,
+      ].join('\n'),
     );
   }
 

@@ -282,7 +282,7 @@ describe('runLoop', () => {
         root,
         config(root, {
           maxIterations: 5,
-          timeouts: { inactivityMs: 1_000 },
+          timeouts: { inactivityMs: 1_000, wrapUpMs: 0 },
           retries: { backoffMs: 0, iterationRetries: 2 },
         }),
         { onPrompt: () => stop.abort(), script: [] },
@@ -311,6 +311,66 @@ describe('runLoop', () => {
       );
 
       expect(result.status).toBe('complete');
+    });
+  });
+
+  describe('running out of time', () => {
+    const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
+    const headings = ['Status', 'Done', 'Working tree', 'Next steps', 'Dead ends', 'How to verify'];
+    // A working turn that would run far past every budget in these tests.
+    const endless: ScriptedEvent[] = [{ after: 60_000, type: 'session.execution.succeeded' }];
+
+    it('has the agent hand off, then resumes the task from its handoff', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 3, timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        {
+          steer: true,
+          onPrompt: (count) => {
+            if (count === 2) {
+              mkdirSync(resolve(root, '.ralph', 'handoff'), { recursive: true });
+              writeFileSync(handoff(root), `${headings.map((h) => `## ${h}\n\n-`).join('\n\n')}\n\nParser half done.`);
+            }
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? endless : say(count === 2 ? 'handed off' : '<promise>TASK-1:DONE</promise>')),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      const [first, wrapUp, resumed] = (server?.prompts ?? []).map((prompt) => String(prompt['text']));
+      expect(first).toContain('## Time');
+      expect(wrapUp).toContain('`.ralph/handoff/TASK-1.md`');
+      expect(resumed).toContain('## Resuming TASK-1');
+      expect(resumed).toContain('Parser half done.');
+
+      const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(records[0]).toMatchObject({ handoff: 'agent', result: { status: 'wrapped-up', wrapUp: { delivery: 'steer' } } });
+    });
+
+    it('writes the handoff itself when the agent does not, and stops a task that keeps running out of time', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 1_000 },
+          retries: { backoffMs: 0, iterationRetries: 0 },
+          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5 },
+        }),
+        { steer: true, script: endless },
+      );
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(2);
+      expect(result.message).toBe('TASK-1 ran out of time 2 times; split it into smaller tasks (handoff: .ralph/handoff/TASK-1.md)');
+      expect(readFileSync(handoff(root), 'utf8')).toContain('Written by Ralph');
+      // The second attempt was told about the first.
+      expect(String(server?.prompts[2]?.['text'])).toContain('## Resuming TASK-1');
     });
   });
 

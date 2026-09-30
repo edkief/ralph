@@ -21,6 +21,7 @@ const STATUS_ICON: Record<IterationStatus, string> = {
   decide: '❓',
   'provider-error': '⚡',
   timeout: '⏱',
+  'wrapped-up': '⏸',
   failed: '✗',
   interrupted: '■',
 };

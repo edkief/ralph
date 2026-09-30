@@ -13,11 +13,13 @@ Complete those items in sequence and remove them from the file when done.
 
 1. Read the full spec for your task at `{{RALPH_DIR}}/tasks/TASK-${ID}.json`.
 2. Implement it step by step, writing tests as you go.
+   Commit working checkpoints as you go: if time runs out, anything committed survives.
 3. Run the project's linter, type checker and test suite.
 4. All tests must pass. If you broke an unrelated test, fix it before continuing.
 5. Set `passes: true` for the task in `{{RALPH_DIR}}/tasks.json`.
 6. Add an entry to `{{RALPH_DIR}}/logs/LOG.md` (date, brief summary, newest first).
-7. Commit your changes using the Conventional Commit format.
+7. Commit your changes using the Conventional Commit format. If the task has a handoff in
+   `{{RALPH_DIR}}/handoff/`, delete it in this commit.
 
 ## Rules
 

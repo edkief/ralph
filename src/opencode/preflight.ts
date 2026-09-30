@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { handoffDir } from '../loop/handoff.js';
 import type { OpencodeClient } from './client.js';
 import type { Config } from '../config/schema.js';
 import { TaskStore } from '../tasks/store.js';
@@ -49,6 +50,9 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
     results.push({ name: 'tasks', ok: false, detail: (cause as Error).message, fatal: true });
   }
 
+  const handoffs = handoffCheck(config);
+  if (handoffs) results.push(handoffs);
+
   try {
     const location = await client.health();
     results.push({
@@ -67,6 +71,39 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
   results.push(await skillsCheck(client));
 
   return results;
+}
+
+/**
+ * Handoffs are how timed-out tasks resume. One for a task that already
+ * passes was left behind, and would mislead anyone reading the folder.
+ * Returns nothing when there are none.
+ */
+export function handoffCheck(config: Config): CheckResult | undefined {
+  const dir = resolve(config.projectRoot, handoffDir(config.ralphDir));
+  const ids = existsSync(dir)
+    ? readdirSync(dir).filter((file) => file.endsWith('.md')).map((file) => file.slice(0, -'.md'.length))
+    : [];
+  if (ids.length === 0) return undefined;
+
+  let outstanding: Set<string>;
+  try {
+    const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir).readTasks();
+    outstanding = new Set(tasks.filter((task) => !task.passes).map((task) => task.id));
+  } catch {
+    return undefined;
+  }
+
+  const stale = ids.filter((id) => !outstanding.has(id));
+  const resuming = ids.filter((id) => outstanding.has(id));
+  if (stale.length > 0) {
+    return {
+      name: 'handoffs',
+      ok: false,
+      detail: `left behind for tasks that pass or no longer exist, delete them: ${stale.join(', ')}`,
+      fatal: false,
+    };
+  }
+  return { name: 'handoffs', ok: true, detail: `resuming from a handoff: ${resuming.join(', ')}`, fatal: false };
 }
 
 function fileCheck(name: string, path: string, fatal: boolean, hint?: string): CheckResult {

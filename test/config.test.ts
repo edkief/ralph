@@ -50,6 +50,12 @@ describe('loadConfig', () => {
     expect(config.timeouts.inactivityMs).toBe(2_000);
   });
 
+  it('gives the agent a wrap-up budget unless it is turned off', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).timeouts.wrapUpMs).toBe(600_000);
+    const off = loadConfig({ projectRoot: project(), env: { RALPH_WRAP_UP_TIMEOUT_MS: '0' } });
+    expect(off.timeouts.wrapUpMs).toBe(0);
+  });
+
   it('rejects invalid values with a readable message', () => {
     const root = project();
     writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ maxIterations: -1 }));

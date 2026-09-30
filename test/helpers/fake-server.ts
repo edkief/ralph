@@ -16,6 +16,8 @@ export interface FakeServerOptions {
   sessions?: Record<string, { parentID?: string }>;
   /** Side effects a real agent would have, e.g. editing tasks.json. */
   onPrompt?: (promptCount: number) => void | Promise<void>;
+  /** Advertise `delivery: "steer"` on the prompt operation. */
+  steer?: boolean;
 }
 
 export interface FakeServer {
@@ -42,6 +44,8 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     prompts: [] as Array<Record<string, unknown>>,
     listeners: new Set<ServerResponse>(),
     sessionId: 'ses_fake_1',
+    // Bumped by an interrupt, which cancels the scripts still playing.
+    generation: 0,
   };
 
   const server: Server = createServer(async (req, res) => {
@@ -57,7 +61,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     }
 
     if (path === '/api/location') return json(res, { directory: '/fake/project' });
-    if (path === '/openapi.json') return json(res, fakeSpec());
+    if (path === '/openapi.json') return json(res, fakeSpec(options.steer === true));
     if (path === '/api/skill') return json(res, { data: [{ name: 'test-skill' }] });
     if (path === '/api/model/default') {
       return json(res, { data: { providerID: 'fake', modelID: 'model' } });
@@ -104,7 +108,11 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
 
     if (path.endsWith('/interrupt') && req.method === 'POST') {
       state.interrupts += 1;
-      return json(res, {});
+      state.generation += 1;
+      json(res, {});
+      // Like the real server: the running execution ends as aborted.
+      broadcast({ type: 'session.execution.aborted' });
+      return;
     }
 
     const permissionMatch = /\/permission\/([^/]+)\/reply$/.exec(path);
@@ -118,17 +126,23 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
   });
 
   async function emitScript(promptCount: number): Promise<void> {
+    const generation = state.generation;
     await options.onPrompt?.(promptCount);
     const script =
       typeof options.script === 'function' ? options.script(promptCount) : options.script;
     for (const event of script) {
       if (event.after) await new Promise((resolve) => setTimeout(resolve, event.after));
-      const payload = JSON.stringify({
-        type: event.type,
-        data: { sessionID: state.sessionId, ...(event.data ?? {}) },
-      });
-      for (const listener of state.listeners) listener.write(`data: ${payload}\n\n`);
+      if (state.generation !== generation) return;
+      broadcast(event);
     }
+  }
+
+  function broadcast(event: ScriptedEvent): void {
+    const payload = JSON.stringify({
+      type: event.type,
+      data: { sessionID: state.sessionId, ...(event.data ?? {}) },
+    });
+    for (const listener of state.listeners) listener.write(`data: ${payload}\n\n`);
   }
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -151,6 +165,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     },
     close: () =>
       new Promise<void>((resolve) => {
+        state.generation += 1;
         for (const listener of state.listeners) listener.end();
         // Undici keeps sockets pooled, so close() alone would wait them out.
         server.closeAllConnections();
@@ -170,12 +185,19 @@ async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unkn
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
-function fakeSpec() {
+function fakeSpec(steer: boolean) {
   const op = (operationId: string) => ({ post: { operationId } });
+  // Shaped like the real spec: the body schema sits behind a $ref.
+  const prompt = steer
+    ? { post: { operationId: 'session.prompt', requestBody: { $ref: '#/components/schemas/Prompt' } } }
+    : op('session.prompt');
   return {
+    components: {
+      schemas: { Prompt: { properties: { delivery: { type: 'string', enum: ['steer', 'queue'] } } } },
+    },
     paths: {
       '/api/session': op('session.create'),
-      '/api/session/{sessionID}/prompt': op('session.prompt'),
+      '/api/session/{sessionID}/prompt': prompt,
       '/api/session/{sessionID}/interrupt': op('session.interrupt'),
       '/api/session/{sessionID}/permission/{requestID}/reply': op('session.permission.reply'),
       '/api/event': { get: { operationId: 'event.subscribe' } },

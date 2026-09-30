@@ -11,10 +11,15 @@ const ServerSchema = z.object({
 });
 
 const TimeoutsSchema = z.object({
-  /** Hard ceiling for one iteration before it is interrupted. */
+  /** Working time for one iteration; then the agent is asked to wrap up. */
   iterationMs: z.number().int().positive().default(30 * 60_000),
   /** No interesting event for this long means the agent is wedged. */
   inactivityMs: z.number().int().positive().default(180_000),
+  /**
+   * Time the agent gets to hand off its work once the iteration runs out of
+   * time or goes quiet, on top of `iterationMs`. 0 interrupts it outright.
+   */
+  wrapUpMs: z.number().int().min(0).default(10 * 60_000),
 });
 
 const RetriesSchema = z.object({
@@ -28,6 +33,8 @@ const RetriesSchema = z.object({
 const StallSchema = z.object({
   /** Consecutive iterations with no commit and no task flip before aborting. */
   maxUnproductiveIterations: z.number().int().positive().default(3),
+  /** Times one task may run out of time in a run before the run stops. */
+  maxTimeoutsPerTask: z.number().int().positive().default(2),
 });
 
 /**
