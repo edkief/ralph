@@ -35,6 +35,14 @@ const StallSchema = z.object({
   maxUnproductiveIterations: z.number().int().positive().default(3),
   /** Times one task may run out of time in a run before the run stops. */
   maxTimeoutsPerTask: z.number().int().positive().default(2),
+  /**
+   * What to do with a task that ran out of time or context `maxTimeoutsPerTask`
+   * times: `stop` the run, `propose` a split into smaller tasks and stop, or
+   * `split` it and carry on.
+   */
+  onRepeatedTimeout: z.enum(['stop', 'propose', 'split']).default('propose'),
+  /** Times a task and its descendants may be split before a stall just stops the run. */
+  maxSplitDepth: z.number().int().min(0).default(1),
 });
 
 /**

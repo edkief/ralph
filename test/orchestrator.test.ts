@@ -360,7 +360,7 @@ describe('runLoop', () => {
           maxIterations: 5,
           timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 1_000 },
           retries: { backoffMs: 0, iterationRetries: 0 },
-          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5 },
+          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5, onRepeatedTimeout: 'stop' },
         }),
         { steer: true, script: endless },
       );
@@ -420,7 +420,7 @@ describe('runLoop', () => {
         config(root, {
           maxIterations: 5,
           retries: { backoffMs: 0, iterationRetries: 1 },
-          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5 },
+          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5, onRepeatedTimeout: 'stop' },
         }),
         { script: overflow },
       );
@@ -429,6 +429,161 @@ describe('runLoop', () => {
       expect(result.iterations).toBe(1);
       expect(result.message).toBe('TASK-1 ran out of context 2 times; split it into smaller tasks (handoff: .ralph/handoff/TASK-1.md)');
       expect(readFileSync(handoff(root), 'utf8')).toContain('Written by Ralph: the agent ran out of context');
+    });
+  });
+
+  describe('splitting a task that keeps running out of time', () => {
+    const endless: ScriptedEvent[] = [{ after: 60_000, type: 'session.execution.succeeded' }];
+    const spec = (id: string) => JSON.stringify({ id, title: id, acceptanceCriteria: [`${id} works`] });
+    const timeouts = { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 0 };
+
+    /** A project whose TASK-1 has a spec, committed so the split has history. */
+    function planned(extra: Record<string, unknown> = {}): string {
+      const root = project([]);
+      mkdirSync(resolve(root, '.ralph', 'tasks'), { recursive: true });
+      writeFileSync(resolve(root, '.ralph', 'tasks', 'TASK-1.json'), spec('TASK-1'));
+      writeFileSync(
+        resolve(root, '.ralph', 'tasks.json'),
+        JSON.stringify([{ id: 'TASK-1', title: 'Parser and printer', specFilePath: '.ralph/tasks/TASK-1.json', passes: false, ...extra }]),
+      );
+      execFileSync('git', ['add', '-A'], { cwd: root });
+      execFileSync('git', ['commit', '-qm', 'plan'], { cwd: root });
+      return root;
+    }
+
+    /** What the split agent writes. */
+    function writeProposal(root: string, proposal: Record<string, unknown>, ids: string[] = []): void {
+      const dir = resolve(root, '.ralph', 'split', 'TASK-1');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(resolve(dir, 'proposal.json'), JSON.stringify({ task: 'TASK-1', ...proposal }));
+      for (const id of ids) writeFileSync(resolve(dir, `${id}.json`), spec(id));
+    }
+    const split = {
+      splittable: true,
+      reason: 'Parser, then printer.',
+      tasks: [
+        { id: 'TASK-1.1', title: 'Parser' },
+        { id: 'TASK-1.2', title: 'Printer' },
+      ],
+    };
+    const stall = (overrides: Record<string, unknown>) => ({
+      maxTimeoutsPerTask: 1,
+      maxUnproductiveIterations: 5,
+      ...overrides,
+    });
+    const splits = (historyDir: string) =>
+      readFileSync(resolve(historyDir, 'splits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+    it('proposes a split by default and stops for review', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        onPrompt: (count) => {
+          if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+        },
+        script: (count) => (count === 1 ? endless : say('proposed')),
+      });
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(1);
+      expect(result.message).toBe(
+        'TASK-1 ran out of time 1 time; proposed splitting it into TASK-1.1 and TASK-1.2 in .ralph/split/TASK-1/. Review it, then run `ralph split TASK-1 --apply`',
+      );
+      const prompt = String(server?.prompts[1]?.['text']);
+      expect(prompt).toContain('## Split TASK-1');
+      expect(prompt).toContain('TASK-1 works');
+      expect(prompt).toContain('.ralph/handoff/TASK-1.md');
+      // Proposing changes nothing in the plan.
+      expect(JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8'))).toHaveLength(1);
+      expect(splits(result.historyDir)).toEqual([
+        expect.objectContaining({ taskId: 'TASK-1', causes: ['iteration-timeout'], status: 'proposed', children: ['TASK-1.1', 'TASK-1.2'] }),
+      ]);
+      expect(existsSync(resolve(result.historyDir, 'split-TASK-1.events.jsonl'))).toBe(true);
+    });
+
+    it('splits the task and carries on with the new tasks', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({ onRepeatedTimeout: 'split' }) }), {
+        onPrompt: (count) => {
+          if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+          if (count === 3) markPassing(root, 'TASK-1.1');
+          if (count === 4) markPassing(root, 'TASK-1.2');
+        },
+        script: (count) => (count === 1 ? endless : say(count === 2 ? 'proposed' : 'done')),
+      });
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(3);
+      expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1.1**');
+      const tasks = JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8'));
+      expect(tasks.map((task: { id: string }) => task.id)).toEqual(['TASK-1.1', 'TASK-1.2']);
+      expect(tasks[0]).toMatchObject({ splitFrom: 'TASK-1', splitDepth: 1, specFilePath: '.ralph/tasks/TASK-1.1.json' });
+      expect(existsSync(resolve(root, '.ralph', 'split', 'TASK-1', 'TASK-1.json'))).toBe(true);
+      const log = execFileSync('git', ['log', '--format=%s'], { cwd: root, encoding: 'utf8' });
+      expect(log).toContain('chore(plan): split TASK-1 into TASK-1.1 and TASK-1.2');
+      expect(splits(result.historyDir)).toEqual([expect.objectContaining({ status: 'applied', committed: true })]);
+    });
+
+    it('stops with the agent\'s reason when splitting would not help', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({ onRepeatedTimeout: 'split' }) }), {
+        onPrompt: (count) => {
+          if (count === 2) writeProposal(root, { splittable: false, reason: 'the e2e suite alone takes 40 minutes' });
+        },
+        script: (count) => (count === 1 ? endless : say('declined')),
+      });
+
+      expect(result.status).toBe('stalled');
+      expect(result.message).toBe(
+        'TASK-1 ran out of time 1 time; splitting it would not help: the e2e suite alone takes 40 minutes (handoff: .ralph/handoff/TASK-1.md)',
+      );
+      expect(splits(result.historyDir)).toEqual([expect.objectContaining({ status: 'declined' })]);
+    });
+
+    it('sends a broken proposal back, then gives up on it', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        script: (count) => (count === 1 ? endless : say('nothing written')),
+      });
+
+      expect(result.status).toBe('stalled');
+      expect(result.message).toMatch(/^TASK-1 ran out of time 1 time; Ralph could not propose a split \(the proposal still has problems: .*proposal.json was not written\), so split it by hand/);
+      // The first request and two attempts to fix it, all in one session.
+      expect(server?.prompts).toHaveLength(4);
+      expect(String(server?.prompts[2]?.['text'])).toContain('found these problems');
+    });
+
+    it('does not split a task that only ever went quiet', async () => {
+      const root = planned();
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 5, timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 0 }, stall: stall({ onRepeatedTimeout: 'split' }) }),
+        { script: endless },
+      );
+
+      expect(result.status).toBe('stalled');
+      expect(result.message).toBe(
+        'TASK-1 ran out of time 1 time, going quiet each time: a command probably hangs, which splitting the task would not fix (handoff: .ralph/handoff/TASK-1.md)',
+      );
+      expect(server?.prompts).toHaveLength(1);
+    });
+
+    it('does not split a task split too often already', async () => {
+      const root = planned({ splitFrom: 'TASK-0', splitDepth: 1 });
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({ onRepeatedTimeout: 'split' }) }), {
+        script: endless,
+      });
+
+      expect(result.status).toBe('stalled');
+      expect(result.message).toBe(
+        'TASK-1 ran out of time 1 time after being split from TASK-0; stall.maxSplitDepth (1) allows no further split, so split it by hand (handoff: .ralph/handoff/TASK-1.md)',
+      );
+      expect(server?.prompts).toHaveLength(1);
     });
   });
 

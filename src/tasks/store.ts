@@ -8,6 +8,10 @@ const TaskSchema = z.looseObject({
   category: z.string().optional(),
   specFilePath: z.string().optional(),
   passes: z.boolean().default(false),
+  /** The task this one was split from, when Ralph split a task that kept running out of time. */
+  splitFrom: z.string().optional(),
+  /** How many splits separate this task from the plan's original task. */
+  splitDepth: z.number().int().min(0).optional(),
 });
 
 export type Task = z.infer<typeof TaskSchema>;
