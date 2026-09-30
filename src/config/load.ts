@@ -62,6 +62,11 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       push: env['RALPH_GIT_PUSH'],
       remote: env['RALPH_GIT_REMOTE'],
     },
+    ui: {
+      enabled: bool(env['RALPH_UI']),
+      host: env['RALPH_UI_HOST'] || undefined,
+      port: num(env['RALPH_UI_PORT']),
+    },
     log: {
       format: env['RALPH_LOG_FORMAT'],
       level: env['RALPH_LOG_LEVEL'],
