@@ -72,3 +72,44 @@ describe('Watchdog', () => {
     expect(describeTrip('retry-storm', options(time.now))).toMatch(/retried more than 2/);
   });
 });
+
+describe('Watchdog wrap-up phase', () => {
+  const wrapUpOptions = (now: () => number) => ({ ...options(now), wrapUpMs: 30_000 });
+
+  it('replaces the iteration budget with the wrap-up budget', () => {
+    const time = clock();
+    const watchdog = new Watchdog(wrapUpOptions(time.now));
+    time.advance(60_000);
+    expect(watchdog.check()).toBe('iteration-timeout');
+
+    watchdog.beginWrapUp();
+    expect(watchdog.wrappingUp).toBe(true);
+    expect(watchdog.check()).toBeNull();
+
+    for (let i = 0; i < 5; i += 1) {
+      time.advance(5_000);
+      watchdog.recordActivity();
+    }
+    expect(watchdog.check()).toBeNull();
+    time.advance(5_000);
+    expect(watchdog.check()).toBe('wrap-up-timeout');
+  });
+
+  it('starts the wrap-up with a fresh inactivity window, and still trips on it', () => {
+    const time = clock();
+    const watchdog = new Watchdog(wrapUpOptions(time.now));
+    time.advance(10_000);
+    expect(watchdog.check()).toBe('inactivity');
+
+    watchdog.beginWrapUp();
+    expect(watchdog.check()).toBeNull();
+    time.advance(10_000);
+    expect(watchdog.check()).toBe('inactivity');
+  });
+
+  it('describes a wrap-up timeout', () => {
+    expect(describeTrip('wrap-up-timeout', { ...options(Date.now), wrapUpMs: 600_000 })).toBe(
+      'Wrap-up exceeded its 10m budget',
+    );
+  });
+});

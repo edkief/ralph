@@ -53,6 +53,7 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     timeouts: {
       iterationMs: num(env['RALPH_ITERATION_TIMEOUT_MS']),
       inactivityMs: num(env['RALPH_INACTIVITY_TIMEOUT_MS']),
+      wrapUpMs: num(env['RALPH_WRAP_UP_TIMEOUT_MS']),
     },
     plan: {
       model: env['RALPH_PLAN_MODEL'],
