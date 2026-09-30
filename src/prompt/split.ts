@@ -15,7 +15,7 @@ export function buildSplitPrompt(args: {
   handoffText?: string;
   /** `git log --oneline` of the commits that mention the task. */
   commits: string;
-  /** What each attempt ran out of, e.g. "time" or "context". */
+  /** What each attempt ran out of, e.g. "time" or "context"; empty when a person asked for the split. */
   cutShort: string[];
   iterationMs: number;
   /** Where the proposal goes, relative to the project root. */
@@ -31,9 +31,11 @@ export function buildSplitPrompt(args: {
     ``,
     `## Split ${args.taskId}`,
     ``,
-    `${args.taskId} (${args.title}) was attempted ${attempts} time${attempts === 1 ? '' : 's'} and each attempt ran out of`,
-    `${[...new Set(args.cutShort)].join(' or ')} before finishing it. An iteration has about ${minutes} minutes and starts a`,
-    `fresh session with no memory of earlier ones. Your job is to plan, not to implement: break what is`,
+    attempts > 0
+      ? `${args.taskId} (${args.title}) was attempted ${attempts} time${attempts === 1 ? '' : 's'} and each attempt ran out of ${[...new Set(args.cutShort)].join(' or ')}\nbefore finishing it.`
+      : `${args.taskId} (${args.title}) was judged too big to finish in one iteration.`,
+    `An iteration has about ${minutes} minutes and starts a fresh session with no memory of earlier ones.`,
+    `Your job is to plan, not to implement: break what is`,
     `left of ${args.taskId} into smaller tasks that each fit in one iteration, or explain why splitting`,
     `would not help.`,
     ``,

@@ -6,6 +6,7 @@ import { preflight } from './opencode/preflight.js';
 import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
+import { runSplit } from './split/command.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
 import { formatTimestamp } from './report/time.js';
@@ -21,11 +22,17 @@ Usage:
   ralph config [options]    Print the resolved configuration
   ralph init [options]      Scaffold .ralph/, then plan the project with the agent
   ralph ui [options]        Serve the web UI to watch runs and browse .ralph/
+  ralph split <task> [--apply]
+                            Propose splitting a task into smaller ones, or apply the proposal
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
       --replan              Revise an existing plan with the agent
   -m, --model <id>          Model for the planning interview (default: plan.model, then model)
+
+Split options:
+      --apply               Replace the task with the proposed ones and commit
+  -m, --model <id>          Model for the proposal (default: plan.model, then model)
 
 Options:
   -n, --max-iterations <n>  Iteration budget (default 10)
@@ -74,6 +81,7 @@ async function main(argv: string[]): Promise<number> {
       'ui-port': { type: 'string' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
+      apply: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -84,15 +92,19 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init', 'ui'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
 
   const overrides: Record<string, unknown> = {
     ...(values['max-iterations'] ? { maxIterations: Number(values['max-iterations']) } : {}),
-    // For init, -m picks the planning model rather than the loop's.
-    ...(values.model ? (command === 'init' ? { plan: { model: values.model } } : { model: values.model }) : {}),
+    // For init and split, -m picks the planning model rather than the loop's.
+    ...(values.model
+      ? command === 'init' || command === 'split'
+        ? { plan: { model: values.model } }
+        : { model: values.model }
+      : {}),
     ...(values.agent ? { agent: values.agent } : {}),
     ...(values['ralph-dir'] ? { ralphDir: values['ralph-dir'] } : {}),
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
@@ -142,6 +154,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === 'ui') return runUi(config, logger);
+  if (command === 'split') return runSplit({ config, logger, taskId: positionals[1], apply: values.apply === true });
 
   return runCommand(command, config, logger);
 }

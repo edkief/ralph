@@ -90,6 +90,8 @@ export function readProposal(
   const proposal = parsed.data;
   const problems: string[] = [];
   if (proposal.task !== taskId) problems.push(`${dir}/proposal.json has task ${JSON.stringify(proposal.task)}, expected "${taskId}"`);
+  // Once applied, the proposal is a record: its tasks are in tasks.json and their specs have moved.
+  if (proposal.appliedAt && problems.length === 0) return { status: 'ok', proposal };
   if (!proposal.splittable) {
     if (!proposal.reason.trim()) problems.push(`${dir}/proposal.json needs a reason when the task is not splittable`);
     return problems.length > 0 ? { status: 'invalid', problems } : { status: 'ok', proposal };
