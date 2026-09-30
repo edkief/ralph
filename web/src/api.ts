@@ -6,8 +6,16 @@ export type * from '../../src/ui/types.js';
 /** Log lines kept in the browser for the live run. */
 const MAX_LOG_LINES = 5000;
 
+/**
+ * API paths are written from the root for readability but requested relative
+ * to the page, so the app also works under a reverse proxy's path prefix.
+ */
+export function apiUrl(path: string): string {
+  return path.replace(/^\//, '');
+}
+
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, signal ? { signal } : {});
+  const response = await fetch(apiUrl(path), signal ? { signal } : {});
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `${response.status} ${response.statusText}`);
@@ -94,7 +102,7 @@ export function useLive(): LiveState {
   const [state, dispatch] = useReducer(reduce, { connected: false, status: null, log: null, transcript: null });
 
   useEffect(() => {
-    const source = new EventSource('/api/live');
+    const source = new EventSource(apiUrl('/api/live'));
     source.onopen = () => dispatch({ type: 'connected', value: true });
     source.onerror = () => dispatch({ type: 'connected', value: false });
     for (const name of ['status', 'log', 'transcript'] as const) {

@@ -78,7 +78,7 @@ function Header({ status, connected }: { status: StatusView | null; connected: b
     <header className="header">
       <div className="header-inner">
         <div className="brand">
-          <img src="/favicon.svg" alt="" width={22} height={22} />
+          <img src="favicon.svg" alt="" width={22} height={22} />
           <div>
             <div className="brand-name">{status?.project ?? 'ralph'}</div>
             <div className="brand-path" title={status?.projectRoot}>

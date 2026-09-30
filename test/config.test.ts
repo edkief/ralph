@@ -57,18 +57,21 @@ describe('loadConfig', () => {
   });
 
   it('keeps the web UI off and on loopback unless asked', () => {
-    expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280 });
+    expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280, basePath: '' });
     const fromEnv = loadConfig({
       projectRoot: project(),
-      env: { RALPH_UI: '1', RALPH_UI_HOST: '0.0.0.0', RALPH_UI_PORT: '8080' },
+      env: { RALPH_UI: '1', RALPH_UI_HOST: '0.0.0.0', RALPH_UI_PORT: '8080', RALPH_UI_BASE_PATH: '/ralph/ws-1' },
     });
-    expect(fromEnv.ui).toEqual({ enabled: true, host: '0.0.0.0', port: 8080 });
+    expect(fromEnv.ui).toEqual({ enabled: true, host: '0.0.0.0', port: 8080, basePath: '/ralph/ws-1' });
     const fromFlags = loadConfig({
       projectRoot: project(),
       env: { RALPH_UI: '1' },
       overrides: { ui: { enabled: false, port: 9000 } },
     });
-    expect(fromFlags.ui).toEqual({ enabled: false, host: '127.0.0.1', port: 9000 });
+    expect(fromFlags.ui).toEqual({ enabled: false, host: '127.0.0.1', port: 9000, basePath: '' });
+    expect(() =>
+      loadConfig({ projectRoot: project(), env: { RALPH_UI_BASE_PATH: 'ralph' } }),
+    ).toThrow(/basePath/);
   });
 
   it('rejects invalid values with a readable message', () => {

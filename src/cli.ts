@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { loadConfig, ConfigError } from './config/load.js';
 import { startServer } from './opencode/server.js';
@@ -41,7 +42,9 @@ Options:
       --ui                  Also serve the web UI while the loop runs
       --ui-host <host>      Web UI address (default 127.0.0.1)
       --ui-port <port>      Web UI port (default 4280)
+      --ui-base-path <path> Path prefix a reverse proxy serves the web UI under
   -h, --help                Show this help
+  -v, --version             Print the version
 
 Exit codes:
   0 complete · 1 budget exhausted · 2 blocked · 3 decision needed
@@ -51,6 +54,12 @@ Stopping:
   Ctrl-C once to stop after the current iteration, twice to stop now.
   Unattended, send SIGINT for the first and SIGTERM for the second.
 `;
+
+/** From package.json, one level up from both src/cli.ts and dist/cli.js. */
+function version(): string {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  return pkg.version;
+}
 
 async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -72,14 +81,21 @@ async function main(argv: string[]): Promise<number> {
       ui: { type: 'boolean' },
       'ui-host': { type: 'string' },
       'ui-port': { type: 'string' },
+      'ui-base-path': { type: 'string' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
+      version: { type: 'boolean', short: 'v' },
     },
   });
 
   if (values.help) {
     process.stdout.write(HELP);
+    return 0;
+  }
+
+  if (values.version) {
+    process.stdout.write(`${version()}\n`);
     return 0;
   }
 
@@ -102,6 +118,7 @@ async function main(argv: string[]): Promise<number> {
       ...(values.ui !== undefined ? { enabled: values.ui } : {}),
       ...(values['ui-host'] ? { host: values['ui-host'] } : {}),
       ...(values['ui-port'] ? { port: Number(values['ui-port']) } : {}),
+      ...(values['ui-base-path'] ? { basePath: values['ui-base-path'] } : {}),
     },
     log: {
       ...(values['log-format'] ? { format: values['log-format'] } : {}),

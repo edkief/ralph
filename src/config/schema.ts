@@ -83,6 +83,14 @@ const UiSchema = z.object({
   enabled: z.boolean().default(false),
   host: z.string().default('127.0.0.1'),
   port: z.number().int().min(0).max(65535).default(4280),
+  /**
+   * The path prefix a reverse proxy serves the UI under, e.g. `/ralph/ws-1`.
+   * The server strips it; the app's own URLs are relative, so they follow.
+   */
+  basePath: z
+    .string()
+    .regex(/^(\/[^/?#]+)*\/?$/, 'must be empty or an absolute path such as /ralph/ws-1')
+    .default(''),
 });
 
 export const ConfigSchema = z.object({
