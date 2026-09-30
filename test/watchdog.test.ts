@@ -37,6 +37,27 @@ describe('Watchdog', () => {
     expect(watchdog.check()).toBeNull();
   });
 
+  it('does not trip on inactivity while the conversation is compacted', () => {
+    const time = clock();
+    const watchdog = new Watchdog(options(time.now));
+    watchdog.recordActivity();
+    watchdog.beginCompaction();
+    time.advance(30_000);
+    expect(watchdog.check()).toBeNull();
+    time.advance(30_000);
+    expect(watchdog.check()).toBe('iteration-timeout');
+  });
+
+  it('watches for inactivity again once activity follows a compaction', () => {
+    const time = clock();
+    const watchdog = new Watchdog(options(time.now));
+    watchdog.beginCompaction();
+    time.advance(20_000);
+    watchdog.recordActivity();
+    time.advance(10_000);
+    expect(watchdog.check()).toBe('inactivity');
+  });
+
   it('trips on the hard iteration budget even while active', () => {
     const time = clock();
     const watchdog = new Watchdog(options(time.now));

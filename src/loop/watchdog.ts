@@ -19,11 +19,16 @@ export interface WatchdogOptions {
  *
  * Once the agent is asked to wrap up, the iteration budget no longer applies:
  * the wrap-up budget does, and inactivity and retry storms still trip.
+ *
+ * While opencode compacts the conversation it sends nothing until the summary
+ * is done, which on a slow local model can outlast the inactivity window.
+ * Inactivity is not checked then; the time budgets still are.
  */
 export class Watchdog {
   private readonly startedAt: number;
   private lastActivityAt: number;
   private wrapUpStartedAt: number | null = null;
+  private compacting = false;
   private retries = 0;
   private readonly now: () => number;
 
@@ -37,6 +42,15 @@ export class Watchdog {
   recordActivity(): void {
     this.lastActivityAt = this.now();
     this.retries = 0;
+    this.compacting = false;
+  }
+
+  /**
+   * Called when compaction starts. Any later activity ends it: a compaction
+   * that fails sends no end event, and the turn carries on without it.
+   */
+  beginCompaction(): void {
+    this.compacting = true;
   }
 
   /** Called on `session.retry.scheduled`. */
@@ -67,7 +81,7 @@ export class Watchdog {
     } else if (now - this.startedAt >= this.options.iterationMs) {
       return 'iteration-timeout';
     }
-    if (now - this.lastActivityAt >= this.options.inactivityMs) return 'inactivity';
+    if (!this.compacting && now - this.lastActivityAt >= this.options.inactivityMs) return 'inactivity';
     return null;
   }
 
@@ -78,7 +92,8 @@ export class Watchdog {
       this.wrapUpStartedAt !== null
         ? (this.options.wrapUpMs ?? 0) - (now - this.wrapUpStartedAt)
         : this.options.iterationMs - (now - this.startedAt);
-    return Math.max(250, Math.min(budgetLeft, this.options.inactivityMs - (now - this.lastActivityAt)));
+    const quietLeft = this.compacting ? budgetLeft : this.options.inactivityMs - (now - this.lastActivityAt);
+    return Math.max(250, Math.min(budgetLeft, quietLeft));
   }
 }
 

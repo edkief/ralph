@@ -131,6 +131,23 @@ describe('runIteration', () => {
     expect(server?.interrupts).toBe(1);
   });
 
+  it('waits out a compaction that is quieter than the inactivity window', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.compaction.started', data: { reason: 'auto' } },
+          { after: 2_500, type: 'session.compaction.ended', data: { reason: 'auto', text: 'summary', recent: '' } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config({ timeouts: { inactivityMs: 1_200, iterationMs: 60_000 } }),
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(result.compactions).toBe(1);
+    expect(server?.interrupts).toBe(0);
+  });
+
   it('treats any session event as activity, such as a model still processing the prompt', async () => {
     const result = await iterate(
       {

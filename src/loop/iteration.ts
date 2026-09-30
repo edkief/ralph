@@ -225,6 +225,10 @@ export async function runIteration(args: {
       hooks.onEvent?.(event);
 
       if (isActivityEvent(event.type)) watchdog.recordActivity();
+      // Compaction is quiet until it ends, whichever session it is for.
+      if (event.type === 'session.compaction.started' || event.type === 'session.compaction.delta') {
+        watchdog.beginCompaction();
+      }
 
       if (event.type.includes('permission')) {
         await handlePermission(event, client, policy, logger);
