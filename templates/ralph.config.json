@@ -23,6 +23,11 @@
     "push": "never",
     "remote": "origin"
   },
+  "ui": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 4280
+  },
   "log": {
     "format": "text",
     "level": "info"

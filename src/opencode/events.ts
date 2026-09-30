@@ -169,6 +169,20 @@ function parseFrame(frame: string): OpencodeEvent | null {
   }
 }
 
+/** The session a session-scoped event belongs to. */
+export function sessionIdOf(event: OpencodeEvent): string | undefined {
+  const data = event.data as { sessionID?: unknown } | undefined;
+  return typeof data?.sessionID === 'string' ? data.sessionID : undefined;
+}
+
+/** A tool's name where the event carries one, else a generic `tool`. */
+export function toolName(event: OpencodeEvent): string {
+  const data = event.data as { tool?: unknown; name?: unknown } | undefined;
+  if (typeof data?.tool === 'string') return data.tool;
+  if (typeof data?.name === 'string') return data.name;
+  return 'tool';
+}
+
 /** Narrow an event's `data` with a schema, returning undefined when it does not fit. */
 export function readData<T>(event: OpencodeEvent, schema: z.ZodType<T>): T | undefined {
   const parsed = schema.safeParse(event.data);

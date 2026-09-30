@@ -71,6 +71,8 @@ ralph once                  # a single iteration
 ralph doctor                # check the environment, run nothing
 ralph config                # print the resolved configuration
 ralph init                  # scaffold .ralph/, then plan the project with the agent
+ralph ui                    # serve the web UI to watch runs and browse .ralph/
+ralph --ui                  # run the loop and serve the web UI beside it
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -92,6 +94,33 @@ nothing to get wrong.
 | 5 | Model provider or opencode server unusable |
 | 6 | Stalled: iterations stopped changing anything |
 | 130 | Interrupted, or stopped on request |
+
+### Web UI
+
+A read-only web UI shows what the loop is doing, at <http://127.0.0.1:4280> by default:
+
+- **Overview**: tasks passing out of the total, the run's status, and each iteration's outcome,
+  duration, tool calls, tokens and changes
+- **Transcript**: the iteration in progress as it happens (what the agent says, each tool call
+  with its input and output, model calls, retries), or any earlier iteration of any run
+- **Logs**: Ralph's own log for each run, filterable by level
+- **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
+  and `ralph.config.json`, with Markdown rendered
+
+There are two ways to start it:
+
+- `ralph ui` serves it on its own until Ctrl-C. It works entirely from the files in `.ralph/`,
+  so it can watch a loop running in another terminal or container that shares the folder, and
+  browse past runs after the loop has exited.
+- `ralph --ui` (or `ui.enabled`, or `RALPH_UI=1`) serves it beside the loop, for as long as the
+  loop runs. If it cannot start, for example because its port is taken, Ralph logs a warning
+  and runs without it.
+
+Set the address with `--ui-host`/`--ui-port`, `ui.host`/`ui.port`, or
+`RALPH_UI_HOST`/`RALPH_UI_PORT`. The UI has no authentication and transcripts can contain
+secrets from the repository or the environment, so it listens on `127.0.0.1` only, and refuses
+requests addressed to any other host name. Binding it elsewhere logs a warning. From a
+Kubernetes pod, prefer `kubectl port-forward pod/<pod> 4280` over exposing it.
 
 ### Stopping a run
 
@@ -195,6 +224,11 @@ See `templates/ralph.config.json` for a complete file.
     "model": "anthropic/claude-x", // for the `ralph init` interview; defaults to `model`
     "maxTurns": 30,                // agent turns before the interview gives up
     "maxFixAttempts": 2            // times the agent is sent back to fix an invalid plan
+  },
+  "ui": {
+    "enabled": false,              // serve the web UI beside the loop, like --ui
+    "host": "127.0.0.1",           // no authentication: keep it on loopback
+    "port": 4280
   }
 }
 ```
@@ -204,7 +238,8 @@ server's default until you choose one.
 
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
-`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`.
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
+`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.
@@ -318,7 +353,11 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `iteration-NNN.events.jsonl` — every event received, for debugging
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
   plus the wrap-up and who wrote the handoff when it ran out of time or context
-- `run.json` — the run summary
+- `log.jsonl` — Ralph's log lines, at the configured level
+- `state.json` — where the run stands (status, iteration, task, pid), rewritten as it goes
+- `run.json` — the run summary, once the run ends
+
+The web UI reads all of these, so it needs nothing else from the loop.
 
 ## Notes on the opencode API
 
@@ -338,8 +377,14 @@ on it.
 
 ```bash
 npm test          # unit + integration tests against a fake opencode server
-npm run typecheck
+npm run typecheck # the CLI and the web app
+npm run build     # the CLI into dist/, the web app into dist/web/
 ```
+
+The web app lives in `web/` (React, built with Vite). To work on it with hot reload, run
+`ralph ui` against a project and `npm run dev:web`, which proxies the API to port 4280 (or to
+`RALPH_UI_URL`). React and Vite are dev dependencies: the built app ships in `dist/web/`, so
+installing Ralph adds no runtime packages.
 
 `test/helpers/fake-server.ts` is a stand-in for opencode's HTTP API that makes the failure
 paths — retry storms, timeouts, permission policy, stalls — deterministic and fast.

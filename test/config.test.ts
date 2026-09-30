@@ -56,6 +56,21 @@ describe('loadConfig', () => {
     expect(off.timeouts.wrapUpMs).toBe(0);
   });
 
+  it('keeps the web UI off and on loopback unless asked', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280 });
+    const fromEnv = loadConfig({
+      projectRoot: project(),
+      env: { RALPH_UI: '1', RALPH_UI_HOST: '0.0.0.0', RALPH_UI_PORT: '8080' },
+    });
+    expect(fromEnv.ui).toEqual({ enabled: true, host: '0.0.0.0', port: 8080 });
+    const fromFlags = loadConfig({
+      projectRoot: project(),
+      env: { RALPH_UI: '1' },
+      overrides: { ui: { enabled: false, port: 9000 } },
+    });
+    expect(fromFlags.ui).toEqual({ enabled: false, host: '127.0.0.1', port: 9000 });
+  });
+
   it('rejects invalid values with a readable message', () => {
     const root = project();
     writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ maxIterations: -1 }));

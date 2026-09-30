@@ -75,6 +75,16 @@ const PlanSchema = z.object({
   maxFixAttempts: z.number().int().min(0).default(2),
 });
 
+/**
+ * The read-only web UI. `ralph ui` always serves it; `enabled` also starts it
+ * beside the loop. Loopback by default: it has no authentication.
+ */
+const UiSchema = z.object({
+  enabled: z.boolean().default(false),
+  host: z.string().default('127.0.0.1'),
+  port: z.number().int().min(0).max(65535).default(4280),
+});
+
 export const ConfigSchema = z.object({
   projectRoot: z.string(),
   /**
@@ -99,6 +109,7 @@ export const ConfigSchema = z.object({
   permissions: PermissionsSchema.prefault({}),
   git: GitSchema.prefault({}),
   plan: PlanSchema.prefault({}),
+  ui: UiSchema.prefault({}),
   log: z
     .object({
       format: z.enum(['text', 'json']).default('text'),
@@ -110,3 +121,4 @@ export const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
 export type PermissionsConfig = z.infer<typeof PermissionsSchema>;
+export type UiConfig = z.infer<typeof UiSchema>;

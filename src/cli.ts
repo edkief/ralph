@@ -5,6 +5,7 @@ import { startServer } from './opencode/server.js';
 import { preflight } from './opencode/preflight.js';
 import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
+import { runUi, startUiBesideLoop } from './ui/command.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
 import { formatTimestamp } from './report/time.js';
@@ -19,6 +20,7 @@ Usage:
   ralph doctor [options]    Check the environment and exit
   ralph config [options]    Print the resolved configuration
   ralph init [options]      Scaffold .ralph/, then plan the project with the agent
+  ralph ui [options]        Serve the web UI to watch runs and browse .ralph/
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
@@ -36,6 +38,9 @@ Options:
       --no-pin-task         Let the agent choose its own task
       --log-format <fmt>    text | json
       --log-level <level>   debug | info | warn | error
+      --ui                  Also serve the web UI while the loop runs
+      --ui-host <host>      Web UI address (default 127.0.0.1)
+      --ui-port <port>      Web UI port (default 4280)
   -h, --help                Show this help
 
 Exit codes:
@@ -64,6 +69,9 @@ async function main(argv: string[]): Promise<number> {
       'pin-task': { type: 'boolean', default: true },
       'log-format': { type: 'string' },
       'log-level': { type: 'string' },
+      ui: { type: 'boolean' },
+      'ui-host': { type: 'string' },
+      'ui-port': { type: 'string' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
@@ -76,7 +84,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
@@ -90,6 +98,11 @@ async function main(argv: string[]): Promise<number> {
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
     ...(command === 'once' ? { maxIterations: 1 } : {}),
     ...(values.server ? { server: { url: values.server } } : {}),
+    ui: {
+      ...(values.ui !== undefined ? { enabled: values.ui } : {}),
+      ...(values['ui-host'] ? { host: values['ui-host'] } : {}),
+      ...(values['ui-port'] ? { port: Number(values['ui-port']) } : {}),
+    },
     log: {
       ...(values['log-format'] ? { format: values['log-format'] } : {}),
       // Info logs would interleave with the planning conversation.
@@ -128,6 +141,8 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (command === 'ui') return runUi(config, logger);
+
   return runCommand(command, config, logger);
 }
 
@@ -154,7 +169,15 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   process.on('SIGTERM', onTerminate);
   process.on('SIGHUP', onTerminate);
 
-  const server = await startServer(config.server, { cwd: config.projectRoot, logger, ownProcessGroup: true });
+  // Up before the opencode server, so preflight problems are visible in it too.
+  const ui = config.ui.enabled && command !== 'doctor' ? await startUiBesideLoop(config, logger) : undefined;
+  let server: Awaited<ReturnType<typeof startServer>>;
+  try {
+    server = await startServer(config.server, { cwd: config.projectRoot, logger, ownProcessGroup: true });
+  } catch (cause) {
+    await ui?.close();
+    throw cause;
+  }
 
   try {
     const checks = await preflight(config, server.client);
@@ -206,6 +229,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     process.off('SIGHUP', onTerminate);
     logger.beforeWrite(undefined);
     await server.stop();
+    await ui?.close();
   }
 }
 

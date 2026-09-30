@@ -55,6 +55,24 @@ describe('Logger', () => {
   });
 });
 
+describe('Logger sinks', () => {
+  it('receive the lines that pass the level, until detached', () => {
+    const out = capture();
+    const logger = new Logger({ stream: out.stream, level: 'info', now: () => new Date('2026-09-29T12:03:04Z') });
+    const entries: unknown[] = [];
+    const detach = logger.addSink((entry) => entries.push(entry));
+    logger.debug('hidden');
+    logger.warn('push failed', { remote: 'origin' });
+    logger.info('plain');
+    detach();
+    logger.info('after');
+    expect(entries).toEqual([
+      { time: '2026-09-29T12:03:04.000Z', level: 'warn', message: 'push failed', fields: { remote: 'origin' } },
+      { time: '2026-09-29T12:03:04.000Z', level: 'info', message: 'plain' },
+    ]);
+  });
+});
+
 describe('ConsoleReporter', () => {
   it('stamps iteration and status lines', () => {
     const out = capture();
