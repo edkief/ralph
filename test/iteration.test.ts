@@ -255,6 +255,48 @@ describe('runIteration', () => {
       config(),
     );
     expect(result.status).toBe('failed');
+    expect(result.error).toBe('boom');
+  });
+
+  it('classifies a context window overflow that compaction did not save', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.compaction.started', data: { reason: 'auto' } },
+          { type: 'session.compaction.ended', data: { reason: 'auto', text: 'summary', recent: '' } },
+          {
+            type: 'session.step.failed',
+            data: {
+              error: {
+                type: 'unknown',
+                message: "This model's maximum context length is 32768 tokens. Please reduce the length of the messages.",
+              },
+            },
+          },
+          { type: 'session.execution.failed' },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('context-overflow');
+    expect(result.error).toMatch(/maximum context length is 32768 tokens/);
+    expect(result.compactions).toBe(1);
+  });
+
+  it('keeps a failure that is not an overflow as failed, with its reason', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.step.failed', data: { error: { type: 'unknown', message: 'invalid tool schema' } } },
+          { type: 'session.execution.failed' },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('invalid tool schema');
   });
 
   it('sends the configured model and agent with the prompt', async () => {

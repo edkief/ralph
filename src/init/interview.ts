@@ -122,6 +122,7 @@ export async function runInterview(args: {
         return finish({ status: 'aborted' });
       case 'provider-error':
       case 'timeout':
+      case 'context-overflow':
       case 'failed':
         return finish({
           status: 'failed',
