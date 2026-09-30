@@ -72,6 +72,8 @@ ralph doctor                # check the environment, run nothing
 ralph config                # print the resolved configuration
 ralph init                  # scaffold .ralph/, then plan the project with the agent
 ralph ui                    # serve the web UI to watch runs and browse .ralph/
+ralph split TASK-8          # propose splitting a task into smaller ones
+ralph split TASK-8 --apply  # replace it with the proposed tasks and commit
 ralph --ui                  # run the loop and serve the web UI beside it
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
@@ -92,15 +94,15 @@ nothing to get wrong.
 | 3 | Agent raised `DECIDE` |
 | 4 | Bad configuration or failed preflight |
 | 5 | Model provider or opencode server unusable |
-| 6 | Stalled: iterations stopped changing anything |
+| 6 | Stalled: iterations stopped changing anything, or a task kept running out of time |
 | 130 | Interrupted, or stopped on request |
 
 ### Web UI
 
 A read-only web UI shows what the loop is doing, at <http://127.0.0.1:4280> by default:
 
-- **Overview**: tasks passing out of the total, the run's status, and each iteration's outcome,
-  duration, tool calls, tokens and changes
+- **Overview**: tasks passing out of the total (and which task a split one came from), the
+  run's status, and each iteration's outcome, duration, tool calls, tokens and changes
 - **Transcript**: the iteration in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier iteration of any run
 - **Logs**: Ralph's own log for each run, filterable by level
@@ -145,12 +147,13 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   STEERING.md      # optional — work to do before feature tasks
   logs/LOG.md      # optional — the agent's own running log
   handoff/         # written when a task runs out of time; commit it with the work
+  split/           # proposed and applied splits of tasks that kept running out of time
   history/         # written by ralph; ignore it in git
 ralph.config.json  # optional
 ```
 
 A task needs only an `id` and a `passes` flag; `title` and `specFilePath` are used when
-present. A `{ "tasks": [...] }` wrapper is accepted in place of a bare array.
+present. Ralph adds `splitFrom` and `splitDepth` to tasks it creates by splitting another. A `{ "tasks": [...] }` wrapper is accepted in place of a bare array.
 
 `PROMPT.md` can write `{{RALPH_DIR}}` wherever it refers to the folder; Ralph replaces it with
 the resolved folder, relative to the project root, so the prompt follows `ralphDir`.
@@ -209,7 +212,9 @@ See `templates/ralph.config.json` for a complete file.
   },
   "stall": {
     "maxUnproductiveIterations": 3,
-    "maxTimeoutsPerTask": 2        // a task that runs out of time or context this often stops the run
+    "maxTimeoutsPerTask": 2,       // a task that runs out of time or context this often has stalled
+    "onRepeatedTimeout": "propose", // then: stop | propose a split and stop | split it and carry on
+    "maxSplitDepth": 1             // how often a task and its descendants may be split
   },
   "permissions": {
     "fallback": "allow",           // unattended runs need to proceed without a human
@@ -315,10 +320,10 @@ Every prompt also states the time budget and when it ends, and asks for checkpoi
 so that running out of time costs little.
 
 An iteration that wrapped up is not retried; the next one resumes from the handoff. Handoff
-changes alone do not count as progress, and a task that runs out of time
-`stall.maxTimeoutsPerTask` times (default 2) stops the run as stalled, since it is probably
-too big for one iteration and needs splitting. Set `wrapUpMs: 0` to interrupt outright as
-before; the handoff is still written.
+changes alone do not count as progress. A task that runs out of time
+`stall.maxTimeoutsPerTask` times (default 2) has stalled: it is probably too big for one
+iteration and needs splitting (see below). Set `wrapUpMs: 0` to interrupt outright as before;
+the handoff is still written.
 
 ### Running out of context
 
@@ -338,10 +343,49 @@ message as its error. Ralph treats it like running out of time: it writes the ha
 what it saw, adds advice to keep the next session lean, and retries in a fresh session that
 resumes from the handoff. There is no wrap-up turn, since the full session has no room left for
 one. Overflows count toward `stall.maxTimeoutsPerTask` along with timeouts, so a task too big
-for one context stops the run with advice to split it.
+for one context is split like one too big for the time budget.
 
 Compaction sends no events until it is done, so the inactivity watchdog does not trip while it
 runs; the iteration and wrap-up budgets still apply. Iteration records count the compactions.
+
+### Splitting a stalled task
+
+`stall.onRepeatedTimeout` decides what becomes of a task that stalled:
+
+| Value | What happens |
+| --- | --- |
+| `stop` | The run stops as `stalled` (exit 6), leaving the split to you. |
+| `propose` (default) | Ralph has the agent propose a split, then stops as `stalled` for you to review it. |
+| `split` | Ralph has the agent propose a split, applies it, commits it and carries on. |
+
+The proposal comes from a split turn: a session of its own, run with `plan.model` (falling back
+to `model`), whose file writes are confined to `.ralph/split/TASK-8/`. It is given the task's
+spec, its handoff and the commits that mention it, and either writes a spec per new task,
+`TASK-8.1.json`, `TASK-8.2.json`, … covering only the work that is left, plus a
+`proposal.json` listing them in order; or writes a `proposal.json` with `"splittable": false`
+and the reason, when a split would not help. Ralph checks the proposal like a plan and sends it
+back to the agent up to twice to fix problems.
+
+Applying a split replaces the task in `tasks.json` with the new ones, in its place so they come
+next, and moves their specs next to the old spec. The old spec and its handoff move into
+`.ralph/split/TASK-8/`, which stays as the record of the split. The change is committed as
+`chore(plan): split TASK-8 into TASK-8.1 and TASK-8.2`. Proposed specs are plain files: edit
+them before applying if they need it.
+
+A split is not tried, and the run stops, when:
+
+- every attempt went quiet rather than ran out of time or context: a command probably hangs,
+  which smaller tasks would hit too;
+- the task was already split `stall.maxSplitDepth` times (default 1), counting its ancestors;
+  0 turns splitting off;
+- the agent advises against it, giving its reason as the run's message.
+
+`ralph split TASK-8` does the same on demand: it shows the proposal in `.ralph/split/TASK-8/`,
+having the agent write one first if there is none, and `--apply` applies it. It exits 0 once
+proposed or applied, 4 for an unknown task or a proposal with problems, 5 when the agent could
+not propose one, and 6 when it advises against splitting. Delete the folder to have the agent
+propose again. `ralph doctor` warns about a split proposed but not applied, since the loop
+would run the task as it is.
 
 Permission requests are answered from policy, never left waiting for a human. Deny rules beat
 allow rules, so a broad allow list cannot re-enable something explicitly forbidden.
@@ -354,6 +398,8 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
   plus the wrap-up and who wrote the handoff when it ran out of time or context
 - `log.jsonl` — Ralph's log lines, at the configured level
+- `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome
+- `split-TASK-x.events.jsonl` — every event of that split turn
 - `state.json` — where the run stands (status, iteration, task, pid), rewritten as it goes
 - `run.json` — the run summary, once the run ends
 
