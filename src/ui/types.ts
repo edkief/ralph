@@ -199,3 +199,66 @@ export interface LiveEvents {
   log: { runId: string; reset: boolean; lines: LogLine[] };
   transcript: LiveTranscript;
 }
+
+/** A file that differs from the last commit. */
+export interface GitFileChange {
+  /** Relative to the repository's root. */
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted';
+  /** Some of the change is in the index. */
+  staged: boolean;
+  /** Some of the change is only in the working tree. */
+  unstaged: boolean;
+  /** The path it was renamed or copied from. */
+  from?: string;
+}
+
+export interface GitCommitSummary {
+  hash: string;
+  shortHash: string;
+  author: string;
+  /** ISO 8601, as the author's clock had it. */
+  date: string;
+  subject: string;
+}
+
+/** The project's repository, or why there is nothing to show of it. */
+export type GitView =
+  | { available: false; reason: string }
+  | {
+      available: true;
+      /** Null when HEAD is detached. */
+      branch: string | null;
+      /** The commit checked out; null before the first commit. */
+      head: string | null;
+      upstream: string | null;
+      /** Commits the branch has that its upstream lacks, and the reverse, as of the last fetch. */
+      ahead: number;
+      behind: number;
+      changes: GitFileChange[];
+      /** Only the first part of a long list of changes is returned. */
+      changesTruncated: boolean;
+      /** The latest commits, newest first. */
+      commits: GitCommitSummary[];
+    };
+
+export interface GitFileStat {
+  path: string;
+  from?: string;
+  added: number;
+  removed: number;
+  /** Git counts no lines for it. */
+  binary: boolean;
+}
+
+export interface GitCommitDetail extends GitCommitSummary {
+  parents: string[];
+  email: string;
+  /** The message after its subject. */
+  body: string;
+  /** Only the first part of a long list of files is returned; the totals count them all. */
+  files: GitFileStat[];
+  filesChanged: number;
+  added: number;
+  removed: number;
+}

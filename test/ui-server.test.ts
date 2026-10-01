@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
-import type { FileContent, LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
+import type { FileContent, GitCommitDetail, GitView, LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const LIVE_RUN = '20260930-120000';
@@ -642,3 +642,156 @@ describe('web UI actions', () => {
 function rmAnswer(root: string): void {
   rmSync(resolve(root, '.ralph', 'history', 'answer.json'), { force: true });
 }
+
+describe('web UI git', () => {
+  type Repository = Extract<GitView, { available: true }>;
+
+  const git = (root: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: root,
+      encoding: 'utf8',
+    }).trim();
+
+  /** A project under git with three commits: a first one, a change with a body, and a rename beside a binary file. */
+  function repository(): string {
+    const root = project();
+    git(root, 'init', '-q', '-b', 'main');
+    writeFileSync(resolve(root, 'a.txt'), 'one\ntwo\nthree\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'first');
+    writeFileSync(resolve(root, 'a.txt'), 'one\n2\nthree\nfour\n');
+    git(root, 'commit', '-qam', 'change a', '-m', 'Why it changed.\n\nAnd more.');
+    git(root, 'mv', 'a.txt', 'renamed file.txt');
+    writeFileSync(resolve(root, 'pixel.png'), PNG);
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'move a, add a picture');
+    return root;
+  }
+
+  it('reports the branch, a clean tree and the commits, newest first', async () => {
+    const root = repository();
+    await start(root);
+    const { status, body } = await get<Repository>('/api/git');
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ available: true, branch: 'main', upstream: null, ahead: 0, behind: 0, changes: [], changesTruncated: false });
+    expect(body.head).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(body.commits.map((commit) => commit.subject)).toEqual(['move a, add a picture', 'change a', 'first']);
+    expect(body.commits[0]).toMatchObject({ hash: body.head, shortHash: git(root, 'rev-parse', '--short', 'HEAD'), author: 'Test' });
+    expect(Number.isNaN(Date.parse(body.commits[0]!.date))).toBe(false);
+  });
+
+  it('lists what is uncommitted, staged or not', async () => {
+    const root = repository();
+    writeFileSync(resolve(root, 'renamed file.txt'), 'changed\n');
+    writeFileSync(resolve(root, 'new.txt'), 'new\n');
+    writeFileSync(resolve(root, 'staged.txt'), 'staged\n');
+    git(root, 'add', 'staged.txt');
+    git(root, 'mv', 'pixel.png', 'dot.png');
+    rmSync(resolve(root, 'ralph.config.json'));
+    await start(root);
+
+    const { changes } = (await get<Repository>('/api/git')).body;
+    expect([...changes].sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'dot.png', status: 'renamed', staged: true, unstaged: false, from: 'pixel.png' },
+      { path: 'new.txt', status: 'untracked', staged: false, unstaged: true },
+      { path: 'ralph.config.json', status: 'deleted', staged: false, unstaged: true },
+      { path: 'renamed file.txt', status: 'modified', staged: false, unstaged: true },
+      { path: 'staged.txt', status: 'added', staged: true, unstaged: false },
+    ]);
+  });
+
+  it('reports how far the branch is from its upstream, and a detached head', async () => {
+    const root = repository();
+    git(root, 'branch', 'base', 'HEAD~1');
+    git(root, 'branch', '--set-upstream-to=base');
+    await start(root);
+    expect((await get<Repository>('/api/git')).body).toMatchObject({ branch: 'main', upstream: 'base', ahead: 1, behind: 0 });
+
+    git(root, 'checkout', '-q', '--detach', 'HEAD~2');
+    const detached = (await get<Repository>('/api/git')).body;
+    expect(detached).toMatchObject({ branch: null, upstream: null });
+    expect(detached.commits.map((commit) => commit.subject)).toEqual(['first']);
+  });
+
+  it('shows a commit with its message and the files it changed', async () => {
+    const root = repository();
+    await start(root);
+
+    const changed = await get<GitCommitDetail>(`/api/git/commits/${git(root, 'rev-parse', '--short', 'HEAD~1')}`);
+    expect(changed.status).toBe(200);
+    expect(changed.body).toMatchObject({
+      hash: git(root, 'rev-parse', 'HEAD~1'),
+      subject: 'change a',
+      body: 'Why it changed.\n\nAnd more.',
+      author: 'Test',
+      email: 'test@example.com',
+      parents: [git(root, 'rev-parse', 'HEAD~2')],
+      files: [{ path: 'a.txt', added: 2, removed: 1, binary: false }],
+      filesChanged: 1,
+      added: 2,
+      removed: 1,
+    });
+
+    const moved = (await get<GitCommitDetail>(`/api/git/commits/${git(root, 'rev-parse', 'HEAD')}`)).body;
+    expect(moved.body).toBe('');
+    expect(moved.files).toEqual([
+      { path: 'pixel.png', added: 0, removed: 0, binary: true },
+      { path: 'renamed file.txt', from: 'a.txt', added: 0, removed: 0, binary: false },
+    ]);
+
+    const first = (await get<GitCommitDetail>(`/api/git/commits/${git(root, 'rev-parse', 'HEAD~2')}`)).body;
+    expect(first.parents).toEqual([]);
+    expect(first.files.map((file) => file.path)).toContain('a.txt');
+  });
+
+  it('compares a merge with its first parent', async () => {
+    const root = repository();
+    git(root, 'checkout', '-q', '-b', 'side', 'HEAD~1');
+    writeFileSync(resolve(root, 'side.txt'), 'side\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'side');
+    git(root, 'checkout', '-q', 'main');
+    git(root, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+    await start(root);
+
+    const merge = (await get<GitCommitDetail>(`/api/git/commits/${git(root, 'rev-parse', 'HEAD')}`)).body;
+    expect(merge.parents).toHaveLength(2);
+    expect(merge.files).toEqual([{ path: 'side.txt', added: 1, removed: 0, binary: false }]);
+  });
+
+  it('takes only a hash for a commit, and says when there is none', async () => {
+    const root = repository();
+    await start(root);
+
+    for (const name of ['HEAD', 'main', '--all', 'a;b', 'HEAD~1', 'abc']) {
+      expect((await get(`/api/git/commits/${encodeURIComponent(name)}`)).status).toBe(400);
+    }
+    expect((await get('/api/git/commits/0123456789abcdef0123456789abcdef01234567')).status).toBe(404);
+    expect(await raw('/api/git', { method: 'POST' })).toBe(405);
+    expect(await raw(`/api/git/commits/${git(root, 'rev-parse', 'HEAD')}`, { method: 'POST' })).toBe(405);
+    expect(await raw('/api/git', { host: 'attacker.example' })).toBe(403);
+  });
+
+  it('says so when the project is not a repository, or has no commit yet', async () => {
+    const root = project();
+    await start(root);
+    const none = await get<GitView>('/api/git');
+    expect(none.status).toBe(200);
+    expect(none.body).toEqual({ available: false, reason: 'The project is not a git repository' });
+    expect((await get('/api/git/commits/abcd1234')).status).toBe(404);
+    expect((await get<StatusView>('/api/status')).body.tasks.total).toBe(2);
+
+    git(root, 'init', '-q', '-b', 'main');
+    const empty = (await get<Repository>('/api/git')).body;
+    expect(empty).toMatchObject({ available: true, branch: 'main', head: null, commits: [] });
+    expect(empty.changes.some((change) => change.path === 'ralph.config.json' && change.status === 'untracked')).toBe(true);
+  });
+
+  it('serves the repository under a proxy prefix', async () => {
+    const root = repository();
+    await start(root, { basePath: '/ralph/ws-1' });
+    expect((await get<Repository>('/ralph/ws-1/api/git')).body.commits).toHaveLength(3);
+    expect((await get(`/ralph/ws-1/api/git/commits/${git(root, 'rev-parse', 'HEAD')}`)).status).toBe(200);
+  });
+});

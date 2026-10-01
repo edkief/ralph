@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
+import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
 import { MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
@@ -69,8 +70,9 @@ export function isLoopback(host: string): boolean {
 
 /**
  * Serve the web UI and its API. Everything is read from the project's Ralph
- * folder on each request, and actions reach the loop through files there, so
- * the server needs nothing from the loop and can run beside it or on its own.
+ * folder, and from its repository for the Git view, on each request, and
+ * actions reach the loop through files there, so the server needs nothing
+ * from the loop and can run beside it or on its own.
  *
  * Reading is open to whoever can reach the server. Actions change what the
  * agent does (an answer ends up in its prompt), so they are held to more:
@@ -144,6 +146,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/file/raw') return sendImage(res, project.imageFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
     if (path === '/api/live') return live(req, res);
+    if (path === '/api/git') return gitStatus(options.projectRoot).then((view) => sendJson(res, 200, view));
+
+    const commit = /^\/api\/git\/commits\/([^/]+)$/.exec(path);
+    if (commit) {
+      const hash = decodeURIComponent(commit[1]!);
+      if (!COMMIT_HASH.test(hash)) throw new RequestError(400, 'A commit is named by its hash');
+      return gitCommit(options.projectRoot, hash).then((detail) => sendJson(res, 200, detail));
+    }
 
     const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript|\/splits\/([^/]+)\/transcript)?$/.exec(path);
     if (run) {
