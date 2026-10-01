@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useLive, useNow, type StatusView } from './api';
 import { formatDuration, statusLabel, statusTone } from './format';
 import { Overview } from './views/Overview';
+import { Tasks } from './views/Tasks';
 import { Transcript } from './views/Transcript';
 import { Logs } from './views/Logs';
 import { Files } from './views/Files';
@@ -55,6 +56,8 @@ export function App() {
           <div className="empty">{live.connected ? 'Loading…' : 'Connecting to Ralph…'}</div>
         ) : route.tab === 'overview' ? (
           <Overview status={status} />
+        ) : route.tab === 'tasks' ? (
+          <Tasks status={status} />
         ) : route.tab === 'transcript' ? (
           <Transcript status={status} live={live.transcript} selected={route.rest} />
         ) : route.tab === 'logs' ? (

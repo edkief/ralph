@@ -2,6 +2,10 @@ import { Fragment } from 'react';
 import { useJson, useNow, type RunDetail, type SplitView, type StatusView } from '../api';
 import { formatCount, formatDateTime, formatDuration, formatRunId, statusLabel, statusTone } from '../format';
 import { href } from '../route';
+import { TaskRow, activeTaskId } from './TaskRow';
+
+/** Tasks listed under the iterations; the Tasks tab has them all. */
+const UP_NEXT = 5;
 
 export function Overview({ status }: { status: StatusView }) {
   const { tasks, run } = status;
@@ -11,6 +15,10 @@ export function Overview({ status }: { status: StatusView }) {
   const iterations = detail.data?.iterations ?? [];
   const splits = detail.data?.splits ?? [];
   const splitting = run?.live ? run.split : null;
+  const active = activeTaskId(status);
+  const remaining = tasks.items.filter((task) => !task.passes);
+  // The task in progress first, even when the agent picked one further down the list.
+  const upNext = [...remaining.filter((task) => task.id === active), ...remaining.filter((task) => task.id !== active)].slice(0, UP_NEXT);
   const totalTokens = iterations.reduce((sum, iteration) => sum + (iteration.tokens ?? 0), 0);
   const runStatus = run ? (run.status === 'running' && !run.live ? 'ended' : run.status) : null;
 
@@ -18,7 +26,9 @@ export function Overview({ status }: { status: StatusView }) {
     <div className="stack">
       <section className="cards">
         <div className="card">
-          <div className="card-label">Tasks passing</div>
+          <div className="card-label">
+            <a href={href('tasks')}>Tasks passing</a>
+          </div>
           <div className="card-value">
             {tasks.passed}
             <span className="muted"> / {tasks.total}</span>
@@ -69,104 +79,99 @@ export function Overview({ status }: { status: StatusView }) {
         </div>
       ) : null}
 
-      <div className="split">
-        <section className="panel">
-          <h2 className="panel-title">Tasks</h2>
-          {tasks.items.length === 0 ? (
-            <div className="empty small">No tasks in tasks.json</div>
-          ) : (
-            <ul className="task-list">
-              {tasks.items.map((task) => {
-                const state = task.passes ? 'done' : task.id === (run?.live ? run.taskId : tasks.next) ? 'active' : 'todo';
-                return (
-                  <li key={task.id} className={`task ${state}`}>
-                    <span className="task-state" aria-label={state === 'done' ? 'passing' : state === 'active' ? 'in progress' : 'to do'}>
-                      {state === 'done' ? '✓' : state === 'active' ? '▶' : '○'}
-                    </span>
-                    <span className="task-id">{task.id}</span>
-                    <span className="task-title">{task.title || <span className="muted">untitled</span>}</span>
-                    {task.splitFrom ? (
-                      <span className="task-split" title={`Split from ${task.splitFrom}, which kept running out of time`}>
-                        from {task.splitFrom}
-                      </span>
-                    ) : null}
-                    {task.category ? <span className="task-category">{task.category}</span> : null}
-                    {task.specFilePath ? (
-                      <a className="task-spec" href={href('files', task.specFilePath)} title="Open the spec">
-                        spec
-                      </a>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        <section className="panel">
-          <h2 className="panel-title">
-            Iterations
-            {run ? <span className="panel-subtitle">run {formatRunId(run.runId)}</span> : null}
-          </h2>
-          {iterations.length === 0 ? (
-            <div className="empty small">{run ? 'No iterations yet' : 'No runs yet'}</div>
-          ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
+      <section className="panel">
+        <h2 className="panel-title">
+          Iterations
+          {run ? <span className="panel-subtitle">run {formatRunId(run.runId)}</span> : null}
+        </h2>
+        {iterations.length === 0 ? (
+          <div className="empty small">{run ? 'No iterations yet' : 'No runs yet'}</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Task</th>
+                  <th>Outcome</th>
+                  <th className="num">Time</th>
+                  <th className="num">Tools</th>
+                  <th className="num">Tokens</th>
+                  <th>Changes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...iterations].reverse().map((iteration) => (
+                  <Fragment key={iteration.iteration}>
+                  {splits
+                    .filter((split) => split.iteration === iteration.iteration)
+                    .map((split) => (
+                      <SplitRow key={split.taskId} runId={run!.runId} split={split} now={now} />
+                    ))}
                   <tr>
-                    <th>#</th>
-                    <th>Task</th>
-                    <th>Outcome</th>
-                    <th className="num">Time</th>
-                    <th className="num">Tools</th>
-                    <th className="num">Tokens</th>
-                    <th>Changes</th>
+                    <td>
+                      <a href={href('transcript', `${run!.runId}/${iteration.iteration}`)} title="Open the transcript">{iteration.iteration}</a>
+                    </td>
+                    <td>{iteration.taskId ?? '–'}</td>
+                    <td>
+                      <span className={`badge tone-${statusTone(iteration.status)}`} title={iteration.error}>
+                        {iteration.status === 'running' ? <span className="pulse" /> : null}
+                        {statusLabel(iteration.status)}
+                      </span>
+                    </td>
+                    <td className="num">
+                      {iteration.status === 'running' && iteration.startedAt
+                        ? formatDuration(now - Date.parse(iteration.startedAt))
+                        : formatDuration(iteration.durationMs)}
+                    </td>
+                    <td className="num">{iteration.toolCalls ?? '–'}</td>
+                    <td className="num">{formatCount(iteration.tokens)}</td>
+                    <td>
+                      <div className="changes">
+                      {iteration.committed ? <span className="pill">commit</span> : null}
+                      {iteration.tasksPassedDelta > 0 ? <span className="pill good">+{iteration.tasksPassedDelta} task</span> : null}
+                      {iteration.compactions > 0 ? <span className="pill">compacted ×{iteration.compactions}</span> : null}
+                      {iteration.handoff ? <span className="pill warn">handoff</span> : null}
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {[...iterations].reverse().map((iteration) => (
-                    <Fragment key={iteration.iteration}>
-                    {splits
-                      .filter((split) => split.iteration === iteration.iteration)
-                      .map((split) => (
-                        <SplitRow key={split.taskId} runId={run!.runId} split={split} now={now} />
-                      ))}
-                    <tr>
-                      <td>
-                        <a href={href('transcript', `${run!.runId}/${iteration.iteration}`)} title="Open the transcript">{iteration.iteration}</a>
-                      </td>
-                      <td>{iteration.taskId ?? '–'}</td>
-                      <td>
-                        <span className={`badge tone-${statusTone(iteration.status)}`} title={iteration.error}>
-                          {iteration.status === 'running' ? <span className="pulse" /> : null}
-                          {statusLabel(iteration.status)}
-                        </span>
-                      </td>
-                      <td className="num">
-                        {iteration.status === 'running' && iteration.startedAt
-                          ? formatDuration(now - Date.parse(iteration.startedAt))
-                          : formatDuration(iteration.durationMs)}
-                      </td>
-                      <td className="num">{iteration.toolCalls ?? '–'}</td>
-                      <td className="num">{formatCount(iteration.tokens)}</td>
-                      <td>
-                        <div className="changes">
-                        {iteration.committed ? <span className="pill">commit</span> : null}
-                        {iteration.tasksPassedDelta > 0 ? <span className="pill good">+{iteration.tasksPassedDelta} task</span> : null}
-                        {iteration.compactions > 0 ? <span className="pill">compacted ×{iteration.compactions}</span> : null}
-                        {iteration.handoff ? <span className="pill warn">handoff</span> : null}
-                        </div>
-                      </td>
-                    </tr>
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2 className="panel-title">
+          Up next
+          <span className="panel-subtitle">
+            {tasks.passed} of {tasks.total} tasks passing
+          </span>
+          <a className="panel-link" href={href('tasks')}>
+            All tasks
+          </a>
+        </h2>
+        {tasks.items.length === 0 ? (
+          <div className="empty small">No tasks in tasks.json</div>
+        ) : upNext.length === 0 ? (
+          <div className="empty small">Backlog complete</div>
+        ) : (
+          <ul className="task-list">
+            {upNext.map((task) => (
+              <TaskRow key={task.id} task={task} active={task.id === active} />
+            ))}
+            {remaining.length > upNext.length ? (
+              <li className="task more">
+                <a href={href('tasks')}>
+                  {remaining.length - upNext.length} more to do
+                </a>
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

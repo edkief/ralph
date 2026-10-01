@@ -306,13 +306,6 @@ pre {
   text-overflow: ellipsis;
 }
 
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-  gap: 16px;
-  align-items: start;
-}
-
 .panel {
   padding: 4px 0 8px;
   min-width: 0;
@@ -332,6 +325,16 @@ pre {
   font-weight: 450;
   color: var(--muted);
   font-size: 12px;
+}
+
+.panel-link {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.card-label a {
+  color: inherit;
 }
 
 .empty {
@@ -529,6 +532,11 @@ pre {
   font-size: 11px;
   color: var(--muted);
   flex: none;
+}
+
+.task.more {
+  font-size: 12px;
+  padding-left: 42px;
 }
 
 .task-spec {
@@ -1059,10 +1067,6 @@ article.markdown h2 {
 @media (max-width: 1000px) {
   .cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .split {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
