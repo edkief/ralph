@@ -1,12 +1,12 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { sleep } from '../opencode/server.js';
 
 /**
  * How the loop and a person talk when the loop cannot go on alone. The loop
- * writes a request to `pending.json`; the web UI or `ralph respond` writes the
- * answer to `answer.json`; the loop reads it and removes both. Files, so the
+ * writes a request to `history/pending.json`; the web UI or `ralph respond` writes
+ * the answer to `history/answer.json`; the loop reads it and removes both. Files, so the
  * UI may run in another process or container that shares only the Ralph folder.
  */
 
@@ -77,9 +77,11 @@ export class RespondError extends Error {
 export const STOP_MODES = ['after-iteration', 'now'] as const;
 export type StopMode = (typeof STOP_MODES)[number];
 
-export const pendingPath = (ralphRoot: string) => resolve(ralphRoot, 'pending.json');
-export const answerPath = (ralphRoot: string) => resolve(ralphRoot, 'answer.json');
-export const stopPath = (ralphRoot: string) => resolve(ralphRoot, 'stop.json');
+// Beside the runs in history/, which projects already keep out of git: these
+// come and go, and a commit of one would look like progress to the loop.
+export const pendingPath = (ralphRoot: string) => resolve(ralphRoot, 'history', 'pending.json');
+export const answerPath = (ralphRoot: string) => resolve(ralphRoot, 'history', 'answer.json');
+export const stopPath = (ralphRoot: string) => resolve(ralphRoot, 'history', 'stop.json');
 
 /**
  * What a person may do about a request. A loop that is waiting can be told
@@ -139,6 +141,7 @@ export function writeAnswer(ralphRoot: string, answer: Answer): void {
   if (existing?.id === answer.id) throw new RespondError('That request was already answered', 'conflict');
   // An answer to an older request, never collected.
   if (existsSync(path)) rmSync(path, { force: true });
+  mkdirSync(dirname(path), { recursive: true });
   try {
     writeFileSync(path, `${JSON.stringify(answer, null, 2)}\n`, { flag: 'wx' });
   } catch (cause) {
@@ -187,6 +190,7 @@ export function clearStopRequest(ralphRoot: string): void {
 
 /** Replace `path` in one step, so a reader never sees half of it. */
 function writeAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(`${path}.tmp`, `${JSON.stringify(value, null, 2)}\n`);
   renameSync(`${path}.tmp`, path);
 }

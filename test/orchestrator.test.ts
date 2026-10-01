@@ -839,7 +839,7 @@ describe('runLoop', () => {
 
       expect(result.status).toBe('stopped');
       expect(server?.prompts).toHaveLength(1);
-      expect(existsSync(resolve(root, '.ralph', 'stop.json'))).toBe(false);
+      expect(existsSync(resolve(root, '.ralph', 'history', 'stop.json'))).toBe(false);
     });
 
     it('leaves the request but exits when the run does not wait', async () => {

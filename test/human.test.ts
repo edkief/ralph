@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -57,8 +57,9 @@ describe('requests for a person', () => {
 
   it('ignores files that are not what it wrote', () => {
     const root = folder();
-    writeFileSync(resolve(root, 'pending.json'), '{"kind":"nonsense"}');
-    writeFileSync(resolve(root, 'answer.json'), 'not json');
+    mkdirSync(resolve(root, 'history'));
+    writeFileSync(resolve(root, 'history', 'pending.json'), '{"kind":"nonsense"}');
+    writeFileSync(resolve(root, 'history', 'answer.json'), 'not json');
     expect(readPending(root)).toBeUndefined();
     expect(readAnswer(root)).toBeUndefined();
   });
@@ -118,7 +119,7 @@ describe('requests for a person', () => {
     expect(readStopRequest(root)).toBeUndefined();
     requestStop(root, 'now', 'ui');
     expect(readStopRequest(root)).toEqual({ mode: 'now' });
-    expect(JSON.parse(readFileSync(resolve(root, 'stop.json'), 'utf8'))).toMatchObject({ by: 'ui' });
+    expect(JSON.parse(readFileSync(resolve(root, 'history', 'stop.json'), 'utf8'))).toMatchObject({ by: 'ui' });
   });
 });
 

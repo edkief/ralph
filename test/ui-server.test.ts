@@ -568,8 +568,8 @@ describe('web UI actions', () => {
     expect(refused.body.error).toContain('no ui.token is set');
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(403);
     expect((await get<StatusView>('/api/status')).body.actions).toMatchObject({ enabled: false, token: false });
-    expect(existsSync(resolve(root, '.ralph', 'answer.json'))).toBe(false);
-    expect(existsSync(resolve(root, '.ralph', 'stop.json'))).toBe(false);
+    expect(existsSync(resolve(root, '.ralph', 'history', 'answer.json'))).toBe(false);
+    expect(existsSync(resolve(root, '.ralph', 'history', 'stop.json'))).toBe(false);
   });
 
   it('requires the token when one is set', async () => {
@@ -595,5 +595,5 @@ describe('web UI actions', () => {
 });
 
 function rmAnswer(root: string): void {
-  rmSync(resolve(root, '.ralph', 'answer.json'), { force: true });
+  rmSync(resolve(root, '.ralph', 'history', 'answer.json'), { force: true });
 }
