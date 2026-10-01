@@ -55,6 +55,12 @@ export interface RunState {
   lastStatus: IterationStatus | null;
   tasksPassed: number;
   tasksTotal: number;
+  /**
+   * The split turn in progress. Stays set once that turn ends, until the next
+   * iteration starts, so a run that stops on a proposal still names its last
+   * session. Absent from runs recorded before split turns were tracked.
+   */
+  split?: { taskId: string; startedAt: string } | null;
   message?: string;
 }
 
