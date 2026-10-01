@@ -10,6 +10,12 @@ export class OpencodeApiError extends Error {
   }
 }
 
+/** The parts of the server's live OpenAPI document that preflight reads. */
+export interface OpenApiSpec {
+  paths: Record<string, Record<string, { operationId?: string; requestBody?: unknown }>>;
+  components?: { schemas?: Record<string, unknown> };
+}
+
 export interface ClientOptions {
   baseUrl: string;
   password?: string;
@@ -62,7 +68,7 @@ export class OpencodeClient {
         if (!operation) return false;
         // The request body may be a $ref into the shared schemas.
         const text = JSON.stringify(operation);
-        const schemas = (spec as { components?: { schemas?: Record<string, unknown> } }).components?.schemas;
+        const schemas = spec.components?.schemas;
         const referenced = [...text.matchAll(/#\/components\/schemas\/([\w.-]+)/g)].map((match) =>
           JSON.stringify(schemas?.[match[1]!] ?? {}),
         );
@@ -72,7 +78,7 @@ export class OpencodeClient {
     return this.steering;
   }
 
-  async openapi(): Promise<{ paths: Record<string, Record<string, { operationId?: string }>> }> {
+  async openapi(): Promise<OpenApiSpec> {
     return this.json('GET', '/openapi.json');
   }
 

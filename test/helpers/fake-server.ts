@@ -68,7 +68,9 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     }
 
     if (path === '/api/location') return json(res, { directory: '/fake/project' });
-    if (path === '/openapi.json') return json(res, fakeSpec(options.steer === true));
+    if (path === '/openapi.json') {
+      return json(res, fakeSpec(options.steer === true, options.replyField ?? 'decision'));
+    }
     if (path === '/api/skill') return json(res, { data: [{ name: 'test-skill' }] });
     if (path === '/api/model/default') {
       return json(res, { data: { providerID: 'fake', modelID: 'model' } });
@@ -207,7 +209,7 @@ async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unkn
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
-function fakeSpec(steer: boolean) {
+function fakeSpec(steer: boolean, replyField: string) {
   const op = (operationId: string) => ({ post: { operationId } });
   // Shaped like the real spec: the body schema sits behind a $ref.
   const prompt = steer
@@ -221,7 +223,22 @@ function fakeSpec(steer: boolean) {
       '/api/session': op('session.create'),
       '/api/session/{sessionID}/prompt': prompt,
       '/api/session/{sessionID}/interrupt': op('session.interrupt'),
-      '/api/session/{sessionID}/permission/{requestID}/reply': op('session.permission.reply'),
+      '/api/session/{sessionID}/permission/{requestID}/reply': {
+        post: {
+          operationId: 'session.permission.reply',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { [replyField]: { type: 'string' }, message: { type: 'string' } },
+                  required: [replyField],
+                },
+              },
+            },
+          },
+        },
+      },
       '/api/event': { get: { operationId: 'event.subscribe' } },
     },
   };
