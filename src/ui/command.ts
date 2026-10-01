@@ -12,13 +12,16 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     port: config.ui.port,
     basePath: config.ui.basePath,
     ...(config.ui.token ? { token: config.ui.token } : {}),
+    openActions: config.ui.actions === 'open',
     logger,
   });
   if (!isLoopback(config.ui.host)) {
     logger.warn(
       config.ui.token
         ? 'the web UI is reachable from other hosts and reading it needs no authentication; transcripts may contain secrets'
-        : 'the web UI is reachable from other hosts and reading it needs no authentication; transcripts may contain secrets. Actions are off until ui.token is set',
+        : config.ui.actions === 'open'
+          ? 'the web UI is reachable from other hosts and neither reading it nor acting needs authentication: anyone who can reach it can read transcripts, which may contain secrets, answer the agent and stop the run'
+          : 'the web UI is reachable from other hosts and reading it needs no authentication; transcripts may contain secrets. Actions are off until ui.token is set, or ui.actions is "open"',
       { host: config.ui.host },
     );
   }

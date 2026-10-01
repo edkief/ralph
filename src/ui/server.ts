@@ -51,6 +51,8 @@ export interface UiServerOptions {
   basePath?: string;
   /** The secret requests for actions must carry; without one, actions are only taken on loopback. */
   token?: string;
+  /** Take actions from other hosts without a token: access to the UI is controlled in front of it. */
+  openActions?: boolean;
   logger: Logger;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
@@ -76,7 +78,8 @@ export function isLoopback(host: string): boolean {
  *
  * Reading is open to whoever can reach the server. Actions change what the
  * agent does (an answer ends up in its prompt), so they are held to more:
- * only on loopback or with a token, and only from the UI's own pages.
+ * only on loopback, with a token, or where whoever runs the UI has said its
+ * access is controlled elsewhere, and only from the UI's own pages.
  */
 export async function startUiServer(options: UiServerOptions): Promise<UiServer> {
   const project = new RalphProject(options.projectRoot, options.ralphDir);
@@ -87,11 +90,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const streams = new Set<() => void>();
   const token = options.token;
   const actions: ActionsView =
-    loopbackOnly || token
+    loopbackOnly || token || options.openActions
       ? { enabled: true, token: Boolean(token) }
       : {
           enabled: false,
-          reason: 'Actions are off: the web UI is reachable from other hosts and no ui.token is set',
+          reason:
+            'Actions are off: the web UI is reachable from other hosts and no ui.token is set. Set one, or set ui.actions to "open" if access to the UI is controlled in front of it',
           token: false,
         };
   const status = (): StatusView => ({ ...project.status(), actions });

@@ -96,7 +96,7 @@ function patchState(root: string, patch: Record<string, unknown>): void {
   writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), ...patch }));
 }
 
-async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string; token?: string } = {}): Promise<UiServer> {
+async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string; token?: string; openActions?: boolean } = {}): Promise<UiServer> {
   server = await startUiServer({
     projectRoot: root,
     ralphDir: '.ralph',
@@ -104,6 +104,7 @@ async function start(root: string, extra: { webRoot?: string; host?: string; bas
     port: 0,
     ...(extra.basePath !== undefined ? { basePath: extra.basePath } : {}),
     ...(extra.token ? { token: extra.token } : {}),
+    ...(extra.openActions ? { openActions: true } : {}),
     logger,
     pollMs: 50,
     webRoot: extra.webRoot ?? resolve(root, 'no-web'),
@@ -611,10 +612,32 @@ describe('web UI actions', () => {
     const refused = await post('/api/actions/respond', reply);
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain('no ui.token is set');
+    expect(refused.body.error).toContain('ui.actions');
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(403);
     expect((await get<StatusView>('/api/status')).body.actions).toMatchObject({ enabled: false, token: false });
     expect(existsSync(resolve(root, '.ralph', 'history', 'answer.json'))).toBe(false);
     expect(existsSync(resolve(root, '.ralph', 'history', 'stop.json'))).toBe(false);
+  });
+
+  it('takes actions from other hosts without a token when they are open', async () => {
+    const root = project();
+    ask(root);
+    await start(root, { host: '0.0.0.0', openActions: true });
+
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: false });
+    expect((await post('/api/actions/respond', reply, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    expect((await post('/api/actions/respond', JSON.stringify(reply), { 'Content-Type': 'text/plain' })).status).toBe(415);
+    expect((await post('/api/actions/respond', reply)).status).toBe(200);
+  });
+
+  it('still requires a token that is set when actions are open', async () => {
+    const root = project();
+    ask(root);
+    await start(root, { host: '0.0.0.0', token: 's3cret', openActions: true });
+
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true });
+    expect((await post('/api/actions/respond', reply)).status).toBe(401);
+    expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer s3cret' })).status).toBe(200);
   });
 
   it('requires the token when one is set', async () => {
