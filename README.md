@@ -120,12 +120,16 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
   and `ralph.config.json`, with Markdown rendered and images shown as pictures
+- **Git**: the project's repository as it stands. The branch and how far it is ahead of or
+  behind its upstream (as last fetched), the uncommitted and untracked files, and the 50 latest
+  commits; pick one for its message and the files it changed, with lines added and removed.
+  Ralph runs `git` in the project for this and only reads: nothing is fetched or changed
 
 There are two ways to start it:
 
-- `ralph ui` serves it on its own until Ctrl-C. It works entirely from the files in `.ralph/`,
-  so it can watch a loop running in another terminal or container that shares the folder, and
-  browse past runs after the loop has exited.
+- `ralph ui` serves it on its own until Ctrl-C. It works entirely from the files in `.ralph/`
+  (and the repository, for the Git tab), so it can watch a loop running in another terminal or
+  container that shares the folder, and browse past runs after the loop has exited.
 - `ralph --ui` (or `ui.enabled`, or `RALPH_UI=1`) serves it beside the loop, for as long as the
   loop runs. If it cannot start, for example because its port is taken, Ralph logs a warning
   and runs without it.
