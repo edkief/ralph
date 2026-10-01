@@ -1,9 +1,11 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { hostname, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
+import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
 import type { LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
@@ -88,13 +90,14 @@ function patchState(root: string, patch: Record<string, unknown>): void {
   writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), ...patch }));
 }
 
-async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string } = {}): Promise<UiServer> {
+async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string; token?: string } = {}): Promise<UiServer> {
   server = await startUiServer({
     projectRoot: root,
     ralphDir: '.ralph',
     host: extra.host ?? '127.0.0.1',
     port: 0,
     ...(extra.basePath !== undefined ? { basePath: extra.basePath } : {}),
+    ...(extra.token ? { token: extra.token } : {}),
     logger,
     pollMs: 50,
     webRoot: extra.webRoot ?? resolve(root, 'no-web'),
@@ -407,4 +410,190 @@ function subscribe(path: string) {
     },
     close: () => req.destroy(),
   };
+}
+
+describe('web UI actions', () => {
+  /** Mark the live run as waiting on a question, as the loop does. */
+  function ask(root: string, patch: Record<string, unknown> = {}): void {
+    const state = resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json');
+    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), status: 'waiting' }));
+    writePending(resolve(root, '.ralph'), {
+      id: `${LIVE_RUN}-1`,
+      runId: LIVE_RUN,
+      kind: 'decide',
+      taskId: 'TASK-2',
+      message: 'REST or GraphQL?',
+      question: 'REST or GraphQL?',
+      waiting: true,
+      createdAt: '2026-09-30T12:11:00.000Z',
+      ...patch,
+    });
+  }
+
+  async function post(path: string, body: unknown, headers: Record<string, string> = {}) {
+    const response = await fetch(`${server!.url}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+    return { status: response.status, body: (await response.json()) as { error?: string; message?: string; delivered?: string }, headers: response.headers };
+  }
+  const reply = { id: `${LIVE_RUN}-1`, action: 'answer', text: 'REST' };
+
+  it('shows what the loop asked, and what can be done about it', async () => {
+    const root = project();
+    ask(root);
+    await start(root);
+    const { body } = await get<StatusView>('/api/status');
+
+    expect(body.run).toMatchObject({ status: 'waiting', live: true });
+    expect(body.pending).toMatchObject({ kind: 'decide', taskId: 'TASK-2', question: 'REST or GraphQL?', waiting: true, answered: false, actions: ['answer', 'stop'] });
+    expect(body.actions).toEqual({ enabled: true, token: false });
+  });
+
+  it('hands an answer to the waiting loop, once', async () => {
+    const root = project();
+    ask(root);
+    await start(root);
+
+    const first = await post('/api/actions/respond', reply);
+    expect(first).toMatchObject({ status: 200, body: { delivered: 'loop' } });
+    expect(readAnswer(resolve(root, '.ralph'))).toMatchObject({ ...reply, by: 'ui' });
+    expect((await get<StatusView>('/api/status')).body.pending).toMatchObject({ answered: true });
+
+    expect((await post('/api/actions/respond', reply)).status).toBe(409);
+  });
+
+  it('turns down answers that do not fit', async () => {
+    const root = project();
+    await start(root);
+    expect((await post('/api/actions/respond', reply)).status).toBe(409);
+
+    ask(root);
+    expect((await post('/api/actions/respond', { ...reply, id: 'other' })).status).toBe(409);
+    expect((await post('/api/actions/respond', { ...reply, action: 'approve' })).status).toBe(400);
+    expect((await post('/api/actions/respond', { ...reply, text: '' })).status).toBe(400);
+    expect((await post('/api/actions/respond', { action: 'answer' })).status).toBe(400);
+    expect((await post('/api/actions/respond', 'not json')).status).toBe(400);
+    expect((await post('/api/actions/respond', { ...reply, text: 'x'.repeat(70_000) })).status).toBe(413);
+    expect(readAnswer(resolve(root, '.ralph'))).toBeUndefined();
+  });
+
+  it('applies a split itself when no loop is waiting', async () => {
+    const root = project();
+    const ralph = resolve(root, '.ralph');
+    const spec = (id: string) => JSON.stringify({ id, title: id, acceptanceCriteria: [`${id} works`] });
+    mkdirSync(resolve(ralph, 'split', 'TASK-2'), { recursive: true });
+    writeFileSync(
+      resolve(ralph, 'split', 'TASK-2', 'proposal.json'),
+      JSON.stringify({ task: 'TASK-2', splittable: true, reason: 'Two halves.', tasks: [{ id: 'TASK-2.1', title: 'First' }, { id: 'TASK-2.2', title: 'Second' }] }),
+    );
+    for (const id of ['TASK-2.1', 'TASK-2.2']) writeFileSync(resolve(ralph, 'split', 'TASK-2', `${id}.json`), spec(id));
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root });
+    execFileSync('git', ['add', '-A'], { cwd: root });
+    execFileSync('git', ['commit', '-qm', 'plan'], { cwd: root });
+    // The run stopped over the proposal instead of waiting.
+    writeFileSync(resolve(ralph, 'history', LIVE_RUN, 'state.json'), JSON.stringify({ runId: LIVE_RUN, status: 'stalled', pid: process.pid, hostname: hostname() }));
+    writePending(ralph, { id: 'p-1', runId: LIVE_RUN, kind: 'split', taskId: 'TASK-2', message: 'TASK-2 ran out of time', waiting: false, createdAt: 't' });
+    await start(root);
+
+    expect((await get<StatusView>('/api/status')).body.pending).toMatchObject({ waiting: false, actions: ['approve', 'dismiss'] });
+    const { status, body } = await post('/api/actions/respond', { id: 'p-1', action: 'approve' });
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ delivered: 'applied' });
+    expect(body.message).toContain('Split TASK-2 into TASK-2.1 and TASK-2.2 and committed it');
+    expect((await get<StatusView>('/api/status')).body.tasks.items.map((task) => task.id)).toEqual(['TASK-1', 'TASK-2.1', 'TASK-2.2']);
+    expect(readPending(ralph)).toBeUndefined();
+    expect(readFileSync(resolve(ralph, 'history', LIVE_RUN, 'actions.jsonl'), 'utf8')).toContain('"action":"approve"');
+  });
+
+  it('asks a run in progress to stop, and only one', async () => {
+    const root = project();
+    await start(root);
+
+    expect((await post('/api/actions/stop', { mode: 'sometime' })).status).toBe(400);
+    expect((await post('/api/actions/stop', { mode: 'after-iteration' })).status).toBe(200);
+    expect(readStopRequest(resolve(root, '.ralph'))).toEqual({ mode: 'after-iteration' });
+
+    writeFileSync(resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json'), JSON.stringify({ runId: LIVE_RUN, status: 'complete', pid: process.pid, hostname: hostname() }));
+    expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(409);
+  });
+
+  it('takes actions only as JSON, which a form on another site cannot send', async () => {
+    const root = project();
+    ask(root);
+    await start(root);
+
+    for (const type of ['application/x-www-form-urlencoded', 'text/plain', 'multipart/form-data']) {
+      expect((await post('/api/actions/respond', JSON.stringify(reply), { 'Content-Type': type })).status).toBe(415);
+    }
+    // A preflight gets no permission to send JSON from elsewhere.
+    const preflight = await fetch(`${server!.url}/api/actions/respond`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+    });
+    expect(preflight.status).toBe(405);
+    expect(preflight.headers.get('access-control-allow-origin')).toBeNull();
+    expect(readAnswer(resolve(root, '.ralph'))).toBeUndefined();
+  });
+
+  it('takes actions only from its own pages', async () => {
+    const root = project();
+    ask(root);
+    await start(root);
+    const own = new URL(server!.url).host;
+
+    expect((await post('/api/actions/respond', reply, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    expect((await post('/api/actions/respond', reply, { 'Sec-Fetch-Site': 'same-site' })).status).toBe(403);
+    expect((await post('/api/actions/respond', reply, { Origin: 'https://evil.example' })).status).toBe(403);
+    expect((await post('/api/actions/respond', reply, { Origin: 'null' })).status).toBe(403);
+    expect(readAnswer(resolve(root, '.ralph'))).toBeUndefined();
+
+    // Behind a reverse proxy, the page's origin is the proxy's.
+    expect((await post('/api/actions/respond', reply, { Origin: 'https://ralph.example', 'X-Forwarded-Host': 'ralph.example' })).status).toBe(200);
+    rmAnswer(root);
+    expect((await post('/api/actions/respond', reply, { Origin: `http://${own}`, 'Sec-Fetch-Site': 'same-origin' })).status).toBe(200);
+  });
+
+  it('takes no actions from other hosts without a token', async () => {
+    const root = project();
+    ask(root);
+    await start(root, { host: '0.0.0.0' });
+
+    const refused = await post('/api/actions/respond', reply);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toContain('no ui.token is set');
+    expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(403);
+    expect((await get<StatusView>('/api/status')).body.actions).toMatchObject({ enabled: false, token: false });
+    expect(existsSync(resolve(root, '.ralph', 'answer.json'))).toBe(false);
+    expect(existsSync(resolve(root, '.ralph', 'stop.json'))).toBe(false);
+  });
+
+  it('requires the token when one is set', async () => {
+    const root = project();
+    ask(root);
+    await start(root, { host: '0.0.0.0', token: 's3cret' });
+
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true });
+    const missing = await post('/api/actions/respond', reply);
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get('www-authenticate')).toBe('Bearer');
+    expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer wrong!' })).status).toBe(401);
+    expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer s3cret' })).status).toBe(200);
+  });
+
+  it('keeps everything else read-only', async () => {
+    await start(project());
+    expect((await post('/api/status', {})).status).toBe(405);
+    expect((await post('/api/file?path=.ralph/PROMPT.md', {})).status).toBe(405);
+    expect(await raw('/api/actions/respond', { method: 'DELETE' })).toBe(405);
+    expect(await raw('/api/actions/respond', { method: 'POST', host: 'evil.example' })).toBe(403);
+  });
+});
+
+function rmAnswer(root: string): void {
+  rmSync(resolve(root, '.ralph', 'answer.json'), { force: true });
 }
