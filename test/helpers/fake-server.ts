@@ -117,8 +117,14 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
 
     const permissionMatch = /\/permission\/([^/]+)\/reply$/.exec(path);
     if (permissionMatch && req.method === 'POST') {
-      const body = (await readBody(req)) as { reply?: string };
-      state.replies.push({ requestID: permissionMatch[1]!, reply: body.reply ?? '' });
+      const body = (await readBody(req)) as { decision?: string };
+      // Like the real server: the field is `decision`, and a body without it is rejected.
+      if (!body.decision) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ _tag: 'InvalidRequestError', message: 'Missing key\n  at ["decision"]', kind: 'Payload' }));
+        return;
+      }
+      state.replies.push({ requestID: permissionMatch[1]!, reply: body.decision });
       return json(res, {});
     }
 

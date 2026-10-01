@@ -1,4 +1,4 @@
-import type { OpencodeClient } from '../opencode/client.js';
+import { OpencodeApiError, type OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
   ExecutionEndedSchema,
@@ -425,7 +425,11 @@ async function handlePermission(
   });
 
   await client.replyPermission(request.sessionID, request.id, decision.reply).catch((cause) => {
-    logger.warn('permission reply failed', { error: (cause as Error).message });
+    logger.warn('permission reply failed', {
+      error: (cause as Error).message,
+      // The server says which field it rejected; without it a 400 is opaque.
+      ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+    });
   });
 }
 

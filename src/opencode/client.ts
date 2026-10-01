@@ -137,7 +137,10 @@ export class OpencodeClient {
     requestID: string,
     reply: 'once' | 'always' | 'reject',
   ): Promise<void> {
-    await this.json('POST', `/api/session/${sessionID}/permission/${requestID}/reply`, { reply });
+    // The server names the field `decision`; anything else is a 400.
+    await this.json('POST', `/api/session/${sessionID}/permission/${requestID}/reply`, {
+      decision: reply,
+    });
   }
 
   /**
