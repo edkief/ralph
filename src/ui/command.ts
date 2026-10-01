@@ -11,12 +11,16 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     host: config.ui.host,
     port: config.ui.port,
     basePath: config.ui.basePath,
+    ...(config.ui.token ? { token: config.ui.token } : {}),
     logger,
   });
   if (!isLoopback(config.ui.host)) {
-    logger.warn('the web UI has no authentication and is reachable from other hosts; transcripts may contain secrets', {
-      host: config.ui.host,
-    });
+    logger.warn(
+      config.ui.token
+        ? 'the web UI is reachable from other hosts and reading it needs no authentication; transcripts may contain secrets'
+        : 'the web UI is reachable from other hosts and reading it needs no authentication; transcripts may contain secrets. Actions are off until ui.token is set',
+      { host: config.ui.host },
+    );
   }
   return server;
 }

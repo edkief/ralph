@@ -5,3 +5,6 @@ dist/
 # Loop run artefacts, when running against a project in place
 .ralph/history/
 .agent/history/
+
+# Browser logs from testing the web UI
+.playwright-mcp/

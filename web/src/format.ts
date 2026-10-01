@@ -74,6 +74,15 @@ export function statusTone(status: string | null | undefined): Tone {
   }
 }
 
+/** How a run reads at a glance: running, waiting for a person, or how it ended. */
+export function runBadge(run: { status: string; live: boolean }): { tone: Tone; label: string; pulse: boolean } {
+  if (run.live && run.status === 'waiting') return { tone: 'warn', label: 'Waiting for you', pulse: false };
+  if (run.live) return { tone: 'live', label: 'Running', pulse: true };
+  // Its process is gone without a final status.
+  const status = run.status === 'running' || run.status === 'waiting' ? 'ended' : run.status;
+  return { tone: statusTone(status), label: statusLabel(status), pulse: false };
+}
+
 export function statusLabel(status: string | null | undefined): string {
   const text = (status || 'unknown').replace(/-/g, ' ');
   return text.charAt(0).toUpperCase() + text.slice(1);

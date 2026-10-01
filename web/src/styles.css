@@ -644,6 +644,148 @@ input,
   text-decoration: none;
 }
 
+button.button {
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+
+.button.danger {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
+}
+
+.button.danger:hover:not(:disabled) {
+  background: var(--bad-soft);
+}
+
+.button.small {
+  height: 26px;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+/* ── Requests for a person ──────────────────────────────────────────── */
+
+.panel.pending {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.pending .panel-title {
+  flex-wrap: wrap;
+}
+
+.pending-body {
+  padding: 0 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pending-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pending-question {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pending-split ol {
+  margin: 8px 0 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pending-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pending-field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.pending-field.inline input {
+  width: 90px;
+}
+
+.pending-field textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 64px;
+}
+
+.pending-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.needs-you {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.needs-you:hover {
+  text-decoration: none;
+  filter: brightness(0.97);
+}
+
+.needs-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.stop-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.stop-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stop-note.bad {
+  color: var(--bad);
+}
+
 /* ── Transcript ─────────────────────────────────────────────────────── */
 
 .transcript-view {

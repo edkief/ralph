@@ -36,7 +36,7 @@ export function Logs({ status, live }: { status: StatusView; live: LiveState['lo
           <select value={runId ?? ''} onChange={(event) => setPicked(event.target.value)}>
             {(runs.data ?? []).map((run) => (
               <option key={run.runId} value={run.runId}>
-                {formatRunId(run.runId)} · {run.live ? 'running' : statusLabel(run.status)}
+                {formatRunId(run.runId)} · {run.live ? (run.status === 'waiting' ? 'waiting' : 'running') : statusLabel(run.status)}
               </option>
             ))}
           </select>

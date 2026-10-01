@@ -39,7 +39,7 @@ export interface SplitRecord {
  */
 export interface RunState {
   runId: string;
-  /** `running` until the run ends, then its final status. */
+  /** `running`, or `waiting` for a person, until the run ends; then its final status. */
   status: string;
   pid: number;
   /** Where `pid` lives; a reader on another host cannot check it. */
@@ -61,6 +61,8 @@ export interface RunState {
    * session. Absent from runs recorded before split turns were tracked.
    */
   split?: { taskId: string; startedAt: string } | null;
+  /** What the run is waiting on a person for, while it is `waiting`. */
+  pending?: { id: string; kind: string; taskId: string | null } | null;
   message?: string;
 }
 

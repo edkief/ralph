@@ -10,6 +10,8 @@ import { ConsoleReporter } from '../src/report/console.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { loadConfig } from '../src/config/load.js';
 import { Logger } from '../src/report/logger.js';
+import { respond } from '../src/human/respond.js';
+import { readPending, requestStop, type AnswerInput } from '../src/human/request.js';
 
 const sink = { write: () => true } as NodeJS.WriteStream;
 const logger = new Logger({ level: 'error', stream: sink });
@@ -66,6 +68,36 @@ async function loop(
     signal: new AbortController().signal,
     ...(stop ? { stop } : {}),
   });
+}
+
+/** Run the loop so that it waits for a person, looking for answers often. */
+async function waitingLoop(root: string, cfg: Config, options: Parameters<typeof startFakeServer>[0]) {
+  server = await startFakeServer(options);
+  return runLoop({
+    config: { ...cfg, ui: { ...cfg.ui, wait: true } },
+    client: new OpencodeClient({ baseUrl: server.url }),
+    logger,
+    reporter,
+    signal: new AbortController().signal,
+    pollMs: 10,
+  });
+}
+
+/** Answer the loop's next request as a person would, once it waits; resolves with the request. */
+async function answer(root: string, input: Omit<AnswerInput, 'id'>, after?: string) {
+  const ralphRoot = resolve(root, '.ralph');
+  for (;;) {
+    const pending = readPending(ralphRoot);
+    if (pending?.waiting && pending.id !== after) {
+      try {
+        await respond({ projectRoot: root, ralphDir: '.ralph', input: { id: pending.id, ...input }, by: 'ui' });
+        return pending;
+      } catch {
+        // The loop has written the request but not yet said it waits.
+      }
+    }
+    await new Promise((done) => setTimeout(done, 5));
+  }
 }
 
 const say = (text: string): ScriptedEvent[] => [
@@ -531,6 +563,79 @@ describe('runLoop', () => {
       expect(runState(result.historyDir).split).toBeNull();
     });
 
+    it('waits for a proposed split to be approved, then carries on with the new tasks', async () => {
+      const root = planned();
+
+      const running = waitingLoop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        onPrompt: (count) => {
+          if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+          if (count === 3) markPassing(root, 'TASK-1.1');
+          if (count === 4) markPassing(root, 'TASK-1.2');
+        },
+        script: (count) => (count === 1 ? endless : say(count === 2 ? 'proposed' : 'done')),
+      });
+      const asked = await answer(root, { action: 'approve' });
+      const result = await running;
+
+      expect(asked).toMatchObject({
+        kind: 'split',
+        taskId: 'TASK-1',
+        split: {
+          dir: '.ralph/split/TASK-1',
+          reason: 'Parser, then printer.',
+          tasks: [
+            { id: 'TASK-1.1', title: 'Parser', specPath: '.ralph/split/TASK-1/TASK-1.1.json' },
+            { id: 'TASK-1.2', title: 'Printer', specPath: '.ralph/split/TASK-1/TASK-1.2.json' },
+          ],
+        },
+      });
+      expect(result.status).toBe('complete');
+      expect(execFileSync('git', ['log', '--format=%s'], { cwd: root, encoding: 'utf8' })).toContain(
+        'chore(plan): split TASK-1 into TASK-1.1 and TASK-1.2',
+      );
+      expect(splits(result.historyDir).map((record: { status: string }) => record.status)).toEqual(['proposed', 'applied']);
+      expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
+    });
+
+    it('takes `ralph split --apply` as approval while it waits', async () => {
+      const root = planned();
+
+      const running = waitingLoop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        onPrompt: async (count) => {
+          if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+          if (count === 3) markPassing(root, 'TASK-1.1');
+          if (count === 4) markPassing(root, 'TASK-1.2');
+        },
+        script: (count) => (count === 1 ? endless : say(count === 2 ? 'proposed' : 'done')),
+      });
+      while (!readPending(resolve(root, '.ralph'))?.waiting) await new Promise((done) => setTimeout(done, 5));
+      const { applySplit } = await import('../src/loop/split.js');
+      await applySplit({ projectRoot: root, ralphDir: '.ralph', taskId: 'TASK-1', commit: true });
+
+      expect((await running).status).toBe('complete');
+    });
+
+    it('asks for another proposal with the person\'s note, and tries the task again when told to', async () => {
+      const root = planned();
+
+      const running = waitingLoop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        onPrompt: (count) => {
+          if (count === 2 || count === 3) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+          if (count === 4) markPassing(root, 'TASK-1');
+        },
+        script: (count) => (count === 1 ? endless : say('ok')),
+      });
+      const first = await answer(root, { action: 'repropose', text: 'Split by module instead.' });
+      await answer(root, { action: 'retry', text: 'Skip the slow integration suite.' }, first.id);
+      const result = await running;
+
+      expect(String(server?.prompts[2]?.['text'])).toContain('Split by module instead.');
+      const retried = String(server?.prompts[3]?.['text']);
+      expect(retried).toContain('Work on **TASK-1**');
+      expect(retried).toContain('Skip the slow integration suite.');
+      expect(result.status).toBe('complete');
+    });
+
     it('stops with the agent\'s reason when splitting would not help', async () => {
       const root = planned();
 
@@ -613,6 +718,139 @@ describe('runLoop', () => {
 
     expect(result.status).toBe('decide');
     expect(result.message).toBe('REST or GraphQL?');
+  });
+
+  describe('waiting for a person', () => {
+    const lines = (path: string) => readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+    it('waits for the answer to a question, and shows it to the agent', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const running = waitingLoop(root, config(root, { maxIterations: 9 }), {
+        onPrompt: (count) => {
+          if (count === 2) markPassing(root, 'TASK-1');
+        },
+        script: (count) => say(count === 1 ? '<promise>DECIDE:REST or GraphQL?</promise>' : 'done'),
+      });
+      const asked = await answer(root, { action: 'answer', text: 'REST, like the rest of the API.' });
+      const result = await running;
+
+      expect(asked).toMatchObject({ kind: 'decide', taskId: 'TASK-1', question: 'REST or GraphQL?' });
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      const prompt = String(server?.prompts[1]?.['text']);
+      expect(prompt).toContain('## Answers from a person');
+      expect(prompt).toContain('TASK-1: REST or GraphQL?');
+      expect(prompt).toContain('**REST, like the rest of the API.**');
+      expect(lines(resolve(root, '.ralph', 'decisions.jsonl'))).toEqual([
+        expect.objectContaining({ taskId: 'TASK-1', kind: 'decide', question: 'REST or GraphQL?', answer: 'REST, like the rest of the API.' }),
+      ]);
+      expect(lines(resolve(result.historyDir, 'actions.jsonl'))).toEqual([
+        expect.objectContaining({ kind: 'decide', action: 'answer', by: 'ui' }),
+      ]);
+      expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
+      expect(JSON.parse(readFileSync(resolve(result.historyDir, 'state.json'), 'utf8'))).toMatchObject({ status: 'complete', pending: null });
+    });
+
+    it('ends as it would have when told to stop', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const running = waitingLoop(root, config(root, { maxIterations: 9 }), {
+        script: say('<promise>BLOCKED:no API key</promise>'),
+      });
+      await answer(root, { action: 'stop' });
+      const result = await running;
+
+      expect(result.status).toBe('blocked');
+      expect(result.message).toBe('no API key');
+      expect(server?.prompts).toHaveLength(1);
+    });
+
+    it('resumes a blocked or stalled run, with the person\'s note', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const running = waitingLoop(root, config(root, { maxIterations: 9, stall: { maxUnproductiveIterations: 1 } }), {
+        onPrompt: (count) => {
+          if (count === 3) markPassing(root, 'TASK-1');
+        },
+        script: (count) => say(count === 1 ? '<promise>BLOCKED:no API key</promise>' : 'done'),
+      });
+      const blocked = await answer(root, { action: 'resume', text: 'The key is in .env now.' });
+      const stalled = await answer(root, { action: 'resume' }, blocked.id);
+      const result = await running;
+
+      expect(stalled).toMatchObject({ kind: 'stalled', message: '1 iterations in a row changed nothing (last: no-progress)' });
+      expect(String(server?.prompts[1]?.['text'])).toContain('The key is in .env now.');
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(3);
+    });
+
+    it('extends a spent budget', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+      const running = waitingLoop(root, config(root, { maxIterations: 1 }), {
+        onPrompt: (count) => markPassing(root, `TASK-${count}`),
+        script: say('done'),
+      });
+      const asked = await answer(root, { action: 'continue', iterations: 3 });
+      const result = await running;
+
+      expect(asked).toMatchObject({ kind: 'budget', message: 'Reached the 1 iteration budget with work outstanding' });
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      expect(String(server?.prompts[1]?.['text'])).toContain('RALPH_ITERATION=2 of 4');
+    });
+
+    it('stops waiting on a stop request, leaving the question for later', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const running = waitingLoop(root, config(root, { maxIterations: 9 }), {
+        script: say('<promise>DECIDE:REST or GraphQL?</promise>'),
+      });
+      while (!readPending(resolve(root, '.ralph'))?.waiting) await new Promise((done) => setTimeout(done, 5));
+      requestStop(resolve(root, '.ralph'), 'after-iteration', 'ui');
+      const result = await running;
+
+      expect(result.status).toBe('decide');
+      expect(readPending(resolve(root, '.ralph'))).toMatchObject({ kind: 'decide', waiting: false });
+      // With no loop waiting, the answer is kept for the next run.
+      const done = await respond({
+        projectRoot: root,
+        ralphDir: '.ralph',
+        input: { id: readPending(resolve(root, '.ralph'))!.id, action: 'answer', text: 'REST' },
+        by: 'cli',
+      });
+      expect(done.delivered).toBe('applied');
+      expect(lines(resolve(root, '.ralph', 'decisions.jsonl'))).toEqual([expect.objectContaining({ answer: 'REST' })]);
+      expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
+    });
+
+    it('stops after the current iteration on a stop request from the Ralph folder', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+      const result = await waitingLoop(root, config(root, { maxIterations: 9 }), {
+        onPrompt: (count) => {
+          requestStop(resolve(root, '.ralph'), 'after-iteration', 'ui');
+          markPassing(root, `TASK-${count}`);
+        },
+        script: [{ type: 'session.text.ended', data: { text: 'done' } }, { after: 150, type: 'session.execution.succeeded' }],
+      });
+
+      expect(result.status).toBe('stopped');
+      expect(server?.prompts).toHaveLength(1);
+      expect(existsSync(resolve(root, '.ralph', 'history', 'stop.json'))).toBe(false);
+    });
+
+    it('leaves the request but exits when the run does not wait', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const result = await loop(root, config(root, { maxIterations: 9 }), {
+        script: say('<promise>DECIDE:REST or GraphQL?</promise>'),
+      });
+
+      expect(result.status).toBe('decide');
+      expect(readPending(resolve(root, '.ralph'))).toMatchObject({ kind: 'decide', question: 'REST or GraphQL?', waiting: false });
+    });
   });
 
   it('writes per-iteration history for debugging', async () => {

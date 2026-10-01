@@ -3,13 +3,24 @@ import { hostname } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
 import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
-import { applySplit, describeIds, proposeSplit, splitDir, type StallCause } from './split.js';
+import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
+import { recentDecisions } from '../human/decisions.js';
+import { recordAnswer } from '../human/respond.js';
+import {
+  clearPending,
+  clearStopRequest,
+  readStopRequest,
+  waitForAnswer,
+  writePending,
+  type Answer,
+  type PendingRequest,
+} from '../human/request.js';
 import { sleep } from '../opencode/server.js';
 import { RunRecorder, newRunId, type RunState, type SplitRecord } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
@@ -42,8 +53,15 @@ export interface RunResult {
  * big for one iteration: depending on `stall.onRepeatedTimeout`, the run stops,
  * proposes splitting it and stops, or splits it and carries on.
  *
+ * Where the run would stop for a person (the agent is blocked or needs a
+ * decision, a task stalled or has a split to review, the budget is spent), the
+ * loop leaves a request in the Ralph folder. With `ui.wait` it then waits for
+ * the answer, from the web UI or `ralph respond`, and carries on; without, it
+ * exits as before and the request can still be settled for the next run.
+ *
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
+ * A stop request left in the Ralph folder (by the web UI) does the same.
  */
 export async function runLoop(args: LoopArgs): Promise<RunResult> {
   const { config, logger } = args;
@@ -77,22 +95,52 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
   };
   saveState({});
 
+  // Requests and answers from an earlier run mean nothing to this one.
+  const ralphRoot = resolve(config.projectRoot, config.ralphDir);
+  clearPending(ralphRoot);
+  clearStopRequest(ralphRoot);
+  // The web UI asks for a stop through a file, as it may be another process.
+  const stopLater = new AbortController();
+  const stopNow = new AbortController();
+  const stopWatch = setInterval(() => {
+    const request = readStopRequest(ralphRoot);
+    if (!request) return;
+    clearStopRequest(ralphRoot);
+    if (request.mode === 'now') {
+      logger.warn('stop requested: stopping now, interrupting the current iteration');
+      stopNow.abort();
+    } else if (!stopLater.signal.aborted) {
+      logger.warn('stop requested: stopping after the current iteration');
+    }
+    stopLater.abort();
+  }, args.pollMs ?? POLL_MS);
+  const watched: LoopArgs = {
+    ...args,
+    signal: AbortSignal.any([args.signal, stopNow.signal]),
+    stop: AbortSignal.any([...(args.stop ? [args.stop] : []), stopLater.signal]),
+  };
+
   try {
-    const result = await loop(args, recorder, saveState);
+    const result = await loop(watched, recorder, saveState);
     saveState({
       status: result.status,
       tasksPassed: result.tasksPassed,
       tasksTotal: result.tasksTotal,
       message: result.message,
+      pending: null,
     });
     return result;
   } catch (cause) {
     saveState({ status: 'crashed', message: cause instanceof Error ? cause.message : String(cause) });
     throw cause;
   } finally {
+    clearInterval(stopWatch);
     detach();
   }
 }
+
+/** How often the loop looks for an answer or a stop request in the Ralph folder. */
+const POLL_MS = 500;
 
 interface LoopArgs {
   config: Config;
@@ -101,6 +149,8 @@ interface LoopArgs {
   reporter: ConsoleReporter;
   signal: AbortSignal;
   stop?: AbortSignal;
+  /** How often to look for answers and stop requests; for tests. */
+  pollMs?: number;
 }
 
 async function loop(
@@ -114,6 +164,55 @@ async function loop(
   const pause = AbortSignal.any([signal, stop]);
   const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
   const runId = recorder.runId;
+  const ralphRoot = resolve(config.projectRoot, config.ralphDir);
+  const wait = config.ui.wait ?? config.ui.enabled;
+
+  /**
+   * Leave a request for a person and, when the run waits for people, wait
+   * for the answer. Nothing comes back when it does not wait, or when a stop
+   * was asked for first; the caller then ends the run as it always did.
+   */
+  let asked = 0;
+  const ask = async (
+    request: Pick<PendingRequest, 'kind' | 'taskId' | 'message' | 'question' | 'split'>,
+    settled?: () => Answer | undefined,
+  ): Promise<Answer | undefined> => {
+    asked += 1;
+    const pending: PendingRequest = {
+      id: `${runId}-${asked}`,
+      runId,
+      ...request,
+      waiting: wait && !pause.aborted,
+      createdAt: new Date().toISOString(),
+    };
+    writePending(ralphRoot, pending);
+    if (!pending.waiting) return undefined;
+
+    reporter.clearStatus();
+    saveState({ status: 'waiting', pending: { id: pending.id, kind: pending.kind, taskId: pending.taskId } });
+    logger.warn('waiting for a person: answer in the web UI or with `ralph respond`', {
+      kind: pending.kind,
+      ...(pending.taskId ? { task: pending.taskId } : {}),
+      about: truncate(pending.message, 200),
+    });
+    const answer = await waitForAnswer({
+      ralphRoot,
+      id: pending.id,
+      signal: pause,
+      pollMs: args.pollMs ?? POLL_MS,
+      ...(settled ? { settled } : {}),
+    });
+    saveState({ status: 'running', pending: null });
+    if (!answer) {
+      // Stopped while waiting: the request stays, to be settled without the loop.
+      writePending(ralphRoot, { ...pending, waiting: false });
+      return undefined;
+    }
+    recordAnswer(ralphRoot, pending, answer);
+    clearPending(ralphRoot);
+    logger.info('a person answered', { kind: pending.kind, action: answer.action, by: answer.by });
+    return answer;
+  };
 
   let unproductive = 0;
   // What each task's attempts ran out of, in order.
@@ -124,10 +223,20 @@ async function loop(
   // so the next push attempt (or the one at run end) catches up.
   let unpushed = false;
   let iteration = 0;
+  let budget = config.maxIterations;
   let finalStatus: RunResult['status'] = 'max-iterations';
-  let message = `Reached the ${config.maxIterations} iteration budget with work outstanding`;
+  let message = '';
 
-  for (iteration = 1; iteration <= config.maxIterations; iteration += 1) {
+  for (iteration = 1; ; iteration += 1) {
+    if (iteration > budget) {
+      message = `Reached the ${budget} iteration budget with work outstanding`;
+      if (pause.aborted || !tasks.reload().next) break;
+      const answer = await ask({ kind: 'budget', taskId: null, message });
+      if (answer?.action !== 'continue') break;
+      budget += answer.iterations ?? config.maxIterations;
+      saveState({ maxIterations: budget });
+    }
+
     if (signal.aborted) {
       finalStatus = 'interrupted';
       message = 'Interrupted';
@@ -152,7 +261,7 @@ async function loop(
     const next = summary.next;
     const taskId = next.id;
     const handoffFile = handoffPath(config.projectRoot, config.ralphDir, taskId);
-    reporter.iterationStart(iteration, config.maxIterations, taskId);
+    reporter.iterationStart(iteration, budget, taskId);
     recorder.beginIteration(iteration);
     const startedAt = new Date().toISOString();
     saveState({
@@ -173,11 +282,12 @@ async function loop(
       // Built per attempt, so a retry sees the handoff the failed one left.
       prompt: () => {
         const text = readHandoff(handoffFile);
+        const decisions = recentDecisions(ralphRoot, DECISIONS_SHOWN);
         return buildPrompt({
           projectRoot: config.projectRoot,
           ralphDir: config.ralphDir,
           iteration,
-          maxIterations: config.maxIterations,
+          maxIterations: budget,
           nextTask: next,
           pinTask: config.pinTask,
           timeBudget: {
@@ -185,6 +295,7 @@ async function loop(
             until: new Date(Date.now() + config.timeouts.iterationMs),
           },
           ...(text ? { handoff: { path: handoffFile, text } } : {}),
+          ...(decisions.length > 0 ? { decisions } : {}),
         });
       },
       taskId,
@@ -226,32 +337,81 @@ async function loop(
     }
 
     if (TERMINAL_STATUSES.has(status)) {
+      const terminal = terminalMessage(status, result);
+      if (status === 'blocked' || status === 'decide') {
+        const answer = await ask({
+          kind: status,
+          taskId,
+          message: terminal,
+          ...(status === 'decide' ? { question: terminal } : {}),
+        });
+        if (answer && answer.action !== 'stop') {
+          // The next iteration's prompt carries what the person said.
+          unproductive = 0;
+          continue;
+        }
+        if (signal.aborted) {
+          finalStatus = 'interrupted';
+          message = 'Interrupted';
+          break;
+        }
+      }
       finalStatus = status;
-      message = terminalMessage(status, result);
+      message = terminal;
       break;
     }
 
     const causes = cutShortByTask.get(taskId) ?? [];
     if (causes.length >= config.stall.maxTimeoutsPerTask) {
-      const stall = await handleStall({ args, recorder, saveState, iteration, taskId, causes, handoffFile, stop });
-      if (stall.split) {
-        // New tasks with new ids: the next iteration starts on the first of them.
+      const stall = { args, recorder, saveState, iteration, taskId, causes, handoffFile, stop };
+      let outcome = await handleStall(stall);
+      // A person may turn a proposal down and ask for another, any number of times.
+      while (!outcome.split && !signal.aborted) {
+        const proposal = outcome.proposal;
+        const answer = await ask(
+          proposal
+            ? { kind: 'split', taskId, message: outcome.message, split: describeProposal(config, taskId, proposal) }
+            : { kind: 'stalled', taskId, message: outcome.message },
+          // `ralph split --apply` settles it as well as an answer does.
+          proposal ? () => appliedElsewhere(config, taskId) : undefined,
+        );
+        if (!answer || answer.action === 'stop') break;
+        if (answer.action === 'repropose') {
+          outcome = await handleStall({ ...stall, ...(answer.text?.trim() ? { note: answer.text.trim() } : {}) });
+        } else if (answer.action === 'approve' && proposal) {
+          outcome = appliedElsewhere(config, taskId)
+            ? { split: true, committed: true }
+            : // Recorded as its own step: the time since the proposal was the person's.
+              await applyProposal(stall, { ...proposal, startedAt: new Date().toISOString() });
+        } else {
+          // Try the task again as it is, with what the person noted in the prompt.
+          outcome = { split: true, committed: false };
+        }
+      }
+      if (outcome.split) {
+        // New tasks with new ids, or a fresh start on this one.
         cutShortByTask.delete(taskId);
         unproductive = 0;
-        if (stall.committed) unpushed = true;
+        if (outcome.committed) unpushed = true;
         continue;
       }
       finalStatus = signal.aborted ? 'interrupted' : 'stalled';
-      message = signal.aborted ? 'Interrupted' : stall.message;
+      message = signal.aborted ? 'Interrupted' : outcome.message;
       break;
     }
 
     unproductive = delta.productive ? 0 : unproductive + 1;
     if (unproductive >= config.stall.maxUnproductiveIterations) {
-      finalStatus = 'stalled';
-      message = `${unproductive} iterations in a row changed nothing (last: ${status}${
+      const stalled = `${unproductive} iterations in a row changed nothing (last: ${status}${
         result.error ? ` — ${result.error}` : ''
       })`;
+      const answer = await ask({ kind: 'stalled', taskId, message: stalled });
+      if (answer && answer.action !== 'stop') {
+        unproductive = 0;
+        continue;
+      }
+      finalStatus = signal.aborted ? 'interrupted' : 'stalled';
+      message = signal.aborted ? 'Interrupted' : stalled;
       break;
     }
 
@@ -281,7 +441,7 @@ async function loop(
 
   const runResult: RunResult = {
     status: finalStatus,
-    iterations: Math.min(iteration, config.maxIterations),
+    iterations: Math.min(iteration, budget),
     runId,
     historyDir: recorder.directory,
     tasksPassed: finalSummary.passedCount,
@@ -291,6 +451,9 @@ async function loop(
   recorder.recordSummary(runResult);
   return runResult;
 }
+
+/** Decisions shown to the agent: the latest ones, as old ones are in the code by now. */
+const DECISIONS_SHOWN = 20;
 
 /**
  * Run an iteration, retrying the whole turn when the provider failed, the
@@ -420,7 +583,7 @@ function ranOutOf(cause: StallCause): 'time' | 'context' {
  * working time or context (going quiet means a command hangs, which smaller
  * tasks would hit too), and the task has not been split too often already.
  */
-async function handleStall(context: {
+interface StallContext {
   args: LoopArgs;
   recorder: RunRecorder;
   saveState: (patch: Partial<RunState>) => void;
@@ -429,7 +592,25 @@ async function handleStall(context: {
   causes: StallCause[];
   handoffFile: string;
   stop: AbortSignal;
-}): Promise<{ split: true; committed: boolean } | { split: false; message: string }> {
+  /** What a person who turned down an earlier proposal asked for. */
+  note?: string;
+}
+
+/** A split the agent proposed and nobody has applied yet. */
+interface Proposed {
+  ids: string[];
+  titles: string[];
+  reason: string;
+  /** When the turn that proposed it started. */
+  startedAt: string;
+}
+
+type StallOutcome =
+  | { split: true; committed: boolean }
+  /** `proposal` when the run stops over a split to review rather than over the stall itself. */
+  | { split: false; message: string; proposal?: Proposed };
+
+async function handleStall(context: StallContext): Promise<StallOutcome> {
   const { args, recorder, iteration, taskId, causes, handoffFile } = context;
   const { config, logger, reporter, signal } = args;
   const count = causes.length;
@@ -471,6 +652,7 @@ async function handleStall(context: {
     logger,
     taskId,
     cutShort: causes.map(ranOutOf),
+    ...(context.note ? { note: context.note } : {}),
     signal,
     hooks: {
       onEvent: (event) => recorder.recordEvent(event),
@@ -491,13 +673,39 @@ async function handleStall(context: {
   }
 
   const ids = outcome.proposal.tasks.map((child) => child.id);
+  const proposal: Proposed = {
+    ids,
+    titles: outcome.proposal.tasks.map((child) => child.title),
+    reason: outcome.proposal.reason,
+    startedAt,
+  };
   if (mode === 'propose') {
     logger.info('proposed a split', { task: taskId, into: ids.join(','), folder: dir });
     record({ status: 'proposed', children: ids, reason: outcome.proposal.reason });
-    return stopped(
-      `${spent}; proposed splitting it into ${describeIds(ids)} in ${dir}/. Review it, then run \`ralph split ${taskId} --apply\``,
-    );
+    return {
+      ...stopped(
+        `${spent}; proposed splitting it into ${describeIds(ids)} in ${dir}/. Review it, then run \`ralph split ${taskId} --apply\``,
+      ),
+      proposal,
+    };
   }
+  return applyProposal(context, proposal);
+}
+
+/** Replace the stalled task with the tasks proposed for it, and commit that. */
+async function applyProposal(context: StallContext, proposal: Proposed): Promise<StallOutcome> {
+  const { args, recorder, iteration, taskId, causes } = context;
+  const { config, logger } = args;
+  const record = (patch: Pick<SplitRecord, 'status' | 'reason' | 'committed'>) =>
+    recorder.recordSplit({
+      iteration,
+      taskId,
+      causes,
+      children: proposal.ids,
+      ...patch,
+      startedAt: proposal.startedAt,
+      endedAt: new Date().toISOString(),
+    });
 
   try {
     const applied = await applySplit({
@@ -507,15 +715,37 @@ async function handleStall(context: {
       commit: true,
     });
     if (applied.commitError) logger.warn('could not commit the split', { task: taskId, error: applied.commitError });
-    logger.info('split the task', { task: taskId, into: ids.join(','), committed: applied.committed });
-    record({ status: 'applied', children: ids, reason: outcome.proposal.reason, committed: applied.committed });
+    logger.info('split the task', { task: taskId, into: proposal.ids.join(','), committed: applied.committed });
+    record({ status: 'applied', reason: proposal.reason, committed: applied.committed });
     return { split: true, committed: applied.committed };
   } catch (cause) {
     const reason = (cause as Error).message;
     logger.warn('could not apply the split', { task: taskId, error: reason });
-    record({ status: 'failed', children: ids, reason });
-    return stopped(`${spent}; could not apply the split proposed in ${dir}/: ${reason}`);
+    record({ status: 'failed', reason });
+    const count = causes.length;
+    return {
+      split: false,
+      message: `${taskId} ran out of ${[...new Set(causes.map(ranOutOf))].join(' or ')} ${count} time${count === 1 ? '' : 's'}; could not apply the split proposed in ${splitDir(config.ralphDir, taskId)}/: ${reason}`,
+    };
   }
+}
+
+/** A proposal as a person is asked to review it. */
+function describeProposal(config: Config, taskId: string, proposal: Proposed): NonNullable<PendingRequest['split']> {
+  const dir = splitDir(config.ralphDir, taskId);
+  return {
+    dir,
+    reason: proposal.reason,
+    tasks: proposal.ids.map((id, index) => ({ id, title: proposal.titles[index] ?? '', specPath: `${dir}/${id}.json` })),
+  };
+}
+
+/** The answer that stands in for a split applied outside the loop, by `ralph split --apply`. */
+function appliedElsewhere(config: Config, taskId: string): Answer | undefined {
+  const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir).readTasks();
+  const read = readProposal(config.projectRoot, config.ralphDir, taskId, tasks);
+  if (read.status !== 'ok' || !read.proposal.appliedAt) return undefined;
+  return { id: taskId, action: 'approve', by: 'cli', answeredAt: read.proposal.appliedAt };
 }
 
 /** Current task counts; none when the agent left tasks.json unreadable, which the next iteration reports. */

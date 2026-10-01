@@ -126,6 +126,8 @@ export async function proposeSplit(args: {
   taskId: string;
   /** What each attempt ran out of, for the prompt. */
   cutShort: string[];
+  /** What a person who turned down an earlier proposal asked for. */
+  note?: string;
   signal: AbortSignal;
   hooks?: IterationHooks;
   templatesDir?: string;
@@ -160,6 +162,7 @@ export async function proposeSplit(args: {
     cutShort: args.cutShort,
     iterationMs: config.timeouts.iterationMs,
     proposalDir: dir,
+    ...(args.note ? { note: args.note } : {}),
   });
   let sessionId: string | undefined;
 

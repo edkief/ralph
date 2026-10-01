@@ -1,19 +1,27 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
+import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
+import { respond } from '../human/respond.js';
 import { MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
 import type { OpencodeEvent } from '../opencode/events.js';
-import type { LiveEvents, LogLine, TranscriptEntry } from './types.js';
+import type { ActionsView, LiveEvents, LogLine, StatusView, TranscriptEntry } from './types.js';
 
 /** The built React app, next to the compiled server: dist/ui → dist/web. */
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 
 const POLL_MS = 500;
 const HEARTBEAT_MS = 15_000;
+/** An action's body is an id and a few lines of text. */
+const MAX_BODY_BYTES = 64 * 1024;
+
+const StopSchema = z.object({ mode: z.enum(STOP_MODES) });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -40,6 +48,8 @@ export interface UiServerOptions {
   port: number;
   /** Path prefix a reverse proxy serves the UI under; '' serves it at the root. */
   basePath?: string;
+  /** The secret requests for actions must carry; without one, actions are only taken on loopback. */
+  token?: string;
   logger: Logger;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
@@ -58,9 +68,13 @@ export function isLoopback(host: string): boolean {
 }
 
 /**
- * Serve the web UI and its read-only API. Everything is read from the
- * project's Ralph folder on each request, so the server needs nothing from
- * the loop and can run beside it or on its own.
+ * Serve the web UI and its API. Everything is read from the project's Ralph
+ * folder on each request, and actions reach the loop through files there, so
+ * the server needs nothing from the loop and can run beside it or on its own.
+ *
+ * Reading is open to whoever can reach the server. Actions change what the
+ * agent does (an answer ends up in its prompt), so they are held to more:
+ * only on loopback or with a token, and only from the UI's own pages.
  */
 export async function startUiServer(options: UiServerOptions): Promise<UiServer> {
   const project = new RalphProject(options.projectRoot, options.ralphDir);
@@ -69,21 +83,38 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const loopbackOnly = isLoopback(options.host);
   const basePath = (options.basePath ?? '').replace(/\/+$/, '');
   const streams = new Set<() => void>();
+  const token = options.token;
+  const actions: ActionsView =
+    loopbackOnly || token
+      ? { enabled: true, token: Boolean(token) }
+      : {
+          enabled: false,
+          reason: 'Actions are off: the web UI is reachable from other hosts and no ui.token is set',
+          token: false,
+        };
+  const status = (): StatusView => ({ ...project.status(), actions });
+
+  const fail = (req: IncomingMessage, res: ServerResponse, cause: unknown) => {
+    if (cause instanceof NotFoundError) return sendJson(res, 404, { error: cause.message });
+    if (cause instanceof RequestError) return sendJson(res, cause.code, { error: cause.message }, cause.headers);
+    options.logger.warn('web UI request failed', { url: req.url ?? '', error: (cause as Error).message });
+    if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' });
+    else res.end();
+  };
 
   const server = createServer((req, res) => {
     try {
-      handle(req, res);
+      const pending = handle(req, res);
+      if (pending instanceof Promise) pending.catch((cause: unknown) => fail(req, res, cause));
     } catch (cause) {
-      if (cause instanceof NotFoundError) return sendJson(res, 404, { error: cause.message });
-      options.logger.warn('web UI request failed', { url: req.url ?? '', error: (cause as Error).message });
-      if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' });
-      else res.end();
+      fail(req, res, cause);
     }
   });
 
-  const handle = (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      return sendJson(res, 405, { error: 'Read-only' }, { Allow: 'GET, HEAD' });
+  const handle = (req: IncomingMessage, res: ServerResponse): void | Promise<void> => {
+    const write = req.method === 'POST';
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !write) {
+      return sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD, POST' });
     }
     // A page on another site could point a DNS name at 127.0.0.1 and read
     // the API; its requests carry that name as the Host.
@@ -98,14 +129,16 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       // slash for them to resolve inside it.
       if (path === basePath) {
         res.writeHead(308, { ...SECURITY_HEADERS, Location: `${basePath}/${url.search}` });
-        return res.end();
+        res.end();
+        return;
       }
       if (!path.startsWith(`${basePath}/`)) return sendJson(res, 404, { error: 'Not found' });
       path = path.slice(basePath.length);
     }
+    if (write) return act(req, res, path);
     if (!path.startsWith('/api/')) return serveStatic(res, webRoot, path);
 
-    if (path === '/api/status') return sendJson(res, 200, project.status());
+    if (path === '/api/status') return sendJson(res, 200, status());
     if (path === '/api/files') return sendJson(res, 200, project.listFiles());
     if (path === '/api/file') return sendJson(res, 200, project.readFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
@@ -120,6 +153,61 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return sendJson(res, 200, project.runDetail(runId));
     }
     return sendJson(res, 404, { error: 'Not found' });
+  };
+
+  /** Take an action: answer what the loop asked a person, or ask it to stop. */
+  const act = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
+    if (path !== '/api/actions/respond' && path !== '/api/actions/stop') {
+      throw new RequestError(405, 'Read-only', { Allow: 'GET, HEAD' });
+    }
+    if (!actions.enabled) throw new RequestError(403, actions.reason ?? 'Actions are off');
+    if (token && !bearerMatches(req.headers.authorization, token)) {
+      throw new RequestError(401, 'This action needs the web UI token: open the UI with ?token=<ui.token>', {
+        'WWW-Authenticate': 'Bearer',
+      });
+    }
+    // A form on another site can post here, but not as JSON: that takes a
+    // CORS preflight, which is never granted.
+    if (mediaType(req.headers['content-type']) !== 'application/json') {
+      throw new RequestError(415, 'Actions take application/json');
+    }
+    if (!sameOrigin(req)) throw new RequestError(403, 'Actions are only taken from the web UI itself');
+
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch (cause) {
+      if (cause instanceof RequestError) throw cause;
+      throw new RequestError(400, 'The body is not JSON');
+    }
+
+    if (path === '/api/actions/stop') {
+      const parsed = StopSchema.safeParse(body);
+      if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration" or "now"');
+      const run = project.status().run;
+      if (!run?.live) throw new RequestError(409, 'No run is in progress');
+      requestStop(project.ralphRoot, parsed.data.mode, 'ui');
+      options.logger.info('web UI action', { action: 'stop', mode: parsed.data.mode, run: run.runId });
+      return sendJson(res, 200, {
+        message: parsed.data.mode === 'now' ? 'Ralph stops now.' : 'Ralph stops after the current iteration.',
+      });
+    }
+
+    const parsed = AnswerInputSchema.safeParse(body);
+    if (!parsed.success) throw new RequestError(400, 'The answer needs an id and an action');
+    try {
+      const result = await respond({
+        projectRoot: options.projectRoot,
+        ralphDir: options.ralphDir,
+        input: parsed.data,
+        by: 'ui',
+      });
+      options.logger.info('web UI action', { action: parsed.data.action, request: parsed.data.id, delivered: result.delivered });
+      return sendJson(res, 200, result);
+    } catch (cause) {
+      if (cause instanceof RespondError) throw new RequestError(cause.code === 'conflict' ? 409 : 400, cause.message);
+      throw cause;
+    }
   };
 
   /**
@@ -150,14 +238,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     } | null = null;
 
     const tick = () => {
-      const status = project.status();
-      const serialized = JSON.stringify(status);
+      const current = status();
+      const serialized = JSON.stringify(current);
       if (serialized !== lastStatus) {
         lastStatus = serialized;
-        send('status', status);
+        send('status', current);
       }
 
-      const runId = status.run?.runId;
+      const runId = current.run?.runId;
       if (!runId) return;
 
       let logReset = false;
@@ -173,7 +261,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
       const iteration = project.latestIteration(runId);
       // The run's state names a split turn until the next iteration starts.
-      const splitTask = status.run?.split?.taskId;
+      const splitTask = current.run?.split?.taskId;
       const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
       const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
       if (iteration === 0 && !split) return;
@@ -284,6 +372,63 @@ function sendJson(res: ServerResponse, code: number, body: unknown, headers: Rec
     'Cache-Control': 'no-store',
   });
   res.end(JSON.stringify(body));
+}
+
+/** A request the server turns down, with the status to say so. */
+class RequestError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly headers: Record<string, string> = {},
+  ) {
+    super(message);
+  }
+}
+
+function bearerMatches(header: string | undefined, token: string): boolean {
+  const given = Buffer.from(/^Bearer\s+(.+)$/i.exec(header ?? '')?.[1]?.trim() ?? '');
+  const expected = Buffer.from(token);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+function mediaType(header: string | undefined): string {
+  return (header ?? '').split(';')[0]!.trim().toLowerCase();
+}
+
+/**
+ * Whether a request comes from a page this server served. Browsers say so in
+ * `Sec-Fetch-Site`, and name the page's origin in `Origin`; a reverse proxy
+ * that rewrites `Host` passes the original on as `X-Forwarded-Host`. A client
+ * that sends neither header is not a browser, so no page is behind it.
+ */
+function sameOrigin(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site'];
+  if (site !== undefined && site !== 'same-origin') return false;
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  let host: string;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  const forwarded = String(req.headers['x-forwarded-host'] ?? '').split(',')[0]!.trim();
+  return host !== '' && (host === req.headers.host || host === forwarded);
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolveBody, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      // Past the limit the rest is read and dropped, so the refusal still reaches the client.
+      if (size > MAX_BODY_BYTES) return reject(new RequestError(413, 'The body is too large', { Connection: 'close' }));
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
 }
 
 /** The name in a Host header, without its port. */

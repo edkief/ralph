@@ -20,6 +20,8 @@ export function buildSplitPrompt(args: {
   iterationMs: number;
   /** Where the proposal goes, relative to the project root. */
   proposalDir: string;
+  /** What the person who turned down an earlier proposal wants from this one. */
+  note?: string;
 }): string {
   const minutes = Math.max(1, Math.round(args.iterationMs / 60_000));
   const attempts = args.cutShort.length;
@@ -53,6 +55,14 @@ export function buildSplitPrompt(args: {
       ? `Commits that mention ${args.taskId} (read them with \`git show\`):\n\n${fence(args.commits)}`
       : `No commits mention ${args.taskId}.`,
     ``,
+    ...(args.note?.trim()
+      ? [
+          `A person reviewed an earlier proposed split, turned it down and asks for this instead:`,
+          ``,
+          args.note.trim(),
+          ``,
+        ]
+      : []),
     `### What to do`,
     ``,
     `1. Read the spec, the handoff, the commits and the code they touch. Change no code and run nothing`,
