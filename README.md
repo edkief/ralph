@@ -147,6 +147,11 @@ ends up in the prompt of an agent that runs shell commands:
   or `RALPH_UI_TOKEN`. With a token, open the UI once as `http://host:4280/?token=<token>`:
   the browser keeps it for the session and sends it with each action. Reading stays open
   either way.
+- Where access to the UI is already controlled in front of it, e.g. a reverse proxy that
+  authenticates, set `ui.actions` to `"open"` (or `RALPH_UI_ACTIONS=open`) to take actions
+  from other hosts without a token. Anyone who can reach the UI can then answer the agent
+  and stop the run, so never do this on a port that is exposed directly. A token that is
+  set is still required.
 - They are taken only as JSON and only from the UI's own pages, so a page on another site
   cannot post to the UI on your machine. Behind a reverse proxy, the proxy must pass the
   original `Host` on, or set `X-Forwarded-Host`.
@@ -311,7 +316,8 @@ See `templates/ralph.config.json` for a complete file.
     "port": 4280,
     "basePath": "",                // path prefix behind a reverse proxy, e.g. /ralph/ws-1
     "wait": false,                 // wait for a person's answer instead of exiting; defaults to `enabled`
-    "token": "…"                   // required for actions when the UI is not on loopback
+    "token": "…",                  // required for actions when the UI is not on loopback
+    "actions": "guarded"           // "open": take actions off loopback without a token (behind an authenticating proxy)
   }
 }
 ```
@@ -322,7 +328,7 @@ server's default until you choose one.
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
-`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`.
+`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.

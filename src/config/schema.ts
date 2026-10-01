@@ -86,7 +86,8 @@ const PlanSchema = z.object({
 /**
  * The web UI. `ralph ui` always serves it; `enabled` also starts it beside the
  * loop. Loopback by default: reading needs no authentication, and actions
- * (answering the loop, stopping it) are only taken on loopback or with `token`.
+ * (answering the loop, stopping it) are only taken on loopback, with `token`,
+ * or when `actions` is `open`.
  */
 const UiSchema = z.object({
   enabled: z.boolean().default(false),
@@ -111,6 +112,12 @@ const UiSchema = z.object({
    * the UI is reachable from other hosts; open the UI with `?token=<it>`.
    */
   token: z.string().min(1).optional(),
+  /**
+   * `open` takes actions from other hosts without a token, for a UI whose
+   * access is controlled in front of it (a reverse proxy that authenticates).
+   * `guarded`, the default, takes them only on loopback or with `token`.
+   */
+  actions: z.enum(['guarded', 'open']).optional(),
 });
 
 export const ConfigSchema = z.object({

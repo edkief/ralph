@@ -111,8 +111,9 @@ export function Overview({ status }: { status: StatusView }) {
                   <Fragment key={iteration.iteration}>
                   {splits
                     .filter((split) => split.iteration === iteration.iteration)
+                    .reverse()
                     .map((split) => (
-                      <SplitRow key={split.taskId} runId={run!.runId} split={split} now={now} />
+                      <SplitRow key={`${split.taskId}-${split.status}-${split.endedAt ?? ''}`} runId={run!.runId} split={split} now={now} />
                     ))}
                   <tr>
                     <td>
@@ -182,7 +183,7 @@ export function Overview({ status }: { status: StatusView }) {
   );
 }
 
-/** The turn that proposed splitting a task, listed after the iteration that stalled on it. */
+/** A split turn or what became of its proposal, listed newest first above the iteration that stalled on the task. */
 function SplitRow({ runId, split, now }: { runId: string; split: SplitView; now: number }) {
   const outcome =
     split.children && split.children.length > 0 && split.status !== 'failed'

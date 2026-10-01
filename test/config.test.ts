@@ -74,6 +74,13 @@ describe('loadConfig', () => {
     ).toThrow(/basePath/);
   });
 
+  it('opens the web UI\'s actions only when asked', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).ui.actions).toBeUndefined();
+    expect(loadConfig({ projectRoot: project(), env: { RALPH_UI_ACTIONS: 'open' } }).ui.actions).toBe('open');
+    expect(loadConfig({ projectRoot: project(), env: {}, overrides: { ui: { actions: 'guarded' } } }).ui.actions).toBe('guarded');
+    expect(() => loadConfig({ projectRoot: project(), env: { RALPH_UI_ACTIONS: 'yes' } })).toThrow(/actions/);
+  });
+
   it('rejects invalid values with a readable message', () => {
     const root = project();
     writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ maxIterations: -1 }));
