@@ -1182,6 +1182,16 @@ pre.document {
   max-height: none;
 }
 
+/* Checkered behind the image, so transparency reads as such in either theme. */
+img.image {
+  display: block;
+  max-width: calc(100% - 40px);
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: repeating-conic-gradient(rgb(128 128 128 / 0.18) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px;
+}
+
 article.markdown {
   line-height: 1.65;
   max-width: 820px;
