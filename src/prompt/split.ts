@@ -1,6 +1,7 @@
 /**
  * The message for a split turn: a task ran out of time or context too often
- * to be finished in one iteration, and the agent is asked to break what is
+ * to be finished in one iteration, or was estimated to before any attempt,
+ * and the agent is asked to break what is
  * left of it into smaller tasks, or to say why that would not help.
  */
 export function buildSplitPrompt(args: {
@@ -17,6 +18,8 @@ export function buildSplitPrompt(args: {
   commits: string;
   /** What each attempt ran out of, e.g. "time" or "context"; empty when a person asked for the split. */
   cutShort: string[];
+  /** The estimate that had the task split before any attempt at it. */
+  estimate?: { minutes: number; thresholdMinutes: number };
   iterationMs: number;
   /** Where the proposal goes, relative to the project root. */
   proposalDir: string;
@@ -33,9 +36,11 @@ export function buildSplitPrompt(args: {
     ``,
     `## Split ${args.taskId}`,
     ``,
-    attempts > 0
-      ? `${args.taskId} (${args.title}) was attempted ${attempts} time${attempts === 1 ? '' : 's'} and each attempt ran out of ${[...new Set(args.cutShort)].join(' or ')}\nbefore finishing it.`
-      : `${args.taskId} (${args.title}) was judged too big to finish in one iteration.`,
+    args.estimate
+      ? `${args.taskId} (${args.title}) was assessed before any attempt at it and estimated at about ${args.estimate.minutes} minutes of\nwork, more than the ${args.estimate.thresholdMinutes} minutes a task may take.`
+      : attempts > 0
+        ? `${args.taskId} (${args.title}) was attempted ${attempts} time${attempts === 1 ? '' : 's'} and each attempt ran out of ${[...new Set(args.cutShort)].join(' or ')}\nbefore finishing it.`
+        : `${args.taskId} (${args.title}) was judged too big to finish in one iteration.`,
     `An iteration has about ${minutes} minutes and starts a fresh session with no memory of earlier ones.`,
     `Your job is to plan, not to implement: break what is`,
     `left of ${args.taskId} into smaller tasks that each fit in one iteration, or explain why splitting`,

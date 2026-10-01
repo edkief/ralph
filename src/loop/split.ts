@@ -128,6 +128,10 @@ export async function proposeSplit(args: {
   cutShort: string[];
   /** What a person who turned down an earlier proposal asked for. */
   note?: string;
+  /** The estimate that had the task split before any attempt at it. */
+  estimate?: { minutes: number; thresholdMinutes: number };
+  /** Carry on in this session, the one that assessed the task, instead of opening a new one. */
+  sessionId?: string;
   signal: AbortSignal;
   hooks?: IterationHooks;
   templatesDir?: string;
@@ -160,11 +164,12 @@ export async function proposeSplit(args: {
     ...(handoffText ? { handoffPath: display(projectRoot, handoffFile), handoffText } : {}),
     commits: await git(projectRoot, ['log', '--oneline', '-n', '30', '--fixed-strings', `--grep=${taskId}`]),
     cutShort: args.cutShort,
+    ...(args.estimate ? { estimate: args.estimate } : {}),
     iterationMs: config.timeouts.iterationMs,
     proposalDir: dir,
     ...(args.note ? { note: args.note } : {}),
   });
-  let sessionId: string | undefined;
+  let sessionId = args.sessionId;
 
   for (let attempt = 0; ; attempt += 1) {
     const result = await runIteration({

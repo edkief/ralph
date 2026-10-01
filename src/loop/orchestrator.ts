@@ -3,11 +3,12 @@ import { hostname } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
 import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
+import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
-import { TaskStore } from '../tasks/store.js';
+import { TaskStore, type Task } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
 import { recentDecisions } from '../human/decisions.js';
@@ -51,7 +52,9 @@ export interface RunResult {
  * An iteration that runs out of time or context leaves a handoff for the next
  * attempt at its task. A task that keeps running out of either is probably too
  * big for one iteration: depending on `stall.onRepeatedTimeout`, the run stops,
- * proposes splitting it and stops, or splits it and carries on.
+ * proposes splitting it and stops, or splits it and carries on. With
+ * `assess.mode` a task is assessed before its first attempt, and one estimated
+ * to be too big is split without spending an attempt on it.
  *
  * Where the run would stop for a person (the agent is blocked or needs a
  * decision, a task stalled or has a split to review, the budget is spent), the
@@ -218,7 +221,41 @@ async function loop(
   // What each task's attempts ran out of, in order.
   const cutShortByTask = new Map<string, StallCause[]>();
   // Handoff notes are how a task resumes, not progress on it.
-  const notProgress = [handoffDir(config.ralphDir)];
+  const notProgress = [handoffDir(config.ralphDir), assessDir(config.ralphDir)];
+
+  /**
+   * Have a person settle a stall or a proposed split, any number of times: they
+   * may turn a proposal down and ask for another. Ends on a split (or a fresh
+   * start on the task), on a stop, or when nobody is asked.
+   */
+  const review = async (stall: StallContext, first: StallOutcome): Promise<StallOutcome> => {
+    const { taskId } = stall;
+    let outcome = first;
+    // A task assessed too big that ends up with no proposal is attempted, not put to a person.
+    while (!outcome.split && (outcome.proposal || !stall.estimate) && !signal.aborted) {
+      const proposal = outcome.proposal;
+      const answer = await ask(
+        proposal
+          ? { kind: 'split', taskId, message: outcome.message, split: describeProposal(config, taskId, proposal) }
+          : { kind: 'stalled', taskId, message: outcome.message },
+        // `ralph split --apply` settles it as well as an answer does.
+        proposal ? () => appliedElsewhere(config, taskId) : undefined,
+      );
+      if (!answer || answer.action === 'stop') break;
+      if (answer.action === 'repropose') {
+        outcome = await handleStall({ ...stall, ...(answer.text?.trim() ? { note: answer.text.trim() } : {}), reproposed: true });
+      } else if (answer.action === 'approve' && proposal) {
+        outcome = appliedElsewhere(config, taskId)
+          ? { split: true, committed: true }
+          : // Recorded as its own step: the time since the proposal was the person's.
+            await applyProposal(stall, { ...proposal, startedAt: new Date().toISOString() });
+      } else {
+        // Try the task again as it is, with what the person noted in the prompt.
+        outcome = { split: true, committed: false };
+      }
+    }
+    return outcome;
+  };
   // Commits the loop has not yet published. A failed push leaves this set,
   // so the next push attempt (or the one at run end) catches up.
   let unpushed = false;
@@ -261,6 +298,26 @@ async function loop(
     const next = summary.next;
     const taskId = next.id;
     const handoffFile = handoffPath(config.projectRoot, config.ralphDir, taskId);
+
+    if (shouldAssess(config, next)) {
+      const tooBig = await assessBeforeAttempt({ args, recorder, saveState, iteration, task: next, handoffFile, stop });
+      const outcome = tooBig ? await review(tooBig, await handleStall(tooBig)) : undefined;
+      if (outcome?.split) {
+        // New tasks in place of this one, or this one as it is: either way, not an iteration.
+        unproductive = 0;
+        if (outcome.committed) unpushed = true;
+        iteration -= 1;
+        continue;
+      }
+      if (signal.aborted || outcome?.proposal) {
+        finalStatus = signal.aborted ? 'interrupted' : 'stalled';
+        message = signal.aborted ? 'Interrupted' : (outcome?.message ?? '');
+        iteration -= 1;
+        break;
+      }
+      // It fits, or nothing came of the assessment: attempt the task as it is.
+    }
+
     reporter.iterationStart(iteration, budget, taskId);
     recorder.beginIteration(iteration);
     const startedAt = new Date().toISOString();
@@ -364,30 +421,7 @@ async function loop(
     const causes = cutShortByTask.get(taskId) ?? [];
     if (causes.length >= config.stall.maxTimeoutsPerTask) {
       const stall = { args, recorder, saveState, iteration, taskId, causes, handoffFile, stop };
-      let outcome = await handleStall(stall);
-      // A person may turn a proposal down and ask for another, any number of times.
-      while (!outcome.split && !signal.aborted) {
-        const proposal = outcome.proposal;
-        const answer = await ask(
-          proposal
-            ? { kind: 'split', taskId, message: outcome.message, split: describeProposal(config, taskId, proposal) }
-            : { kind: 'stalled', taskId, message: outcome.message },
-          // `ralph split --apply` settles it as well as an answer does.
-          proposal ? () => appliedElsewhere(config, taskId) : undefined,
-        );
-        if (!answer || answer.action === 'stop') break;
-        if (answer.action === 'repropose') {
-          outcome = await handleStall({ ...stall, ...(answer.text?.trim() ? { note: answer.text.trim() } : {}) });
-        } else if (answer.action === 'approve' && proposal) {
-          outcome = appliedElsewhere(config, taskId)
-            ? { split: true, committed: true }
-            : // Recorded as its own step: the time since the proposal was the person's.
-              await applyProposal(stall, { ...proposal, startedAt: new Date().toISOString() });
-        } else {
-          // Try the task again as it is, with what the person noted in the prompt.
-          outcome = { split: true, committed: false };
-        }
-      }
+      const outcome = await review(stall, await handleStall(stall));
       if (outcome.split) {
         // New tasks with new ids, or a fresh start on this one.
         cutShortByTask.delete(taskId);
@@ -577,11 +611,115 @@ function ranOutOf(cause: StallCause): 'time' | 'context' {
   return cause === 'context' ? 'context' : 'time';
 }
 
+/** What the agent's turns may change without it being a change to the project. */
+function planningPaths(config: Config): string[] {
+  return [handoffDir(config.ralphDir), assessDir(config.ralphDir), `${config.ralphDir.replace(/\/+$/, '')}/split`];
+}
+
 /**
- * Decide what becomes of a task that ran out of time or context too often.
- * A split is only tried when it could help: at least one attempt ran out of
- * working time or context (going quiet means a command hangs, which smaller
- * tasks would hit too), and the task has not been split too often already.
+ * Run a planning turn (an assessment, a split proposal) and warn when the
+ * project changed under it: such a turn is told to change nothing, which the
+ * loop cannot enforce for what the agent runs in a shell.
+ */
+async function planning<T>(config: Config, logger: Logger, taskId: string, turn: () => Promise<T>): Promise<T> {
+  const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
+  const before = await snapshotRepo(config.projectRoot, tasks, planningPaths(config));
+  const result = await turn();
+  const delta = diffSnapshots(before, await snapshotRepo(config.projectRoot, tasks, planningPaths(config)));
+  if (delta.productive) {
+    logger.warn('the project changed during a planning turn, which should only plan', {
+      task: taskId,
+      committed: delta.committed,
+      filesChanged: delta.filesChanged,
+    });
+  }
+  return result;
+}
+
+/**
+ * Assess `task` before its first attempt, in a triage turn of its own. Returns
+ * what a split of it starts from when the agent estimates it too big, and
+ * nothing when the task is to be attempted as it is: it fits, or the turn gave
+ * no estimate.
+ */
+async function assessBeforeAttempt(context: {
+  args: LoopArgs;
+  recorder: RunRecorder;
+  saveState: (patch: Partial<RunState>) => void;
+  iteration: number;
+  task: Task;
+  handoffFile: string;
+  stop: AbortSignal;
+}): Promise<StallContext | undefined> {
+  const { args, recorder, iteration, task } = context;
+  const { config, logger, reporter, signal } = args;
+  const taskId = task.id;
+  const startedAt = new Date().toISOString();
+
+  logger.info('assessing the task before attempting it', { task: taskId });
+  recorder.beginSplit(taskId);
+  context.saveState({ iteration, taskId, iterationStartedAt: null, split: { taskId, startedAt, phase: 'assess' } });
+  const { assessment, sessionId, recorded } = await planning(config, logger, taskId, () =>
+    assessTask({
+      client: args.client,
+      config,
+      logger,
+      task,
+      signal,
+      hooks: {
+        onEvent: (event) => recorder.recordEvent(event),
+        onText: (text) => reporter.status(truncate(text, 100)),
+        onTool: (tool, detail) => reporter.status(`${tool} ${detail}`),
+      },
+    }),
+  );
+  reporter.clearStatus();
+
+  const minutes = assessment.estimateMinutes;
+  if (assessment.verdict === 'too-big' && minutes !== undefined) {
+    logger.info('the task is estimated too big for one iteration', {
+      task: taskId,
+      estimateMinutes: minutes,
+      thresholdMinutes: assessment.thresholdMinutes,
+    });
+    return {
+      args,
+      recorder,
+      saveState: context.saveState,
+      iteration,
+      taskId,
+      causes: [],
+      handoffFile: context.handoffFile,
+      stop: context.stop,
+      estimate: { minutes, thresholdMinutes: assessment.thresholdMinutes, startedAt, ...(sessionId ? { sessionId } : {}) },
+    };
+  }
+
+  if (assessment.verdict === 'fits') {
+    logger.info('the task is estimated to fit one iteration', { task: taskId, estimateMinutes: minutes });
+  } else {
+    logger.warn('could not assess the task; attempting it as it is', { task: taskId, reason: assessment.reason, retried: !recorded });
+  }
+  recorder.recordSplit({
+    iteration,
+    taskId,
+    causes: [],
+    trigger: 'assessment',
+    status: assessment.verdict === 'fits' ? 'fits' : 'failed',
+    ...(minutes !== undefined ? { estimateMinutes: minutes } : {}),
+    reason: assessment.reason,
+    startedAt,
+    endedAt: new Date().toISOString(),
+  });
+  return undefined;
+}
+
+/**
+ * Decide what becomes of a task that ran out of time or context too often, or
+ * that was estimated too big before any attempt (`estimate`).
+ * After a stall, a split is only tried when it could help: at least one attempt
+ * ran out of working time or context (going quiet means a command hangs, which
+ * smaller tasks would hit too), and the task has not been split too often already.
  */
 interface StallContext {
   args: LoopArgs;
@@ -594,6 +732,27 @@ interface StallContext {
   stop: AbortSignal;
   /** What a person who turned down an earlier proposal asked for. */
   note?: string;
+  /** Set when the task was assessed too big before any attempt, rather than stalled. */
+  estimate?: {
+    minutes: number;
+    thresholdMinutes: number;
+    /** When the triage turn started, which the split turn is recorded with. */
+    startedAt: string;
+    /** The triage session, which the first split turn carries on in. */
+    sessionId?: string;
+  };
+  /** A person asked for another proposal: a turn of its own, in a new session. */
+  reproposed?: boolean;
+}
+
+/** Why the task is up for a split, as the messages to a person start. */
+function whySplit(context: Pick<StallContext, 'taskId' | 'causes' | 'estimate'>): string {
+  const { taskId, causes, estimate } = context;
+  if (estimate) {
+    return `${taskId} was estimated at ${estimate.minutes} minutes before any attempt, over the ${estimate.thresholdMinutes} minutes a task may take`;
+  }
+  const count = causes.length;
+  return `${taskId} ran out of ${[...new Set(causes.map(ranOutOf))].join(' or ')} ${count} time${count === 1 ? '' : 's'}`;
 }
 
 /** A split the agent proposed and nobody has applied yet. */
@@ -613,16 +772,17 @@ type StallOutcome =
 async function handleStall(context: StallContext): Promise<StallOutcome> {
   const { args, recorder, iteration, taskId, causes, handoffFile } = context;
   const { config, logger, reporter, signal } = args;
-  const count = causes.length;
-  const spent = `${taskId} ran out of ${[...new Set(causes.map(ranOutOf))].join(' or ')} ${count} time${count === 1 ? '' : 's'}`;
-  const handoff = `(handoff: ${display(config, handoffFile)})`;
-  const stopped = (message: string) => ({ split: false as const, message });
+  const { estimate } = context;
+  const spent = whySplit(context);
+  // An assessed task has had no attempt, so no handoff either.
+  const handoff = estimate ? '' : ` (handoff: ${display(config, handoffFile)})`;
+  const stopped = (message: string) => ({ split: false as const, message: `${message}${handoff}` });
 
-  const mode = config.stall.onRepeatedTimeout;
-  if (mode === 'stop' || context.stop.aborted) return stopped(`${spent}; split it into smaller tasks ${handoff}`);
-  if (causes.every((cause) => cause === 'inactivity')) {
+  const mode = estimate ? config.assess.mode : config.stall.onRepeatedTimeout;
+  if (mode === 'stop' || mode === 'off' || context.stop.aborted) return stopped(`${spent}; split it into smaller tasks`);
+  if (!estimate && causes.every((cause) => cause === 'inactivity')) {
     return stopped(
-      `${spent}, going quiet each time: a command probably hangs, which splitting the task would not fix ${handoff}`,
+      `${spent}, going quiet each time: a command probably hangs, which splitting the task would not fix`,
     );
   }
 
@@ -633,43 +793,58 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
   if (depth >= config.stall.maxSplitDepth) {
     return stopped(
       config.stall.maxSplitDepth === 0
-        ? `${spent}; split it into smaller tasks ${handoff}`
-        : `${spent} after being split from ${task?.splitFrom ?? 'another task'}; stall.maxSplitDepth (${config.stall.maxSplitDepth}) allows no further split, so split it by hand ${handoff}`,
+        ? `${spent}; split it into smaller tasks`
+        : `${spent} after being split from ${task?.splitFrom ?? 'another task'}; stall.maxSplitDepth (${config.stall.maxSplitDepth}) allows no further split, so split it by hand`,
     );
   }
 
   const dir = splitDir(config.ralphDir, taskId);
-  const startedAt = new Date().toISOString();
-  const record = (patch: Omit<SplitRecord, 'iteration' | 'taskId' | 'causes' | 'startedAt' | 'endedAt'>) =>
-    recorder.recordSplit({ iteration, taskId, causes, ...patch, startedAt, endedAt: new Date().toISOString() });
+  // The first split turn of an assessed task carries on from its triage: same session, same record.
+  const carriesOn = estimate !== undefined && !context.reproposed;
+  const startedAt = carriesOn ? estimate.startedAt : new Date().toISOString();
+  const record = (patch: Omit<SplitRecord, 'iteration' | 'taskId' | 'causes' | 'trigger' | 'estimateMinutes' | 'startedAt' | 'endedAt'>) =>
+    recorder.recordSplit({
+      iteration,
+      taskId,
+      causes,
+      trigger: estimate ? 'assessment' : 'stall',
+      ...(estimate ? { estimateMinutes: estimate.minutes } : {}),
+      ...patch,
+      startedAt,
+      endedAt: new Date().toISOString(),
+    });
 
   logger.info('asking the agent to propose a split', { task: taskId, folder: dir });
-  recorder.beginSplit(taskId);
-  context.saveState({ split: { taskId, startedAt } });
-  const outcome = await proposeSplit({
-    client: args.client,
-    config,
-    logger,
-    taskId,
-    cutShort: causes.map(ranOutOf),
-    ...(context.note ? { note: context.note } : {}),
-    signal,
-    hooks: {
-      onEvent: (event) => recorder.recordEvent(event),
-      onText: (text) => reporter.status(truncate(text, 100)),
-      onTool: (tool, detail) => reporter.status(`${tool} ${detail}`),
-    },
-  });
+  if (!carriesOn) recorder.beginSplit(taskId);
+  context.saveState({ split: { taskId, startedAt, phase: 'split' } });
+  const outcome = await planning(config, logger, taskId, () =>
+    proposeSplit({
+      client: args.client,
+      config,
+      logger,
+      taskId,
+      cutShort: causes.map(ranOutOf),
+      ...(context.note ? { note: context.note } : {}),
+      ...(estimate ? { estimate: { minutes: estimate.minutes, thresholdMinutes: estimate.thresholdMinutes } } : {}),
+      ...(carriesOn && estimate.sessionId ? { sessionId: estimate.sessionId } : {}),
+      signal,
+      hooks: {
+        onEvent: (event) => recorder.recordEvent(event),
+        onText: (text) => reporter.status(truncate(text, 100)),
+        onTool: (tool, detail) => reporter.status(`${tool} ${detail}`),
+      },
+    }),
+  );
 
   if (outcome.status === 'failed') {
     logger.warn('could not propose a split', { task: taskId, reason: outcome.reason });
     record({ status: 'failed', reason: outcome.reason });
-    return stopped(`${spent}; Ralph could not propose a split (${outcome.reason}), so split it by hand ${handoff}`);
+    return stopped(`${spent}; Ralph could not propose a split (${outcome.reason}), so split it by hand`);
   }
   if (outcome.status === 'declined') {
     logger.warn('the agent advises against splitting the task', { task: taskId, reason: outcome.reason });
     record({ status: 'declined', reason: outcome.reason });
-    return stopped(`${spent}; splitting it would not help: ${outcome.reason} ${handoff}`);
+    return stopped(`${spent}; splitting it would not help: ${outcome.reason}`);
   }
 
   const ids = outcome.proposal.tasks.map((child) => child.id);
@@ -683,9 +858,8 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
     logger.info('proposed a split', { task: taskId, into: ids.join(','), folder: dir });
     record({ status: 'proposed', children: ids, reason: outcome.proposal.reason });
     return {
-      ...stopped(
-        `${spent}; proposed splitting it into ${describeIds(ids)} in ${dir}/. Review it, then run \`ralph split ${taskId} --apply\``,
-      ),
+      split: false,
+      message: `${spent}; proposed splitting it into ${describeIds(ids)} in ${dir}/. Review it, then run \`ralph split ${taskId} --apply\``,
       proposal,
     };
   }
@@ -694,13 +868,15 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
 
 /** Replace the stalled task with the tasks proposed for it, and commit that. */
 async function applyProposal(context: StallContext, proposal: Proposed): Promise<StallOutcome> {
-  const { args, recorder, iteration, taskId, causes } = context;
+  const { args, recorder, iteration, taskId, causes, estimate } = context;
   const { config, logger } = args;
   const record = (patch: Pick<SplitRecord, 'status' | 'reason' | 'committed'>) =>
     recorder.recordSplit({
       iteration,
       taskId,
       causes,
+      trigger: estimate ? 'assessment' : 'stall',
+      ...(estimate ? { estimateMinutes: estimate.minutes } : {}),
       children: proposal.ids,
       ...patch,
       startedAt: proposal.startedAt,
@@ -722,10 +898,9 @@ async function applyProposal(context: StallContext, proposal: Proposed): Promise
     const reason = (cause as Error).message;
     logger.warn('could not apply the split', { task: taskId, error: reason });
     record({ status: 'failed', reason });
-    const count = causes.length;
     return {
       split: false,
-      message: `${taskId} ran out of ${[...new Set(causes.map(ranOutOf))].join(' or ')} ${count} time${count === 1 ? '' : 's'}; could not apply the split proposed in ${splitDir(config.ralphDir, taskId)}/: ${reason}`,
+      message: `${whySplit(context)}; could not apply the split proposed in ${splitDir(config.ralphDir, taskId)}/: ${reason}`,
     };
   }
 }
