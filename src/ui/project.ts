@@ -2,9 +2,10 @@ import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, 
 import { hostname } from 'node:os';
 import { basename, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
+import { TASK_ID } from '../init/plan.js';
 import { parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
-import type { IterationRecord, RunState } from '../report/jsonl.js';
+import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
 import type {
   FileContent,
@@ -13,6 +14,7 @@ import type {
   LogLine,
   RunDetail,
   RunView,
+  SplitView,
   StatusView,
   TasksView,
   TranscriptEntry,
@@ -120,6 +122,7 @@ export class RalphProject {
         lastStatus: state.lastStatus,
         tasksPassed: state.tasksPassed,
         tasksTotal: state.tasksTotal,
+        split: state.split ?? null,
         ...(state.message ? { message: state.message } : {}),
       };
     }
@@ -138,6 +141,7 @@ export class RalphProject {
       lastStatus: null,
       tasksPassed: summary?.tasksPassed ?? null,
       tasksTotal: summary?.tasksTotal ?? null,
+      split: null,
       ...(summary?.message ? { message: summary.message } : {}),
     };
   }
@@ -165,7 +169,29 @@ export class RalphProject {
         compactions: 0,
       });
     }
-    return { run, iterations: [...byIteration.values()].sort((a, b) => a.iteration - b.iteration) };
+    return {
+      run,
+      iterations: [...byIteration.values()].sort((a, b) => a.iteration - b.iteration),
+      splits: this.splits(run),
+    };
+  }
+
+  /** The run's split turns: those recorded, and the one still running or cut off before its record. */
+  private splits(run: RunView): SplitView[] {
+    const dir = this.runDir(run.runId);
+    const splits = parseJsonLines<SplitRecord>(readLines(resolve(dir, 'splits.jsonl'))).map(splitView);
+    const open = run.split;
+    if (open && !splits.some((split) => split.taskId === open.taskId) && existsSync(this.splitEventsPath(run.runId, open.taskId))) {
+      splits.push({
+        taskId: open.taskId,
+        iteration: run.iteration,
+        status: run.live ? 'running' : 'ended',
+        startedAt: open.startedAt,
+        endedAt: null,
+        durationMs: null,
+      });
+    }
+    return splits;
   }
 
   log(runId: string): LogLine[] {
@@ -175,9 +201,14 @@ export class RalphProject {
   transcript(runId: string, iteration: number): TranscriptEntry[] {
     const path = this.eventsPath(runId, iteration);
     if (!existsSync(path)) throw new NotFoundError(`No events for iteration ${iteration} of run ${runId}`);
-    const builder = new TranscriptBuilder();
-    for (const event of parseJsonLines<OpencodeEvent>(readLines(path))) builder.push(event);
-    return builder.all;
+    return transcriptOf(path);
+  }
+
+  /** The transcript of the turn that proposed splitting `taskId`. */
+  splitTranscript(runId: string, taskId: string): TranscriptEntry[] {
+    const path = this.splitEventsPath(runId, taskId);
+    if (!existsSync(path)) throw new NotFoundError(`No split of ${taskId} in run ${runId}`);
+    return transcriptOf(path);
   }
 
   /** The highest iteration with an event file, 0 before the first. */
@@ -203,6 +234,11 @@ export class RalphProject {
 
   eventsPath(runId: string, iteration: number): string {
     return resolve(this.runDir(runId), `iteration-${String(iteration).padStart(3, '0')}.events.jsonl`);
+  }
+
+  splitEventsPath(runId: string, taskId: string): string {
+    if (!TASK_ID.test(taskId)) throw new NotFoundError(`No task ${taskId}`);
+    return resolve(this.runDir(runId), `split-${taskId}.events.jsonl`);
   }
 
   /**
@@ -302,6 +338,26 @@ function iterationView(record: IterationRecord): IterationView {
     ...(record.handoff ? { handoff: record.handoff } : {}),
     ...(result.error ? { error: result.error } : {}),
   };
+}
+
+function splitView(record: SplitRecord): SplitView {
+  const durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
+  return {
+    taskId: record.taskId,
+    iteration: record.iteration,
+    status: record.status,
+    ...(record.children ? { children: record.children } : {}),
+    ...(record.reason ? { reason: record.reason } : {}),
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    durationMs: Number.isFinite(durationMs) ? durationMs : null,
+  };
+}
+
+function transcriptOf(path: string): TranscriptEntry[] {
+  const builder = new TranscriptBuilder();
+  for (const event of parseJsonLines<OpencodeEvent>(readLines(path))) builder.push(event);
+  return builder.all;
 }
 
 function readJson<T>(path: string): T | undefined {

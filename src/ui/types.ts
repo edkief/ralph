@@ -39,6 +39,11 @@ export interface RunView {
   lastStatus: string | null;
   tasksPassed: number | null;
   tasksTotal: number | null;
+  /**
+   * The split turn in progress, or the one the run ended on. Null once an
+   * iteration has started after it.
+   */
+  split: { taskId: string; startedAt: string } | null;
   message?: string;
 }
 
@@ -81,9 +86,27 @@ export interface IterationView {
   error?: string;
 }
 
+/** The agent's turn proposing a split of a task that kept running out of time or context. */
+export interface SplitView {
+  taskId: string;
+  /** The iteration after which the task stalled. */
+  iteration: number;
+  /** `proposed`, `applied`, `declined` or `failed`; `running` or `ended` while it has no record. */
+  status: string;
+  /** The tasks proposed in its place. */
+  children?: string[];
+  /** Why the agent split it this way, advised against it, or failed. */
+  reason?: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
 export interface RunDetail {
   run: RunView;
   iterations: IterationView[];
+  /** Split turns, in the order they ran. */
+  splits: SplitView[];
 }
 
 export interface LogLine {
@@ -121,11 +144,14 @@ export type TranscriptEntry =
     })
   | (EntryBase & { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string });
 
-/** The transcript of the iteration the live stream follows. */
+/** The transcript of the session the live stream follows: an iteration, or a split turn. */
 export interface LiveTranscript {
   runId: string;
+  /** The iteration followed, or the one a split turn came after. */
   iteration: number;
-  /** Replace what is shown: a new iteration began, or this is the first message. */
+  /** The task being split, when the session is a split turn. */
+  split?: string;
+  /** Replace what is shown: a new session began, or this is the first message. */
   reset: boolean;
   /** Entries added or changed since the last message. */
   entries: TranscriptEntry[];
