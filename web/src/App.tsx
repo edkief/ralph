@@ -98,7 +98,9 @@ function Header({ status, connected }: { status: StatusView | null; connected: b
                 Iteration <strong>{run.iteration || '–'}</strong>
                 {run.maxIterations ? <span className="muted">/{run.maxIterations}</span> : null}
                 {run.taskId ? <span className="task-chip">{run.taskId}</span> : null}
-                {run.live && run.iterationStartedAt ? (
+                {run.live && run.split ? (
+                  <span className="muted"> · splitting · {formatDuration(now - Date.parse(run.split.startedAt))}</span>
+                ) : run.live && run.iterationStartedAt ? (
                   <span className="muted"> · {formatDuration(now - Date.parse(run.iterationStartedAt))}</span>
                 ) : null}
               </span>

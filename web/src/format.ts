@@ -44,13 +44,15 @@ export function formatRunId(runId: string): string {
 
 export type Tone = 'good' | 'warn' | 'bad' | 'live' | 'muted';
 
-/** How a run or iteration status should read at a glance. */
+/** How a run, iteration or split status should read at a glance. */
 export function statusTone(status: string | null | undefined): Tone {
   switch (status) {
     case 'running':
       return 'live';
     case 'complete':
     case 'progressed':
+    case 'proposed':
+    case 'applied':
       return 'good';
     case 'blocked':
     case 'stalled':
@@ -59,6 +61,7 @@ export function statusTone(status: string | null | undefined): Tone {
     case 'provider-error':
       return 'bad';
     case 'decide':
+    case 'declined':
     case 'max-iterations':
     case 'timeout':
     case 'wrapped-up':

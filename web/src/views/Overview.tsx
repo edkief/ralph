@@ -1,4 +1,5 @@
-import { useJson, useNow, type RunDetail, type StatusView } from '../api';
+import { Fragment } from 'react';
+import { useJson, useNow, type RunDetail, type SplitView, type StatusView } from '../api';
 import { formatCount, formatDateTime, formatDuration, formatRunId, statusLabel, statusTone } from '../format';
 import { href } from '../route';
 
@@ -8,6 +9,8 @@ export function Overview({ status }: { status: StatusView }) {
   // Refetch the run's iterations whenever the loop records a step.
   const detail = useJson<RunDetail>(run ? `/api/runs/${encodeURIComponent(run.runId)}` : null, run ? `${run.updatedAt}:${run.iteration}` : null);
   const iterations = detail.data?.iterations ?? [];
+  const splits = detail.data?.splits ?? [];
+  const splitting = run?.live ? run.split : null;
   const totalTokens = iterations.reduce((sum, iteration) => sum + (iteration.tokens ?? 0), 0);
   const runStatus = run ? (run.status === 'running' && !run.live ? 'ended' : run.status) : null;
 
@@ -43,7 +46,9 @@ export function Overview({ status }: { status: StatusView }) {
             {run?.maxIterations ? <span className="muted"> / {run.maxIterations}</span> : null}
           </div>
           <div className="card-detail">
-            {run?.live && run.iterationStartedAt
+            {splitting
+              ? `Splitting ${splitting.taskId} · ${formatDuration(now - Date.parse(splitting.startedAt))} so far`
+              : run?.live && run.iterationStartedAt
               ? `${run.taskId ?? ''} · ${formatDuration(now - Date.parse(run.iterationStartedAt))} so far`
               : run?.lastStatus
                 ? `Last: ${statusLabel(run.lastStatus)}`
@@ -121,7 +126,13 @@ export function Overview({ status }: { status: StatusView }) {
                 </thead>
                 <tbody>
                   {[...iterations].reverse().map((iteration) => (
-                    <tr key={iteration.iteration}>
+                    <Fragment key={iteration.iteration}>
+                    {splits
+                      .filter((split) => split.iteration === iteration.iteration)
+                      .map((split) => (
+                        <SplitRow key={split.taskId} runId={run!.runId} split={split} now={now} />
+                      ))}
+                    <tr>
                       <td>
                         <a href={href('transcript', `${run!.runId}/${iteration.iteration}`)} title="Open the transcript">{iteration.iteration}</a>
                       </td>
@@ -148,6 +159,7 @@ export function Overview({ status }: { status: StatusView }) {
                         </div>
                       </td>
                     </tr>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -156,5 +168,35 @@ export function Overview({ status }: { status: StatusView }) {
         </section>
       </div>
     </div>
+  );
+}
+
+/** The turn that proposed splitting a task, listed after the iteration that stalled on it. */
+function SplitRow({ runId, split, now }: { runId: string; split: SplitView; now: number }) {
+  const outcome =
+    split.children && split.children.length > 0 && split.status !== 'failed'
+      ? `→ ${split.children.join(', ')}`
+      : (split.reason ?? '');
+  return (
+    <tr className="split-row">
+      <td>
+        <a href={href('transcript', `${runId}/split-${split.taskId}`)} title="Open the split's transcript">split</a>
+      </td>
+      <td>{split.taskId}</td>
+      <td>
+        <span className={`badge tone-${statusTone(split.status)}`}>
+          {split.status === 'running' ? <span className="pulse" /> : null}
+          {statusLabel(split.status)}
+        </span>
+      </td>
+      <td className="num">
+        {split.status === 'running' && split.startedAt ? formatDuration(now - Date.parse(split.startedAt)) : formatDuration(split.durationMs)}
+      </td>
+      <td className="num">–</td>
+      <td className="num">–</td>
+      <td className="split-outcome" title={split.reason}>
+        {outcome}
+      </td>
+    </tr>
   );
 }

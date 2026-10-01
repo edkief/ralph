@@ -571,6 +571,17 @@ pre {
   gap: 4px;
 }
 
+.split-row td {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.split-outcome {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Toolbars and fields ────────────────────────────────────────────── */
 
 .toolbar {

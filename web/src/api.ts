@@ -54,7 +54,8 @@ export interface LiveState {
   connected: boolean;
   status: StatusView | null;
   log: { runId: string; lines: LogLine[] } | null;
-  transcript: { runId: string; iteration: number; entries: TranscriptEntry[] } | null;
+  /** The session followed: an iteration, or with `split` the turn splitting that task. */
+  transcript: { runId: string; iteration: number; split?: string; entries: TranscriptEntry[] } | null;
 }
 
 type LiveAction =
@@ -75,8 +76,12 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
       return { ...state, log: { runId, lines: [...previous, ...lines].slice(-MAX_LOG_LINES) } };
     }
     case 'transcript': {
-      const { runId, iteration, reset, entries } = action.data;
-      const same = !reset && state.transcript?.runId === runId && state.transcript.iteration === iteration;
+      const { runId, iteration, split, reset, entries } = action.data;
+      const same =
+        !reset &&
+        state.transcript?.runId === runId &&
+        state.transcript.iteration === iteration &&
+        state.transcript.split === split;
       const next = same ? [...state.transcript!.entries] : [];
       const index = new Map(next.map((entry, position) => [entry.id, position]));
       for (const entry of entries) {
@@ -88,14 +93,14 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
           next[at] = entry;
         }
       }
-      return { ...state, transcript: { runId, iteration, entries: next } };
+      return { ...state, transcript: { runId, iteration, ...(split ? { split } : {}), entries: next } };
     }
   }
 }
 
 /**
  * Follow `/api/live`: the status, the latest run's log and the transcript of
- * its iteration in progress. EventSource reconnects on its own, and the
+ * its session in progress. EventSource reconnects on its own, and the
  * server starts every connection with a full snapshot.
  */
 export function useLive(): LiveState {
