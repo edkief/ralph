@@ -76,6 +76,8 @@ ralph ui                    # serve the web UI to watch runs and browse .ralph/
 ralph split TASK-8          # propose splitting a task into smaller ones
 ralph split TASK-8 --apply  # replace it with the proposed tasks and commit
 ralph --ui                  # run the loop and serve the web UI beside it
+ralph respond               # show what Ralph is asking a person
+ralph respond answer "REST" # answer it, as the web UI does
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -98,11 +100,16 @@ nothing to get wrong.
 | 6 | Stalled: iterations stopped changing anything, or a task kept running out of time |
 | 130 | Interrupted, or stopped on request |
 
+Codes 1, 2, 3 and 6 mean a person is needed. A run that [waits for one](#when-ralph-needs-a-person)
+carries on once they answer, and exits with one of these only when told to stop.
+
 ### Web UI
 
-A read-only web UI shows what the loop is doing, at <http://127.0.0.1:4280> by default:
+A web UI shows what the loop is doing, and lets you answer it when it needs a person, at
+<http://127.0.0.1:4280> by default:
 
-- **Overview**: what the loop is doing now. The run's status, then each iteration's outcome,
+- **Overview**: what the loop is doing now. What it is asking you, if anything, with the
+  buttons to answer; buttons to stop the run; the run's status, then each iteration's outcome,
   duration, tool calls, tokens and changes, with a row for every split turn and its outcome,
   then the task in progress and the few that come next
 - **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
@@ -124,15 +131,65 @@ There are two ways to start it:
   and runs without it.
 
 Set the address with `--ui-host`/`--ui-port`, `ui.host`/`ui.port`, or
-`RALPH_UI_HOST`/`RALPH_UI_PORT`. The UI has no authentication and transcripts can contain
-secrets from the repository or the environment, so it listens on `127.0.0.1` only, and refuses
-requests addressed to any other host name. Binding it elsewhere logs a warning. From a
+`RALPH_UI_HOST`/`RALPH_UI_PORT`. Reading the UI needs no authentication and transcripts can
+contain secrets from the repository or the environment, so it listens on `127.0.0.1` only, and
+refuses requests addressed to any other host name. Binding it elsewhere logs a warning. From a
 Kubernetes pod, prefer `kubectl port-forward pod/<pod> 4280` over exposing it.
+
+Actions (answering Ralph, stopping a run) are held to more than reading, because an answer
+ends up in the prompt of an agent that runs shell commands:
+
+- They are taken only when the UI listens on loopback, or when a token is set with `ui.token`
+  or `RALPH_UI_TOKEN`. With a token, open the UI once as `http://host:4280/?token=<token>`:
+  the browser keeps it for the session and sends it with each action. Reading stays open
+  either way.
+- They are taken only as JSON and only from the UI's own pages, so a page on another site
+  cannot post to the UI on your machine. Behind a reverse proxy, the proxy must pass the
+  original `Host` on, or set `X-Forwarded-Host`.
+- Each one is logged, and recorded in the run's `actions.jsonl`.
 
 Behind a reverse proxy that serves the UI under a path prefix, set that prefix with
 `--ui-base-path`, `ui.basePath` or `RALPH_UI_BASE_PATH` (e.g. `/ralph/ws-1`). The server
 strips it from every request and redirects the bare prefix to itself plus a slash; the app's
 own URLs are relative, so the proxy rewrites nothing. Requests outside the prefix get 404.
+
+### When Ralph needs a person
+
+Some things only a person can settle. Ralph leaves each as a request in `.ralph/history/pending.json`,
+which the web UI shows on its Overview and `ralph respond` prints:
+
+| What happened | What you can tell Ralph |
+| --- | --- |
+| A split was proposed (`stall.onRepeatedTimeout: propose`) | `approve` it; `retry` the task without splitting; `repropose` with a note saying what to change; `stop` |
+| The agent raised `DECIDE` | `answer` the question; `stop` |
+| The agent raised `BLOCKED` | `resume` once it is unblocked, with a note if that helps; `stop` |
+| The run stalled (nothing changed, a split would not help, a command hangs) | `resume`, with a note; `stop` |
+| The iteration budget is spent | `continue` for more iterations; `stop` |
+
+By default Ralph exits at these points, with the [exit codes](#exit-codes) above. With
+`--wait` (or `ui.wait`, or `RALPH_UI_WAIT=1`), which `--ui` turns on unless you pass
+`--no-wait`, it waits instead: the run's status becomes `waiting`, no timeout runs, and it
+carries on in the same process as soon as it is answered. `stop` ends the run as it would have
+ended without waiting, with the same exit code; Ctrl-C does too.
+
+Answer from the web UI, or from a terminal in the project:
+
+```bash
+ralph respond                                 # what is asked, and the answers it takes
+ralph respond answer "REST, like the rest of the API"
+ralph respond resume "The API key is in .env now"
+ralph respond continue --iterations 5
+ralph respond approve                         # same as ralph split TASK-8 --apply
+```
+
+The request and the answer are files in `.ralph/history/`, so `ralph ui` and `ralph respond` work from
+another terminal or container that shares the folder. If the run has already exited, what can
+be done without it still is: `approve` applies and commits the split, `answer` is kept for the
+next run, `dismiss` closes the request. Then run `ralph` again.
+
+Whatever you write (an answer, a note) is appended to `.ralph/decisions.jsonl` and the latest
+20 entries are shown to the agent at the top of every later prompt, in this run and the next,
+as decided. Commit the file with the project if the answers should outlive the checkout.
 
 ### Stopping a run
 
@@ -142,6 +199,9 @@ iteration and stop now; its work is left uncommitted in the working tree.
 
 Without a terminal, send the same signals: `kill -INT <pid>` for the first, and
 `kill -TERM <pid>` to stop now (as Kubernetes does when a pod is deleted).
+
+The web UI's Overview has a button for each while a run is in progress. They leave a request
+in `.ralph/history/stop.json`, which the loop picks up within a second.
 
 ## What a project must provide
 
@@ -158,6 +218,7 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   logs/LOG.md      # optional — the agent's own running log
   handoff/         # written when a task runs out of time; commit it with the work
   split/           # proposed and applied splits of tasks that kept running out of time
+  decisions.jsonl  # what a person answered or noted; shown to the agent in later prompts
   history/         # written by ralph; ignore it in git
 ralph.config.json  # optional
 ```
@@ -242,9 +303,11 @@ See `templates/ralph.config.json` for a complete file.
   },
   "ui": {
     "enabled": false,              // serve the web UI beside the loop, like --ui
-    "host": "127.0.0.1",           // no authentication: keep it on loopback
+    "host": "127.0.0.1",           // reading needs no authentication: keep it on loopback
     "port": 4280,
-    "basePath": ""                 // path prefix behind a reverse proxy, e.g. /ralph/ws-1
+    "basePath": "",                // path prefix behind a reverse proxy, e.g. /ralph/ws-1
+    "wait": false,                 // wait for a person's answer instead of exiting; defaults to `enabled`
+    "token": "…"                   // required for actions when the UI is not on loopback
   }
 }
 ```
@@ -255,7 +318,7 @@ server's default until you choose one.
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
-`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`.
+`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.
@@ -366,7 +429,7 @@ runs; the iteration and wrap-up budgets still apply. Iteration records count the
 | Value | What happens |
 | --- | --- |
 | `stop` | The run stops as `stalled` (exit 6), leaving the split to you. |
-| `propose` (default) | Ralph has the agent propose a split, then stops as `stalled` for you to review it. |
+| `propose` (default) | Ralph has the agent propose a split, then stops as `stalled` for you to review it, or [waits for you](#when-ralph-needs-a-person) to approve it. |
 | `split` | Ralph has the agent propose a split, applies it, commits it and carries on. |
 
 The proposal comes from a split turn: a session of its own, run with `plan.model` (falling back
@@ -414,10 +477,13 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome
 - `split-TASK-x.events.jsonl` — every event of that split turn
 - `state.json` — where the run stands (status, iteration, task, the split turn in progress,
-  pid), rewritten as it goes
+  what it is waiting on a person for, pid), rewritten as it goes
+- `actions.jsonl` — what a person answered, from the web UI or `ralph respond`
 - `run.json` — the run summary, once the run ends
 
-The web UI reads all of these, so it needs nothing else from the loop.
+The web UI reads all of these, so it needs nothing else from the loop. Beside the runs,
+`history/pending.json` holds what Ralph is asking a person while it asks, and
+`history/answer.json` and `history/stop.json` carry an answer or a stop request to the loop.
 
 ## Notes on the opencode API
 
