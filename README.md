@@ -110,13 +110,14 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
   buttons to answer; buttons to stop the run; the run's status, then each iteration's outcome,
-  duration, tool calls, tokens and changes, with a row for every split turn and its outcome,
+  duration, tool calls, tokens and changes, with a row for every split turn or assessment and
+  its outcome,
   then the task in progress and the few that come next
 - **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
   split one came from
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
-  is an iteration, or the turn in which the agent proposed splitting a task
+  is an iteration, or the turn in which the agent assessed a task or proposed splitting it
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
   and `ralph.config.json`, with Markdown rendered and images shown as pictures
@@ -226,7 +227,8 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   STEERING.md      # optional — work to do before feature tasks
   logs/LOG.md      # optional — the agent's own running log
   handoff/         # written when a task runs out of time; commit it with the work
-  split/           # proposed and applied splits of tasks that kept running out of time
+  split/           # proposed and applied splits of tasks that were too big
+  assess/          # the estimate of each task assessed before its first attempt
   decisions.jsonl  # what a person answered or noted; shown to the agent in later prompts
   history/         # written by ralph; ignore it in git
 ralph.config.json  # optional
@@ -295,6 +297,11 @@ See `templates/ralph.config.json` for a complete file.
     "maxTimeoutsPerTask": 2,       // a task that runs out of time or context this often has stalled
     "onRepeatedTimeout": "propose", // then: stop | propose a split and stop | split it and carry on
     "maxSplitDepth": 1             // how often a task and its descendants may be split
+  },
+  "assess": {
+    "mode": "off",                 // before a task's first attempt: off | propose a split if it is too big | split it
+    "thresholdMs": 1800000,        // an estimate over this is too big; defaults to timeouts.iterationMs
+    "timeoutMs": 300000            // working time of the triage turn that estimates the task
   },
   "permissions": {
     "fallback": "allow",           // unattended runs need to proceed without a human
@@ -480,6 +487,49 @@ interrupts the session and ends the iteration as `failed`, with the server's rea
 A failure that is not an outright rejection is retried once first; a request that is already
 gone (answered elsewhere) is ignored.
 
+### Assessing a task before it starts
+
+Splitting a stalled task costs the attempts that stalled. With `assess.mode` set, Ralph asks
+first: before a task's first attempt, a triage turn estimates the working time it needs, and a
+task estimated over `assess.thresholdMs` (by default `timeouts.iterationMs`) is split before
+any time is spent on it.
+
+| `assess.mode` | A task estimated too big |
+| --- | --- |
+| `off` (default) | No task is assessed. |
+| `propose` | Ralph has the agent propose a split, then stops as `stalled` for you to review it, or [waits for you](#when-ralph-needs-a-person) to `approve` it, `retry` the task as it is, or `repropose`. |
+| `split` | Ralph has the agent propose a split, applies it, commits it and carries on with the first new task. |
+
+The triage turn is a session of its own, run with `plan.model` (falling back to `model`). It is
+given the task's spec and told to plan and estimate, not to implement: to read the spec and the
+code it concerns, to edit nothing, to run no builds or tests, and to answer with
+`<promise>ESTIMATE:minutes:why</promise>`. Three things keep it to that:
+
+- it has `assess.timeoutMs` (5 minutes by default) and is interrupted outright when they are up;
+- its file writes are confined to `.ralph/split/TASK-8/`, like a split turn's;
+- Ralph compares the repository before and after, and warns in the log when a commit appeared or a
+  file changed outside `.ralph/split/`, `.ralph/assess/` and `.ralph/handoff/`. The same check now covers split turns. It reports; it does not
+  undo, and what the agent runs in a shell is not otherwise restricted.
+
+Only when the estimate is over the threshold does the split turn follow, in the same session,
+so what triage read is not read again. From there it is the split described above.
+
+An assessment never costs the run its task. When the estimate fits, when the turn times out or
+gives no estimate, when the agent then advises against splitting, or when the proposal cannot
+be made or applied, Ralph logs why and attempts the task as it is. Assessments and the splits
+that come of them do not count against `maxIterations`.
+
+A task is assessed once: the verdict is kept in `.ralph/assess/TASK-8.json`, and later
+iterations, retries and runs go by it. Delete the file to have the task assessed again. A turn
+lost to a provider failure or an interrupt leaves no verdict, so it is repeated. Not assessed
+at all: a task with a handoff, which an attempt has already started, and a task already split
+`stall.maxSplitDepth` times, counting its ancestors. With the default depth of 1, the tasks a
+split creates are therefore not assessed again.
+
+In `propose` mode with nobody waiting, the run stops with the proposal in `.ralph/split/TASK-8/`.
+Apply it with `ralph split TASK-8 --apply` before the next run, which would otherwise attempt
+the task as it is; `ralph doctor` warns about it.
+
 ## Run artefacts
 
 Each run writes to the project's `.ralph/history/<runId>/`:
@@ -488,8 +538,9 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
   plus the wrap-up and who wrote the handoff when it ran out of time or context
 - `log.jsonl` — Ralph's log lines, at the configured level
-- `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome
-- `split-TASK-x.events.jsonl` — every event of that split turn
+- `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome;
+  and one per assessment (`trigger: "assessment"`), with the estimate
+- `split-TASK-x.events.jsonl` — every event of that split turn, or of the task's assessment
 - `state.json` — where the run stands (status, iteration, task, the split turn in progress,
   what it is waiting on a person for, pid), rewritten as it goes
 - `actions.jsonl` — what a person answered, from the web UI or `ralph respond`
