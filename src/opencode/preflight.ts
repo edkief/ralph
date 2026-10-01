@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { handoffDir } from '../loop/handoff.js';
 import { readProposal, splitDir } from '../loop/split.js';
-import type { OpencodeClient } from './client.js';
+import type { OpencodeClient, OpenApiSpec } from './client.js';
 import type { Config } from '../config/schema.js';
 import { TaskStore } from '../tasks/store.js';
 
@@ -148,7 +148,7 @@ function fileCheck(name: string, path: string, fatal: boolean, hint?: string): C
   return { name, ok, detail: ok ? path : `missing: ${path}${hint ? ` — ${hint}` : ''}`, fatal };
 }
 
-async function operationsCheck(client: OpencodeClient): Promise<CheckResult> {
+export async function operationsCheck(client: OpencodeClient): Promise<CheckResult> {
   try {
     const spec = await client.openapi();
     const available = new Set<string>();
@@ -158,6 +158,8 @@ async function operationsCheck(client: OpencodeClient): Promise<CheckResult> {
       }
     }
     const missing = REQUIRED_OPERATIONS.filter((id) => !available.has(id));
+    const mismatch = missing.length === 0 ? replyBodyMismatch(spec) : undefined;
+    if (mismatch) return { name: 'api', ok: false, detail: mismatch, fatal: true };
     return {
       name: 'api',
       ok: missing.length === 0,
@@ -170,6 +172,38 @@ async function operationsCheck(client: OpencodeClient): Promise<CheckResult> {
   } catch (cause) {
     return { name: 'api', ok: false, detail: (cause as Error).message, fatal: false };
   }
+}
+
+/** The field a permission decision is sent in; see `OpencodeClient.replyPermission`. */
+const REPLY_FIELD = 'decision';
+
+/**
+ * An operation id says the route exists, not what it takes. A server that
+ * wants the decision under another name rejects every reply, which strands
+ * the agent mid-tool, so compare the body it documents with the one we send.
+ * A spec that does not describe the body is given the benefit of the doubt.
+ */
+function replyBodyMismatch(spec: OpenApiSpec): string | undefined {
+  const operation = Object.values(spec.paths ?? {})
+    .flatMap((methods) => Object.values(methods))
+    .find((candidate) => candidate?.operationId === 'session.permission.reply');
+  const body = deref(spec, operation?.requestBody) as
+    | { content?: Record<string, { schema?: unknown }>; properties?: unknown }
+    | undefined;
+  // The body may be the schema itself, or wrap it per content type.
+  const schema = deref(spec, body?.content?.['application/json']?.schema ?? body) as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  const fields = schema?.properties ? Object.keys(schema.properties) : [];
+  if (fields.length === 0 || fields.includes(REPLY_FIELD)) return undefined;
+  return `session.permission.reply does not accept "${REPLY_FIELD}" (it takes: ${fields.join(', ')}) — unsupported opencode version`;
+}
+
+/** Follow a `$ref` into the spec's shared schemas, if the value is one. */
+function deref(spec: OpenApiSpec, value: unknown): unknown {
+  const ref = (value as { $ref?: unknown } | undefined)?.$ref;
+  if (typeof ref !== 'string') return value;
+  return spec.components?.schemas?.[ref.slice(ref.lastIndexOf('/') + 1)];
 }
 
 async function modelCheck(client: OpencodeClient, config: Config): Promise<CheckResult> {

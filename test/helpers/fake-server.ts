@@ -18,6 +18,10 @@ export interface FakeServerOptions {
   onPrompt?: (promptCount: number) => void | Promise<void>;
   /** Advertise `delivery: "steer"` on the prompt operation. */
   steer?: boolean;
+  /** Answer permission replies with this status instead of accepting them. */
+  replyStatus?: number;
+  /** Describe the permission reply body with this field in the spec; `decision` on the real server. */
+  replyField?: string;
 }
 
 export interface FakeServer {
@@ -25,6 +29,8 @@ export interface FakeServer {
   password: string | undefined;
   /** Permission replies the loop sent, in order. */
   replies: Array<{ requestID: string; reply: string }>;
+  /** Reply requests received, accepted or not. */
+  replyAttempts: number;
   interrupts: number;
   sessionsCreated: number;
   prompts: Array<Record<string, unknown>>;
@@ -39,6 +45,7 @@ export interface FakeServer {
 export async function startFakeServer(options: FakeServerOptions): Promise<FakeServer> {
   const state = {
     replies: [] as Array<{ requestID: string; reply: string }>,
+    replyAttempts: 0,
     interrupts: 0,
     sessionsCreated: 0,
     prompts: [] as Array<Record<string, unknown>>,
@@ -61,7 +68,9 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     }
 
     if (path === '/api/location') return json(res, { directory: '/fake/project' });
-    if (path === '/openapi.json') return json(res, fakeSpec(options.steer === true));
+    if (path === '/openapi.json') {
+      return json(res, fakeSpec(options.steer === true, options.replyField ?? 'decision'));
+    }
     if (path === '/api/skill') return json(res, { data: [{ name: 'test-skill' }] });
     if (path === '/api/model/default') {
       return json(res, { data: { providerID: 'fake', modelID: 'model' } });
@@ -117,8 +126,20 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
 
     const permissionMatch = /\/permission\/([^/]+)\/reply$/.exec(path);
     if (permissionMatch && req.method === 'POST') {
-      const body = (await readBody(req)) as { reply?: string };
-      state.replies.push({ requestID: permissionMatch[1]!, reply: body.reply ?? '' });
+      const body = (await readBody(req)) as { decision?: string };
+      state.replyAttempts += 1;
+      if (options.replyStatus) {
+        res.writeHead(options.replyStatus, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ _tag: 'FakeError', message: 'reply refused' }));
+        return;
+      }
+      // Like the real server: the field is `decision`, and a body without it is rejected.
+      if (!body.decision) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ _tag: 'InvalidRequestError', message: 'Missing key\n  at ["decision"]', kind: 'Payload' }));
+        return;
+      }
+      state.replies.push({ requestID: permissionMatch[1]!, reply: body.decision });
       return json(res, {});
     }
 
@@ -154,6 +175,9 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     get replies() {
       return state.replies;
     },
+    get replyAttempts() {
+      return state.replyAttempts;
+    },
     get interrupts() {
       return state.interrupts;
     },
@@ -185,7 +209,7 @@ async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unkn
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
-function fakeSpec(steer: boolean) {
+function fakeSpec(steer: boolean, replyField: string) {
   const op = (operationId: string) => ({ post: { operationId } });
   // Shaped like the real spec: the body schema sits behind a $ref.
   const prompt = steer
@@ -199,7 +223,22 @@ function fakeSpec(steer: boolean) {
       '/api/session': op('session.create'),
       '/api/session/{sessionID}/prompt': prompt,
       '/api/session/{sessionID}/interrupt': op('session.interrupt'),
-      '/api/session/{sessionID}/permission/{requestID}/reply': op('session.permission.reply'),
+      '/api/session/{sessionID}/permission/{requestID}/reply': {
+        post: {
+          operationId: 'session.permission.reply',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { [replyField]: { type: 'string' }, message: { type: 'string' } },
+                  required: [replyField],
+                },
+              },
+            },
+          },
+        },
+      },
       '/api/event': { get: { operationId: 'event.subscribe' } },
     },
   };
