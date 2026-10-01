@@ -134,6 +134,9 @@ export async function runIteration(args: {
   // own end event does not always repeat it.
   let stepFailure: string | undefined;
   let lastProviderError: string | undefined;
+  // A permission request the server never got an answer to: the agent would
+  // wait on it for good, so the turn ends here.
+  let permissionFailure: string | undefined;
   let compactions = 0;
   let sessionId = '';
   // Subagents run in child sessions. Their work keeps the iteration alive and
@@ -235,7 +238,11 @@ export async function runIteration(args: {
       }
 
       if (event.type.includes('permission')) {
-        await handlePermission(event, client, policy, logger);
+        permissionFailure = await handlePermission(event, client, policy, logger);
+        if (permissionFailure) {
+          executionError = permissionFailure;
+          break;
+        }
         watchdog.recordActivity();
         continue;
       }
@@ -323,7 +330,7 @@ export async function runIteration(args: {
     clearInterval(timer);
     signal.removeEventListener('abort', onOuterAbort);
     streamAbort.abort();
-    if (trip && sessionId) {
+    if ((trip || permissionFailure) && sessionId) {
       await client.interrupt(sessionId).catch((cause: unknown) => {
         // The session may still be running and competing with the retry.
         logger.warn('interrupt failed', { sessionId, error: (cause as Error).message });
@@ -340,7 +347,7 @@ export async function runIteration(args: {
 
   return {
     sessionId,
-    status: classify({ trip, signal, executionError, tags, wrapUp: wrapped }),
+    status: classify({ trip, signal, executionError, permissionFailure, tags, wrapUp: wrapped }),
     text,
     tags,
     usage,
@@ -374,12 +381,15 @@ function classify(args: {
   trip: WatchdogTrip | null;
   signal: AbortSignal;
   executionError: string | undefined;
+  permissionFailure: string | undefined;
   tags: PromiseTags;
   wrapUp: { completed: boolean } | null;
 }): IterationStatus {
   if (args.signal.aborted) return 'interrupted';
   if (args.trip === 'retry-storm') return 'provider-error';
   if (args.trip) return 'timeout';
+  // The turn was cut off mid-tool; nothing the agent said before then stands.
+  if (args.permissionFailure) return 'failed';
   if (args.tags.blockedReason) return 'blocked';
   if (args.tags.decideQuestion) return 'decide';
   // Out of time: whatever else the agent claimed, the task was cut short.
@@ -388,6 +398,9 @@ function classify(args: {
   if (args.executionError) return isContextOverflow(args.executionError) ? 'context-overflow' : 'failed';
   return 'progressed';
 }
+
+/** Tries at delivering a permission reply before the turn is given up on. */
+const PERMISSION_REPLY_ATTEMPTS = 2;
 
 /**
  * The event payload is not documented to carry `parentID`, but the session
@@ -407,14 +420,19 @@ async function lookupParent(
   }
 }
 
+/**
+ * Answer a permission request from policy. Returns why the answer could not
+ * be delivered, if it could not: the agent stays blocked on an unanswered
+ * request, so the caller ends the turn rather than wait for the watchdog.
+ */
 async function handlePermission(
   event: OpencodeEvent,
   client: OpencodeClient,
   policy: PermissionPolicy,
   logger: Logger,
-): Promise<void> {
+): Promise<string | undefined> {
   const request = readData(event, PermissionRequestSchema);
-  if (!request) return;
+  if (!request) return undefined;
 
   const decision = policy(request);
   logger.info('permission decided', {
@@ -424,13 +442,43 @@ async function handlePermission(
     ...(decision.matched ? { matched: decision.matched } : {}),
   });
 
-  await client.replyPermission(request.sessionID, request.id, decision.reply).catch((cause) => {
-    logger.warn('permission reply failed', {
-      error: (cause as Error).message,
-      // The server says which field it rejected; without it a 400 is opaque.
-      ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
-    });
-  });
+  // A rejected request fails the same way twice; anything else may be a blip.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await client.replyPermission(request.sessionID, request.id, decision.reply);
+      return undefined;
+    } catch (cause) {
+      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      // Already answered, by a person or an earlier attempt: nothing is waiting.
+      if (status === 404) {
+        logger.debug('permission request already gone', { id: request.id });
+        return undefined;
+      }
+      const rejected = status !== undefined && status >= 400 && status < 500;
+      logger.warn('permission reply failed', {
+        error: (cause as Error).message,
+        // The server says which field it rejected; without it a 400 is opaque.
+        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+      });
+      if (rejected || attempt >= PERMISSION_REPLY_ATTEMPTS) {
+        return describeReplyFailure(request.action, cause);
+      }
+    }
+  }
+}
+
+function describeReplyFailure(action: string, cause: unknown): string {
+  if (!(cause instanceof OpencodeApiError)) {
+    return `Permission reply for ${action} could not be delivered: ${(cause as Error).message}`;
+  }
+  let detail = cause.body;
+  try {
+    detail = (JSON.parse(cause.body) as { message?: string }).message ?? cause.body;
+  } catch {
+    // Not JSON; the raw body is the best there is.
+  }
+  detail = detail.replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `Permission reply for ${action} was rejected by the server (${cause.status})${detail ? `: ${detail}` : ''}`;
 }
 
 function addUsage(

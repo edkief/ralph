@@ -251,6 +251,63 @@ describe('runIteration', () => {
     ]);
   });
 
+  it('ends the turn at once when a permission reply is rejected', async () => {
+    const started = Date.now();
+    const result = await iterate(
+      {
+        replyStatus: 400,
+        script: [
+          { type: 'session.text.ended', data: { text: '<promise>COMPLETE</promise>' } },
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['npm test'] } },
+          // The agent is blocked on the request and never gets this far.
+          { after: 5_000, type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('Permission reply for shell was rejected by the server (400): reply refused');
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // A rejected request is not retried, and the blocked session is stopped.
+    expect(server?.replyAttempts).toBe(1);
+    expect(server?.interrupts).toBe(1);
+  });
+
+  it('retries a permission reply the server failed to take, then gives up', async () => {
+    const result = await iterate(
+      {
+        replyStatus: 500,
+        script: [
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['npm test'] } },
+          { after: 5_000, type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('failed');
+    expect(server?.replyAttempts).toBe(2);
+    expect(server?.interrupts).toBe(1);
+  });
+
+  it('carries on when a permission request is already gone', async () => {
+    const result = await iterate(
+      {
+        replyStatus: 404,
+        script: [
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['npm test'] } },
+          { type: 'session.text.ended', data: { text: 'done' } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(server?.interrupts).toBe(0);
+  });
+
   it('ignores events belonging to other sessions', async () => {
     const result = await iterate(
       {
