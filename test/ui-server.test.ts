@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { hostname, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -82,6 +82,12 @@ function project(): string {
   return root;
 }
 
+/** Rewrite the live run's state.json with `patch` applied. */
+function patchState(root: string, patch: Record<string, unknown>): void {
+  const file = resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json');
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), ...patch }));
+}
+
 async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string } = {}): Promise<UiServer> {
   server = await startUiServer({
     projectRoot: root,
@@ -163,6 +169,59 @@ describe('web UI server', () => {
     ]);
     expect((await get(`/api/runs/${LIVE_RUN}/iterations/9/transcript`)).status).toBe(404);
     expect((await get('/api/runs/..%2F..%2Fetc/log')).status).toBe(404);
+  });
+
+  it('lists split turns and serves their transcripts', async () => {
+    const root = project();
+    const history = resolve(root, '.ralph', 'history', LIVE_RUN);
+    writeFileSync(
+      resolve(history, 'splits.jsonl'),
+      line({
+        iteration: 1,
+        taskId: 'TASK-0',
+        causes: ['iteration-timeout'],
+        status: 'applied',
+        children: ['TASK-0.1', 'TASK-2'],
+        reason: 'two halves',
+        committed: true,
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:03:00.000Z',
+      }),
+    );
+    writeFileSync(resolve(history, 'split-TASK-0.events.jsonl'), line(say('splitting TASK-0')));
+    // A second split turn is running: named by the state, not yet recorded.
+    writeFileSync(resolve(history, 'split-TASK-2.events.jsonl'), line(say('splitting TASK-2')));
+    patchState(root, { split: { taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' } });
+    await start(root);
+
+    const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
+    expect(body.run.split).toEqual({ taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' });
+    expect(body.splits).toEqual([
+      {
+        taskId: 'TASK-0',
+        iteration: 1,
+        status: 'applied',
+        children: ['TASK-0.1', 'TASK-2'],
+        reason: 'two halves',
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:03:00.000Z',
+        durationMs: 120_000,
+      },
+      { taskId: 'TASK-2', iteration: 2, status: 'running', startedAt: '2026-09-30T12:20:00.000Z', endedAt: null, durationMs: null },
+    ]);
+
+    expect((await get(`/api/runs/${LIVE_RUN}/splits/TASK-0/transcript`)).body).toMatchObject([
+      { kind: 'text', text: 'splitting TASK-0' },
+    ]);
+    expect((await get(`/api/runs/${LIVE_RUN}/splits/TASK-9/transcript`)).status).toBe(404);
+    expect((await get(`/api/runs/${LIVE_RUN}/splits/..%2Fstate/transcript`)).status).toBe(404);
+  });
+
+  it('reports no split turns for a run without any', async () => {
+    await start(project());
+    const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
+    expect(body.run.split).toBeNull();
+    expect(body.splits).toEqual([]);
   });
 
   it('shows the Ralph folder and config, but not history or anything outside', async () => {
@@ -258,6 +317,42 @@ describe('web UI server', () => {
         reset: true,
         entries: [{ text: 'next one' }],
       });
+    } finally {
+      live.close();
+    }
+  });
+
+  it('follows a split turn while it runs, then the next iteration', async () => {
+    const root = project();
+    const history = resolve(root, '.ralph', 'history', LIVE_RUN);
+    await start(root);
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('transcript').length >= 1);
+      expect(live.of('transcript')[0]).toMatchObject({ iteration: 2, reset: true });
+      expect(live.of('transcript')[0]).not.toHaveProperty('split');
+
+      writeFileSync(resolve(history, 'split-TASK-2.events.jsonl'), line(say('reading the spec')));
+      patchState(root, { split: { taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' } });
+      await live.until(() => live.of('transcript').some((message) => message.split === 'TASK-2'));
+      expect(live.of('transcript').at(-1)).toMatchObject({
+        iteration: 2,
+        split: 'TASK-2',
+        reset: true,
+        entries: [{ text: 'reading the spec' }],
+      });
+      expect(live.of('status').at(-1)).toMatchObject({ run: { split: { taskId: 'TASK-2' } } });
+
+      appendFileSync(resolve(history, 'split-TASK-2.events.jsonl'), line({ type: 'session.text.delta', data: { sessionID: 's', delta: 'two tasks' } }));
+      await live.until(() => live.of('transcript').some((message) => message.split === 'TASK-2' && !message.reset));
+      expect(live.of('transcript').at(-1)).toMatchObject({ split: 'TASK-2', reset: false, entries: [{ text: 'two tasks' }] });
+
+      // The split is applied and the loop starts on the first new task.
+      writeFileSync(resolve(history, 'iteration-003.events.jsonl'), line(say('first half')));
+      patchState(root, { split: null, iteration: 3 });
+      await live.until(() => live.of('transcript').some((message) => message.iteration === 3));
+      expect(live.of('transcript').at(-1)).toMatchObject({ iteration: 3, reset: true, entries: [{ text: 'first half' }] });
+      expect(live.of('transcript').at(-1)).not.toHaveProperty('split');
     } finally {
       live.close();
     }

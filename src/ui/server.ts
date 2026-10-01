@@ -111,11 +111,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
     if (path === '/api/live') return live(req, res);
 
-    const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript)?$/.exec(path);
+    const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript|\/splits\/([^/]+)\/transcript)?$/.exec(path);
     if (run) {
       const runId = decodeURIComponent(run[1]!);
       if (run[2] === '/log') return sendJson(res, 200, project.log(runId));
       if (run[3]) return sendJson(res, 200, project.transcript(runId, Number(run[3])));
+      if (run[4]) return sendJson(res, 200, project.splitTranscript(runId, decodeURIComponent(run[4])));
       return sendJson(res, 200, project.runDetail(runId));
     }
     return sendJson(res, 404, { error: 'Not found' });
@@ -123,7 +124,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
   /**
    * Follow the latest run as server-sent events: the status whenever it
-   * changes, new log lines, and the transcript of the iteration in progress.
+   * changes, new log lines, and the transcript of the session in progress
+   * (an iteration, or the split turn that followed one).
    */
   const live = (req: IncomingMessage, res: ServerResponse) => {
     res.writeHead(200, {
@@ -139,8 +141,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
     let lastStatus = '';
     let logFeed: { runId: string; tailer: LineTailer } | null = null;
-    let transcriptFeed: { runId: string; iteration: number; tailer: LineTailer; builder: TranscriptBuilder } | null =
-      null;
+    let transcriptFeed: {
+      runId: string;
+      iteration: number;
+      split: string | undefined;
+      tailer: LineTailer;
+      builder: TranscriptBuilder;
+    } | null = null;
 
     const tick = () => {
       const status = project.status();
@@ -165,13 +172,18 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       }
 
       const iteration = project.latestIteration(runId);
-      if (iteration === 0) return;
+      // The run's state names a split turn until the next iteration starts.
+      const splitTask = status.run?.split?.taskId;
+      const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
+      const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
+      if (iteration === 0 && !split) return;
       let transcriptReset = false;
-      if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration) {
+      if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
         transcriptFeed = {
           runId,
           iteration,
-          tailer: new LineTailer(project.eventsPath(runId, iteration)),
+          split,
+          tailer: new LineTailer(split ? splitPath! : project.eventsPath(runId, iteration)),
           builder: new TranscriptBuilder(),
         };
         transcriptReset = true;
@@ -190,6 +202,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         send('transcript', {
           runId,
           iteration,
+          ...(split ? { split } : {}),
           reset: transcriptReset,
           entries: transcriptReset ? transcriptFeed.builder.all : [...changed.values()],
         });

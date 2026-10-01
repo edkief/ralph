@@ -102,10 +102,14 @@ nothing to get wrong.
 
 A read-only web UI shows what the loop is doing, at <http://127.0.0.1:4280> by default:
 
-- **Overview**: tasks passing out of the total (and which task a split one came from), the
-  run's status, and each iteration's outcome, duration, tool calls, tokens and changes
-- **Transcript**: the iteration in progress as it happens (what the agent says, each tool call
-  with its input and output, model calls, retries), or any earlier iteration of any run
+- **Overview**: what the loop is doing now. The run's status, then each iteration's outcome,
+  duration, tool calls, tokens and changes, with a row for every split turn and its outcome,
+  then the task in progress and the few that come next
+- **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
+  split one came from
+- **Transcript**: the session in progress as it happens (what the agent says, each tool call
+  with its input and output, model calls, retries), or any earlier one of any run. A session
+  is an iteration, or the turn in which the agent proposed splitting a task
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
   and `ralph.config.json`, with Markdown rendered
@@ -371,7 +375,9 @@ spec, its handoff and the commits that mention it, and either writes a spec per 
 `TASK-8.1.json`, `TASK-8.2.json`, … covering only the work that is left, plus a
 `proposal.json` listing them in order; or writes a `proposal.json` with `"splittable": false`
 and the reason, when a split would not help. Ralph checks the proposal like a plan and sends it
-back to the agent up to twice to fix problems.
+back to the agent up to twice to fix problems. The web UI shows a split turn the loop runs
+like an iteration: followed live in the Transcript view, and listed on the Overview with its
+outcome. A turn started with `ralph split` runs outside any run and is not recorded.
 
 Applying a split replaces the task in `tasks.json` with the new ones, in its place so they come
 next, and moves their specs next to the old spec. The old spec and its handoff move into
@@ -407,7 +413,8 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `log.jsonl` — Ralph's log lines, at the configured level
 - `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome
 - `split-TASK-x.events.jsonl` — every event of that split turn
-- `state.json` — where the run stands (status, iteration, task, pid), rewritten as it goes
+- `state.json` — where the run stands (status, iteration, task, the split turn in progress,
+  pid), rewritten as it goes
 - `run.json` — the run summary, once the run ends
 
 The web UI reads all of these, so it needs nothing else from the loop.

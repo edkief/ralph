@@ -474,6 +474,8 @@ describe('runLoop', () => {
     const splits = (historyDir: string) =>
       readFileSync(resolve(historyDir, 'splits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
 
+    const runState = (historyDir: string) => JSON.parse(readFileSync(resolve(historyDir, 'state.json'), 'utf8'));
+
     it('proposes a split by default and stops for review', async () => {
       const root = planned();
 
@@ -499,6 +501,8 @@ describe('runLoop', () => {
         expect.objectContaining({ taskId: 'TASK-1', causes: ['iteration-timeout'], status: 'proposed', children: ['TASK-1.1', 'TASK-1.2'] }),
       ]);
       expect(existsSync(resolve(result.historyDir, 'split-TASK-1.events.jsonl'))).toBe(true);
+      // The run ended on the split turn, so its state still names it.
+      expect(runState(result.historyDir).split).toEqual({ taskId: 'TASK-1', startedAt: expect.any(String) });
     });
 
     it('splits the task and carries on with the new tasks', async () => {
@@ -523,6 +527,8 @@ describe('runLoop', () => {
       const log = execFileSync('git', ['log', '--format=%s'], { cwd: root, encoding: 'utf8' });
       expect(log).toContain('chore(plan): split TASK-1 into TASK-1.1 and TASK-1.2');
       expect(splits(result.historyDir)).toEqual([expect.objectContaining({ status: 'applied', committed: true })]);
+      // Iterations ran after the split turn.
+      expect(runState(result.historyDir).split).toBeNull();
     });
 
     it('stops with the agent\'s reason when splitting would not help', async () => {

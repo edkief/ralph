@@ -69,6 +69,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     lastStatus: null,
     tasksPassed: 0,
     tasksTotal: 0,
+    split: null,
   };
   const saveState = (patch: Partial<RunState>) => {
     Object.assign(state, patch, { updatedAt: new Date().toISOString() });
@@ -160,6 +161,7 @@ async function loop(
       iterationStartedAt: startedAt,
       tasksPassed: summary.passedCount,
       tasksTotal: summary.total,
+      split: null,
     });
 
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
@@ -231,7 +233,7 @@ async function loop(
 
     const causes = cutShortByTask.get(taskId) ?? [];
     if (causes.length >= config.stall.maxTimeoutsPerTask) {
-      const stall = await handleStall({ args, recorder, iteration, taskId, causes, handoffFile, stop });
+      const stall = await handleStall({ args, recorder, saveState, iteration, taskId, causes, handoffFile, stop });
       if (stall.split) {
         // New tasks with new ids: the next iteration starts on the first of them.
         cutShortByTask.delete(taskId);
@@ -421,6 +423,7 @@ function ranOutOf(cause: StallCause): 'time' | 'context' {
 async function handleStall(context: {
   args: LoopArgs;
   recorder: RunRecorder;
+  saveState: (patch: Partial<RunState>) => void;
   iteration: number;
   taskId: string;
   causes: StallCause[];
@@ -461,6 +464,7 @@ async function handleStall(context: {
 
   logger.info('asking the agent to propose a split', { task: taskId, folder: dir });
   recorder.beginSplit(taskId);
+  context.saveState({ split: { taskId, startedAt } });
   const outcome = await proposeSplit({
     client: args.client,
     config,

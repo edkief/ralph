@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 export const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'tasks', label: 'Tasks' },
   { id: 'transcript', label: 'Transcript' },
   { id: 'logs', label: 'Logs' },
   { id: 'files', label: 'Files' },
