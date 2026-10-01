@@ -101,6 +101,8 @@ export interface FileContent extends FileEntry {
   content: string;
   /** Only the first part of a large file is returned. */
   truncated: boolean;
+  /** Set for an image: `content` is empty, and its bytes are at /api/file/raw. */
+  mediaType?: string;
 }
 
 export interface IterationView {

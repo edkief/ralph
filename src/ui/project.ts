@@ -1,6 +1,6 @@
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { basename, relative, resolve, sep } from 'node:path';
+import { basename, extname, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
 import { TASK_ID } from '../init/plan.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
@@ -24,6 +24,18 @@ import type {
 
 /** File content returned whole; beyond this only the start is. */
 const MAX_FILE_BYTES = 1024 * 1024;
+/** Files shown as a picture rather than as text, by extension. */
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+};
 /** Files listed at most, so a stray node_modules cannot flood the browser. */
 const MAX_FILES = 2000;
 /** Log lines returned at most, the latest. */
@@ -39,6 +51,10 @@ const RUN_ID = /^[\w.-]+$/;
 const EVENTS_FILE = /^iteration-(\d+)\.events\.jsonl$/;
 
 export class NotFoundError extends Error {}
+
+function imageType(path: string): string | undefined {
+  return IMAGE_TYPES[extname(path).toLowerCase()];
+}
 
 /**
  * Reads what the web UI shows from the project's Ralph folder. Everything
@@ -312,6 +328,8 @@ export class RalphProject {
   readFile(path: string): FileContent {
     const listed = this.listFiles().find((file) => file.path === path);
     if (!listed) throw new NotFoundError(`No file ${path}`);
+    const mediaType = imageType(path);
+    if (mediaType) return { ...listed, content: '', truncated: false, mediaType };
     const absolute = resolve(this.projectRoot, path);
     const size = statSync(absolute).size;
     const buffer = Buffer.alloc(Math.min(size, MAX_FILE_BYTES));
@@ -322,6 +340,14 @@ export class RalphProject {
       closeSync(fd);
     }
     return { ...listed, content: buffer.toString('utf8'), truncated: size > MAX_FILE_BYTES };
+  }
+
+  /** Where a listed image is, for serving its bytes. Any other file is not found. */
+  imageFile(path: string): { absolute: string; mediaType: string; size: number } {
+    const listed = this.listFiles().find((file) => file.path === path);
+    const mediaType = imageType(path);
+    if (!listed || !mediaType) throw new NotFoundError(`No image ${path}`);
+    return { absolute: resolve(this.projectRoot, path), mediaType, size: listed.size };
   }
 
   private entry(path: string, stat: { size: number; mtime: Date }): FileEntry {

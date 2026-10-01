@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useJson, useNow, type FileContent, type FileEntry, type StatusView } from '../api';
+import { apiUrl, useJson, useNow, type FileContent, type FileEntry, type StatusView } from '../api';
 import { formatBytes, formatDateTime } from '../format';
 import { href } from '../route';
 
@@ -81,6 +81,12 @@ export function Files({ status, selected }: { status: StatusView; selected: stri
 }
 
 function FileBody({ file }: { file: FileContent }) {
+  if (file.mediaType) {
+    // The modification time in the URL makes the browser fetch a changed image again.
+    const src = apiUrl(`/api/file/raw?path=${encodeURIComponent(file.path)}&v=${encodeURIComponent(file.modifiedAt)}`);
+    return <img className="image document" src={src} alt={file.path} />;
+  }
+
   const truncated = file.truncated ? <div className="banner warn">Only the first 1 MB is shown.</div> : null;
 
   if (/\.(md|markdown)$/i.test(file.path)) {
