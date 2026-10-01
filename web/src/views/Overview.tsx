@@ -1,8 +1,9 @@
 import { Fragment } from 'react';
 import { useJson, useNow, type RunDetail, type SplitView, type StatusView } from '../api';
-import { formatCount, formatDateTime, formatDuration, formatRunId, statusLabel, statusTone } from '../format';
+import { formatCount, formatDateTime, formatDuration, formatRunId, runBadge, statusLabel, statusTone } from '../format';
 import { href } from '../route';
 import { TaskRow, activeTaskId } from './TaskRow';
+import { Pending, StopButtons } from './Pending';
 
 /** Tasks listed under the iterations; the Tasks tab has them all. */
 const UP_NEXT = 5;
@@ -14,16 +15,18 @@ export function Overview({ status }: { status: StatusView }) {
   const detail = useJson<RunDetail>(run ? `/api/runs/${encodeURIComponent(run.runId)}` : null, run ? `${run.updatedAt}:${run.iteration}` : null);
   const iterations = detail.data?.iterations ?? [];
   const splits = detail.data?.splits ?? [];
-  const splitting = run?.live ? run.split : null;
+  const waiting = run?.live === true && run.status === 'waiting';
+  const splitting = run?.live && !waiting ? run.split : null;
   const active = activeTaskId(status);
   const remaining = tasks.items.filter((task) => !task.passes);
   // The task in progress first, even when the agent picked one further down the list.
   const upNext = [...remaining.filter((task) => task.id === active), ...remaining.filter((task) => task.id !== active)].slice(0, UP_NEXT);
   const totalTokens = iterations.reduce((sum, iteration) => sum + (iteration.tokens ?? 0), 0);
-  const runStatus = run ? (run.status === 'running' && !run.live ? 'ended' : run.status) : null;
+  const badge = run ? runBadge(run) : null;
 
   return (
     <div className="stack">
+      <Pending status={status} />
       <section className="cards">
         <div className="card">
           <div className="card-label">
@@ -39,15 +42,16 @@ export function Overview({ status }: { status: StatusView }) {
           <div className="card-label">Run</div>
           <div className="card-value">
             {run ? (
-              <span className={`badge large tone-${run.live ? 'live' : statusTone(runStatus)}`}>
-                {run.live ? <span className="pulse" /> : null}
-                {run.live ? 'Running' : statusLabel(runStatus)}
+              <span className={`badge large tone-${badge!.tone}`}>
+                {badge!.pulse ? <span className="pulse" /> : null}
+                {badge!.label}
               </span>
             ) : (
               <span className="muted">none</span>
             )}
           </div>
           <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : 'Start one with `ralph`'}</div>
+          <StopButtons status={status} />
         </div>
         <div className="card">
           <div className="card-label">{run?.live ? 'Current iteration' : 'Iterations'}</div>
@@ -58,6 +62,8 @@ export function Overview({ status }: { status: StatusView }) {
           <div className="card-detail">
             {splitting
               ? `Splitting ${splitting.taskId} · ${formatDuration(now - Date.parse(splitting.startedAt))} so far`
+              : waiting
+              ? `${run?.taskId ?? ''} · waiting for you`
               : run?.live && run.iterationStartedAt
               ? `${run.taskId ?? ''} · ${formatDuration(now - Date.parse(run.iterationStartedAt))} so far`
               : run?.lastStatus
@@ -73,8 +79,8 @@ export function Overview({ status }: { status: StatusView }) {
       </section>
 
       {tasks.error ? <div className="banner bad">{tasks.error}</div> : null}
-      {run?.message && !run.live ? (
-        <div className={`banner ${statusTone(runStatus) === 'bad' ? 'bad' : statusTone(runStatus) === 'good' ? 'good' : 'warn'}`}>
+      {run?.message && !run.live && !status.pending ? (
+        <div className={`banner ${badge!.tone === 'bad' ? 'bad' : badge!.tone === 'good' ? 'good' : 'warn'}`}>
           {run.message}
         </div>
       ) : null}

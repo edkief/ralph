@@ -23,6 +23,69 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
   return (await response.json()) as T;
 }
 
+const TOKEN_KEY = 'ralph-ui-token';
+
+/**
+ * The token actions must carry when the server has one. It arrives once in
+ * the page's URL (`?token=…`), is kept for the browser session, and is taken
+ * out of the address bar so it does not end up in history or a shared link.
+ */
+function adoptToken(): void {
+  try {
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get('token');
+    if (token === null) return;
+    if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
+    url.searchParams.delete('token');
+    window.history.replaceState(null, '', url);
+  } catch {
+    // No session storage: the token is asked for when it is needed.
+  }
+}
+adoptToken();
+
+let typedToken = '';
+
+function token(): string {
+  try {
+    return typedToken || window.sessionStorage.getItem(TOKEN_KEY) || '';
+  } catch {
+    return typedToken;
+  }
+}
+
+export function hasToken(): boolean {
+  return token() !== '';
+}
+
+export function rememberToken(value: string): void {
+  typedToken = value;
+  try {
+    if (value) window.sessionStorage.setItem(TOKEN_KEY, value);
+    else window.sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Kept for this page only.
+  }
+}
+
+export function forgetToken(): void {
+  rememberToken('');
+}
+
+/** Take an action. Sent as JSON, which is what tells the server it comes from this app. */
+export async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  const parsed = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!response.ok) {
+    throw Object.assign(new Error(parsed?.error ?? `${response.status} ${response.statusText}`), { status: response.status });
+  }
+  return parsed as T;
+}
+
 /**
  * Fetch `path` (nothing when null), again whenever `path` or `refresh`
  * changes. Keeps the previous data while reloading, so views do not flash.

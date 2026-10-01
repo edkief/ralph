@@ -381,7 +381,8 @@ async function loop(
         } else if (answer.action === 'approve' && proposal) {
           outcome = appliedElsewhere(config, taskId)
             ? { split: true, committed: true }
-            : await applyProposal(stall, proposal);
+            : // Recorded as its own step: the time since the proposal was the person's.
+              await applyProposal(stall, { ...proposal, startedAt: new Date().toISOString() });
         } else {
           // Try the task again as it is, with what the person noted in the prompt.
           outcome = { split: true, committed: false };
