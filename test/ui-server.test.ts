@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
-import type { LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
+import type { FileContent, LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const LIVE_RUN = '20260930-120000';
@@ -19,6 +19,10 @@ afterEach(async () => {
   await server?.close();
   server = undefined;
 });
+
+/** A 1x1 transparent PNG. */
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==', 'base64');
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
 
 const line = (value: unknown) => `${JSON.stringify(value)}\n`;
 const say = (text: string, created = 1) => ({ type: 'session.text.ended', created, data: { sessionID: 's', text } });
@@ -39,6 +43,8 @@ function project(): string {
   );
   writeFileSync(resolve(ralph, 'prd', 'PRD.md'), '# The product\n');
   writeFileSync(resolve(ralph, 'tasks', 'TASK-1.json'), '{}');
+  writeFileSync(resolve(ralph, 'prd', 'mockup.PNG'), PNG);
+  writeFileSync(resolve(ralph, 'prd', 'diagram.svg'), SVG);
   writeFileSync(resolve(root, 'ralph.config.json'), '{}');
   writeFileSync(resolve(root, 'secret.txt'), 'do not serve');
   symlinkSync(resolve(root, 'secret.txt'), resolve(ralph, 'escape.txt'));
@@ -242,6 +248,45 @@ describe('web UI server', () => {
     for (const path of ['secret.txt', '.ralph/../secret.txt', '.ralph/escape.txt', `.ralph/history/${LIVE_RUN}/state.json`]) {
       expect((await get(`/api/file?path=${encodeURIComponent(path)}`)).status).toBe(404);
     }
+  });
+
+  it('says an image is one, and serves its bytes sandboxed', async () => {
+    await start(project(), { basePath: '/ralph' });
+    const { body } = await get<FileContent>('/ralph/api/file?path=.ralph/prd/mockup.PNG');
+    expect(body).toMatchObject({ mediaType: 'image/png', content: '', truncated: false, size: PNG.length });
+
+    const png = await fetch(`${server!.url}/ralph/api/file/raw?path=.ralph/prd/mockup.PNG`);
+    expect(png.status).toBe(200);
+    expect(png.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await png.arrayBuffer()).equals(PNG)).toBe(true);
+
+    const svg = await fetch(`${server!.url}/ralph/api/file/raw?path=.ralph/prd/diagram.svg`);
+    expect(svg.headers.get('content-type')).toBe('image/svg+xml');
+    expect(svg.headers.get('content-security-policy')).toContain('sandbox');
+    expect(svg.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await svg.text()).toBe(SVG);
+  });
+
+  it('serves nothing raw but listed images', async () => {
+    const root = project();
+    writeFileSync(resolve(root, 'outside.png'), PNG);
+    symlinkSync(resolve(root, 'outside.png'), resolve(root, '.ralph', 'escape.png'));
+    writeFileSync(resolve(root, '.ralph', 'history', LIVE_RUN, 'shot.png'), PNG);
+    await start(root);
+
+    for (const path of [
+      '',
+      '.ralph/PROMPT.md',
+      'ralph.config.json',
+      'outside.png',
+      '.ralph/../outside.png',
+      '.ralph/escape.png',
+      `.ralph/history/${LIVE_RUN}/shot.png`,
+      '.ralph/prd/missing.png',
+    ]) {
+      expect((await get(`/api/file/raw?path=${encodeURIComponent(path)}`)).status).toBe(404);
+    }
+    expect(await raw('/api/file/raw?path=.ralph/prd/mockup.PNG', { method: 'POST' })).toBe(405);
   });
 
   it('is read-only and refuses foreign hosts on loopback', async () => {

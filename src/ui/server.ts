@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -141,6 +141,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/status') return sendJson(res, 200, status());
     if (path === '/api/files') return sendJson(res, 200, project.listFiles());
     if (path === '/api/file') return sendJson(res, 200, project.readFile(url.searchParams.get('path') ?? ''));
+    if (path === '/api/file/raw') return sendImage(res, project.imageFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
     if (path === '/api/live') return live(req, res);
 
@@ -362,6 +363,25 @@ function serveStatic(res: ServerResponse, webRoot: string, path: string): void {
     'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
   });
   res.end(readFileSync(file));
+}
+
+/**
+ * An image from the Ralph folder, as its bytes. The agent writes these files,
+ * so the response is sandboxed: an SVG opened at this URL cannot run script
+ * in the UI's origin.
+ */
+function sendImage(res: ServerResponse, image: { absolute: string; mediaType: string; size: number }): void {
+  const stream = createReadStream(image.absolute);
+  stream.on('error', () => res.destroy());
+  stream.once('open', () => {
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      'Content-Type': image.mediaType,
+      'Cache-Control': 'no-store',
+    });
+    stream.pipe(res);
+  });
 }
 
 function sendJson(res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}): void {
