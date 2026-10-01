@@ -119,7 +119,7 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   is an iteration, or the turn in which the agent proposed splitting a task
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
-  and `ralph.config.json`, with Markdown rendered
+  and `ralph.config.json`, with Markdown rendered and images shown as pictures
 
 There are two ways to start it:
 
