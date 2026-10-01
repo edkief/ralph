@@ -7,6 +7,7 @@ import { Tasks } from './views/Tasks';
 import { Transcript } from './views/Transcript';
 import { Logs } from './views/Logs';
 import { Files } from './views/Files';
+import { Git } from './views/Git';
 import { TABS, href, useRoute } from './route';
 
 export function App() {
@@ -75,8 +76,10 @@ export function App() {
           <Transcript status={status} live={live.transcript} selected={route.rest} />
         ) : route.tab === 'logs' ? (
           <Logs status={status} live={live.log} />
-        ) : (
+        ) : route.tab === 'files' ? (
           <Files status={status} selected={route.rest} />
+        ) : (
+          <Git selected={route.rest} />
         )}
       </main>
     </div>
