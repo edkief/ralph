@@ -23,6 +23,11 @@ export function Overview({ status }: { status: StatusView }) {
   const upNext = [...remaining.filter((task) => task.id === active), ...remaining.filter((task) => task.id !== active)].slice(0, UP_NEXT);
   const totalTokens = iterations.reduce((sum, iteration) => sum + (iteration.tokens ?? 0), 0);
   const badge = run ? runBadge(run) : null;
+  /** Rows for these split turns, newest first. */
+  const splitRows = (turns: SplitView[]) =>
+    [...turns]
+      .reverse()
+      .map((split) => <SplitRow key={`${split.taskId}-${split.status}-${split.endedAt ?? ''}`} runId={run!.runId} split={split} now={now} />);
 
   return (
     <div className="stack">
@@ -61,7 +66,7 @@ export function Overview({ status }: { status: StatusView }) {
           </div>
           <div className="card-detail">
             {splitting
-              ? `Splitting ${splitting.taskId} · ${formatDuration(now - Date.parse(splitting.startedAt))} so far`
+              ? `${splitting.phase === 'assess' ? 'Assessing' : 'Splitting'} ${splitting.taskId} · ${formatDuration(now - Date.parse(splitting.startedAt))} so far`
               : waiting
               ? `${run?.taskId ?? ''} · waiting for you`
               : run?.live && run.iterationStartedAt
@@ -90,7 +95,7 @@ export function Overview({ status }: { status: StatusView }) {
           Iterations
           {run ? <span className="panel-subtitle">run {formatRunId(run.runId)}</span> : null}
         </h2>
-        {iterations.length === 0 ? (
+        {iterations.length === 0 && splits.length === 0 ? (
           <div className="empty small">{run ? 'No iterations yet' : 'No runs yet'}</div>
         ) : (
           <div className="table-wrap">
@@ -107,14 +112,11 @@ export function Overview({ status }: { status: StatusView }) {
                 </tr>
               </thead>
               <tbody>
+                {/* Turns before an iteration that has not started, or never did. */}
+                {splitRows(splits.filter((split) => !iterations.some((iteration) => iteration.iteration === split.iteration)))}
                 {[...iterations].reverse().map((iteration) => (
                   <Fragment key={iteration.iteration}>
-                  {splits
-                    .filter((split) => split.iteration === iteration.iteration)
-                    .reverse()
-                    .map((split) => (
-                      <SplitRow key={`${split.taskId}-${split.status}-${split.endedAt ?? ''}`} runId={run!.runId} split={split} now={now} />
-                    ))}
+                  {splitRows(splits.filter((split) => split.iteration === iteration.iteration && !split.trigger))}
                   <tr>
                     <td>
                       <a href={href('transcript', `${run!.runId}/${iteration.iteration}`)} title="Open the transcript">{iteration.iteration}</a>
@@ -142,6 +144,7 @@ export function Overview({ status }: { status: StatusView }) {
                       </div>
                     </td>
                   </tr>
+                  {splitRows(splits.filter((split) => split.iteration === iteration.iteration && split.trigger === 'assessment'))}
                   </Fragment>
                 ))}
               </tbody>
@@ -183,16 +186,28 @@ export function Overview({ status }: { status: StatusView }) {
   );
 }
 
-/** A split turn or what became of its proposal, listed newest first above the iteration that stalled on the task. */
+/**
+ * A split turn or what became of its proposal, listed newest first above the
+ * iteration that stalled on the task; an assessment, below the iteration it
+ * came before.
+ */
 function SplitRow({ runId, split, now }: { runId: string; split: SplitView; now: number }) {
-  const outcome =
+  const assessed = split.trigger === 'assessment';
+  const estimate = split.estimateMinutes !== undefined ? `≈ ${split.estimateMinutes} min` : '';
+  const outcome = [
+    estimate,
     split.children && split.children.length > 0 && split.status !== 'failed'
       ? `→ ${split.children.join(', ')}`
-      : (split.reason ?? '');
+      : estimate && split.reason
+        ? `· ${split.reason}`
+        : (split.reason ?? ''),
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
     <tr className="split-row">
       <td>
-        <a href={href('transcript', `${runId}/split-${split.taskId}`)} title="Open the split's transcript">split</a>
+        <a href={href('transcript', `${runId}/split-${split.taskId}`)} title={`Open the ${assessed ? 'assessment' : 'split'}'s transcript`}>{assessed ? 'assess' : 'split'}</a>
       </td>
       <td>{split.taskId}</td>
       <td>

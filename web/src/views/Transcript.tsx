@@ -98,7 +98,7 @@ export function Transcript({
                 </option>
               ) : (
                 <option key={`${SPLIT_PREFIX}${entry.taskId}`} value={`${SPLIT_PREFIX}${entry.taskId}`}>
-                  split · {entry.taskId} · {statusLabel(entry.status)}
+                  {entry.trigger === 'assessment' ? 'assess' : 'split'} · {entry.taskId} · {statusLabel(entry.status)}
                 </option>
               ),
             )}
@@ -152,11 +152,13 @@ export function Transcript({
   );
 }
 
-/** Iterations in order, each followed by the split turn that came after it. */
+/** Iterations in order, each after the assessment that came before it and followed by the split turn that came after. */
 function sessions(iterations: IterationView[], splits: SplitView[]): Array<IterationView | SplitView> {
   const known = new Set(iterations.map((entry) => entry.iteration));
+  const around = (entry: IterationView, assessed: boolean) =>
+    splits.filter((split) => split.iteration === entry.iteration && (split.trigger === 'assessment') === assessed);
   return [
-    ...iterations.flatMap((entry) => [entry, ...splits.filter((split) => split.iteration === entry.iteration)]),
+    ...iterations.flatMap((entry) => [...around(entry, true), entry, ...around(entry, false)]),
     ...splits.filter((split) => !known.has(split.iteration)),
   ];
 }

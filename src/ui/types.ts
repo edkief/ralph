@@ -40,10 +40,11 @@ export interface RunView {
   tasksPassed: number | null;
   tasksTotal: number | null;
   /**
-   * The split turn in progress, or the one the run ended on. Null once an
-   * iteration has started after it.
+   * The split turn in progress, or the one the run ended on; with `phase:
+   * 'assess'`, the assessment of a task before its first attempt. Null once
+   * an iteration has started after it.
    */
-  split: { taskId: string; startedAt: string } | null;
+  split: { taskId: string; startedAt: string; phase?: 'assess' | 'split' } | null;
   message?: string;
 }
 
@@ -122,12 +123,19 @@ export interface IterationView {
   error?: string;
 }
 
-/** The agent's turn proposing a split of a task that kept running out of time or context. */
+/**
+ * The agent's turn proposing a split of a task that kept running out of time
+ * or context, or assessing a task before its first attempt.
+ */
 export interface SplitView {
   taskId: string;
-  /** The iteration after which the task stalled. */
+  /** The iteration after which the task stalled, or the one the assessment came before. */
   iteration: number;
-  /** `proposed`, `applied`, `declined` or `failed`; `running` or `ended` while it has no record. */
+  /** Set for the assessment of a task before its first attempt, and the split that came of it. */
+  trigger?: 'assessment';
+  /** The working time the agent estimated, in an assessment. */
+  estimateMinutes?: number;
+  /** `proposed`, `applied`, `declined`, `failed` or `fits`; `running` or `ended` while it has no record. */
   status: string;
   /** The tasks proposed in its place. */
   children?: string[];
