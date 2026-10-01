@@ -464,7 +464,11 @@ propose again. `ralph doctor` warns about a split proposed but not applied, sinc
 would run the task as it is.
 
 Permission requests are answered from policy, never left waiting for a human. Deny rules beat
-allow rules, so a broad allow list cannot re-enable something explicitly forbidden.
+allow rules, so a broad allow list cannot re-enable something explicitly forbidden. If the
+server will not take an answer, the agent would wait on its tool call for good, so Ralph
+interrupts the session and ends the iteration as `failed`, with the server's reason in the log.
+A failure that is not an outright rejection is retried once first; a request that is already
+gone (answered elsewhere) is ignored.
 
 ## Run artefacts
 
@@ -492,7 +496,9 @@ The web UI reads all of these, so it needs nothing else from the loop. Beside th
 - Skills register asynchronously after startup: an immediate query returns an empty list.
   Preflight waits for the count to settle so the first iteration is not silently skill-less.
 - Preflight asserts the operationIds the loop calls still exist in the server's live
-  `/openapi.json`, so a version mismatch fails loudly instead of at runtime.
+  `/openapi.json`, so a version mismatch fails loudly instead of at runtime. It also checks
+  that the permission reply takes the decision in the `decision` field, as opencode v2.0.20
+  does: a server that names it differently would reject every reply.
 - A tool's name arrives on `session.tool.input.started` while its input arrives on
   `session.tool.called`; they are correlated by call id.
 
