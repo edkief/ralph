@@ -137,4 +137,22 @@ describe('buildPrompt', () => {
     // Before the project prompt, next to the task it belongs to.
     expect(prompt.indexOf('## Resuming')).toBeLessThan(prompt.indexOf('# Do the work'));
   });
+
+  it('shows what a person answered, and leaves the section out when there is nothing', () => {
+    const root = project();
+    const base = { projectRoot: root, ralphDir: '.ralph', iteration: 1, maxIterations: 5, pinTask: false };
+    expect(buildPrompt(base)).not.toContain('Answers from a person');
+
+    const prompt = buildPrompt({
+      ...base,
+      decisions: [
+        { time: 't', runId: 'r', taskId: 'TASK-4', kind: 'decide', question: 'REST or\nGraphQL?', answer: 'REST.\nKeep it simple.' },
+        { time: 't', runId: 'r', taskId: null, kind: 'stalled', answer: 'Use the staging database.' },
+      ],
+    });
+    expect(prompt).toContain('## Answers from a person');
+    expect(prompt).toContain('`.ralph/decisions.jsonl`');
+    expect(prompt).toContain('- TASK-4: REST or GraphQL?\n  **REST.\n  Keep it simple.**');
+    expect(prompt).toContain('- note\n  **Use the staging database.**');
+  });
 });

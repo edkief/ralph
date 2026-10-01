@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import type { Task } from '../tasks/store.js';
 import { formatClock } from '../report/time.js';
+import type { Decision } from '../human/decisions.js';
 
 export interface PromptContext {
   projectRoot: string;
@@ -14,6 +15,8 @@ export interface PromptContext {
   timeBudget?: { ms: number; until: Date };
   /** A handoff left by an earlier attempt at the next task. */
   handoff?: { path: string; text: string };
+  /** What a person answered or noted in this run and earlier ones, oldest first. */
+  decisions?: Decision[];
 }
 
 export class PromptError extends Error {}
@@ -88,6 +91,24 @@ export function buildPrompt(context: PromptContext): string {
   }
 
   const ralphDir = relative(context.projectRoot, resolve(context.projectRoot, context.ralphDir));
+  if (context.decisions && context.decisions.length > 0) {
+    const log = [...(ralphDir === '' ? [] : ralphDir.split(sep)), 'decisions.jsonl'].join('/');
+    sections.push(
+      [
+        `## Answers from a person`,
+        ``,
+        `A person answered these questions and left these notes, latest last (\`${log}\`). They are`,
+        `decided: follow them where they apply, over the spec where the two disagree, and do not ask again.`,
+        ``,
+        ...context.decisions.map((decision) => {
+          const about = decision.taskId ? `${decision.taskId}: ` : '';
+          const question = decision.question ? `${about}${oneLine(decision.question)}` : `${about}note`;
+          return `- ${question}\n  **${decision.answer.trim().split('\n').join('\n  ')}**`;
+        }),
+      ].join('\n'),
+    );
+  }
+
   sections.push(
     readFileSync(promptFile, 'utf8').replaceAll(
       RALPH_DIR_PLACEHOLDER,
@@ -95,4 +116,8 @@ export function buildPrompt(context: PromptContext): string {
     ),
   );
   return sections.join('\n\n');
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }

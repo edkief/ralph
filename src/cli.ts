@@ -50,6 +50,8 @@ Options:
       --ui-host <host>      Web UI address (default 127.0.0.1)
       --ui-port <port>      Web UI port (default 4280)
       --ui-base-path <path> Path prefix a reverse proxy serves the web UI under
+      --wait, --no-wait     Wait for a person's answer instead of exiting when one is
+                            needed (default: on with --ui)
   -h, --help                Show this help
   -v, --version             Print the version
 
@@ -89,6 +91,7 @@ async function main(argv: string[]): Promise<number> {
       'ui-host': { type: 'string' },
       'ui-port': { type: 'string' },
       'ui-base-path': { type: 'string' },
+      wait: { type: 'boolean' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
       apply: { type: 'boolean', default: false },
@@ -131,6 +134,7 @@ async function main(argv: string[]): Promise<number> {
       ...(values['ui-host'] ? { host: values['ui-host'] } : {}),
       ...(values['ui-port'] ? { port: Number(values['ui-port']) } : {}),
       ...(values['ui-base-path'] ? { basePath: values['ui-base-path'] } : {}),
+      ...(values.wait !== undefined ? { wait: values.wait } : {}),
     },
     log: {
       ...(values['log-format'] ? { format: values['log-format'] } : {}),

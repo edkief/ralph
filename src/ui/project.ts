@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { basename, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
 import { TASK_ID } from '../init/plan.js';
+import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
 import { parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
@@ -12,6 +13,7 @@ import type {
   FileEntry,
   IterationView,
   LogLine,
+  PendingView,
   RunDetail,
   RunView,
   SplitView,
@@ -63,6 +65,45 @@ export class RalphProject {
       ralphDir: this.ralphDir,
       tasks: this.tasks(),
       run: latest ?? null,
+      pending: this.pendingView(),
+    };
+  }
+
+  /** The request waiting for a person, if any, and what can be done about it right now. */
+  pending(): PendingState | undefined {
+    const pending = readPending(this.ralphRoot);
+    if (!pending) return undefined;
+    let waiting = false;
+    try {
+      const run = this.run(pending.runId);
+      waiting = pending.waiting && run.status === 'waiting' && run.live;
+    } catch {
+      // Its run is gone: nothing waits.
+    }
+    return {
+      pending,
+      waiting,
+      answered: readAnswer(this.ralphRoot)?.id === pending.id,
+      actions: actionsFor(pending.kind, waiting),
+    };
+  }
+
+  private pendingView(): PendingView | null {
+    const state = this.pending();
+    if (!state) return null;
+    const { pending } = state;
+    return {
+      id: pending.id,
+      runId: pending.runId,
+      kind: pending.kind,
+      taskId: pending.taskId,
+      message: pending.message,
+      ...(pending.question ? { question: pending.question } : {}),
+      ...(pending.split ? { split: pending.split } : {}),
+      waiting: state.waiting,
+      answered: state.answered,
+      actions: state.actions,
+      createdAt: pending.createdAt,
     };
   }
 
@@ -112,7 +153,7 @@ export class RalphProject {
       return {
         runId,
         status: state.status,
-        live: state.status === 'running' && this.isAlive(state, dir),
+        live: (state.status === 'running' || state.status === 'waiting') && this.isAlive(state, dir),
         startedAt: state.startedAt,
         updatedAt: state.updatedAt,
         maxIterations: state.maxIterations,

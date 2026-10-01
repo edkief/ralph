@@ -26,9 +26,9 @@ export interface TasksView {
 /** A run as recorded in its history folder. */
 export interface RunView {
   runId: string;
-  /** `running`, a final loop status, or `crashed`; `unknown` for a run older than state.json. */
+  /** `running`, `waiting` for a person, a final loop status, or `crashed`; `unknown` for a run older than state.json. */
   status: string;
-  /** Running and still being updated, so worth following. */
+  /** Running or waiting, and its process still there, so worth following. */
   live: boolean;
   startedAt: string | null;
   updatedAt: string | null;
@@ -47,6 +47,36 @@ export interface RunView {
   message?: string;
 }
 
+/** Something only a person can settle: the loop asked and waits, or stopped over it. */
+export interface PendingView {
+  id: string;
+  runId: string;
+  kind: 'split' | 'decide' | 'blocked' | 'stalled' | 'budget';
+  taskId: string | null;
+  /** What stopped the run. */
+  message: string;
+  /** The agent's question, for `decide`. */
+  question?: string;
+  /** The proposal to review, for `split`. Paths are relative to the project root. */
+  split?: { dir: string; reason: string; tasks: Array<{ id: string; title: string; specPath: string }> };
+  /** The loop is waiting for the answer; otherwise it has exited and is rerun by hand. */
+  waiting: boolean;
+  /** Answered, and the loop has not picked the answer up yet. */
+  answered: boolean;
+  /** What can be done about it right now. */
+  actions: Array<'approve' | 'retry' | 'repropose' | 'answer' | 'resume' | 'continue' | 'stop' | 'dismiss'>;
+  createdAt: string;
+}
+
+/** Whether this server takes actions (answers, stop requests), and what the browser needs for them. */
+export interface ActionsView {
+  enabled: boolean;
+  /** Why not, when not. */
+  reason?: string;
+  /** Requests must carry the configured token. */
+  token: boolean;
+}
+
 export interface StatusView {
   project: string;
   projectRoot: string;
@@ -54,6 +84,10 @@ export interface StatusView {
   tasks: TasksView;
   /** The latest run, if any. */
   run: RunView | null;
+  /** What a person is asked to settle, if anything. */
+  pending: PendingView | null;
+  /** Absent from a server that takes no actions at all. */
+  actions?: ActionsView;
 }
 
 export interface FileEntry {

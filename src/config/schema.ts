@@ -84,8 +84,9 @@ const PlanSchema = z.object({
 });
 
 /**
- * The read-only web UI. `ralph ui` always serves it; `enabled` also starts it
- * beside the loop. Loopback by default: it has no authentication.
+ * The web UI. `ralph ui` always serves it; `enabled` also starts it beside the
+ * loop. Loopback by default: reading needs no authentication, and actions
+ * (answering the loop, stopping it) are only taken on loopback or with `token`.
  */
 const UiSchema = z.object({
   enabled: z.boolean().default(false),
@@ -99,6 +100,17 @@ const UiSchema = z.object({
     .string()
     .regex(/^(\/[^/?#]+)*\/?$/, 'must be empty or an absolute path such as /ralph/ws-1')
     .default(''),
+  /**
+   * When the loop needs a person (a decision, a blocker, a stall, a proposed
+   * split, a spent budget), wait for their answer from the web UI or
+   * `ralph respond` instead of exiting. Defaults to `enabled`.
+   */
+  wait: z.boolean().optional(),
+  /**
+   * A secret that requests for actions must carry. Required for actions when
+   * the UI is reachable from other hosts; open the UI with `?token=<it>`.
+   */
+  token: z.string().min(1).optional(),
 });
 
 export const ConfigSchema = z.object({
