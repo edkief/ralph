@@ -117,7 +117,9 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   split one came from
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
-  is an iteration, or the turn in which the agent assessed a task or proposed splitting it
+  is an iteration, or the turn in which the agent assessed a task or proposed splitting it.
+  A long session shows its latest 2000 entries, with long tool input, output and text cut;
+  the event file in `.ralph/history/` keeps everything
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
   and `ralph.config.json`, with Markdown rendered and images shown as pictures
@@ -182,7 +184,8 @@ By default Ralph exits at these points, with the [exit codes](#exit-codes) above
 carries on in the same process as soon as it is answered. `stop` ends the run as it would have
 ended without waiting, with the same exit code; Ctrl-C does too.
 
-Answer from the web UI, or from a terminal in the project:
+Answer from the web UI, from the menu in the terminal the loop runs in (press Enter), or from
+another terminal in the project:
 
 ```bash
 ralph respond                                 # what is asked, and the answers it takes
@@ -203,12 +206,24 @@ as decided. Commit the file with the project if the answers should outlive the c
 
 ### Stopping a run
 
-Press Ctrl-C once and Ralph lets the current iteration finish, pushes its commits if
-`git.push` is set, and exits before starting another. Press it again to interrupt the
-iteration and stop now; its work is left uncommitted in the working tree.
+At a terminal, press Enter for a menu:
 
-Without a terminal, send the same signals: `kill -INT <pid>` for the first, and
-`kill -TERM <pid>` to stop now (as Kubernetes does when a pod is deleted).
+- `s` lets the current iteration finish, pushes its commits if `git.push` is set, and exits
+  before starting another.
+- `q` interrupts the iteration and stops now; its work is left uncommitted in the working tree.
+- When Ralph is [waiting for a person](#when-ralph-needs-a-person), the menu also takes the
+  answer: approve a split or ask for another, answer a question, carry on past the budget.
+- Enter or Esc closes it. Log lines wait while it is open, and it closes by itself after a
+  minute.
+
+Ctrl-C stops now, like `q`; a second one exits at once if stopping hangs.
+
+Without a terminal, send signals to Ralph's pid: `kill -INT <pid>` to stop after the current
+iteration, and `kill -TERM <pid>` to stop now (as Kubernetes does when a pod is deleted).
+
+The opencode server Ralph starts is its child, in its process group, and stops with it. That
+includes a Ralph that is killed or crashes: a small guard process notices and stops the server
+within `server.shutdownTimeoutMs`, so nothing is left to clean up before the next run.
 
 The web UI's Overview has a button for each while a run is in progress. They leave a request
 in `.ralph/history/stop.json`, which the loop picks up within a second.
