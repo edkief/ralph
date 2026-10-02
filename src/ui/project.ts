@@ -4,11 +4,13 @@ import { basename, extname, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
 import { TASK_ID } from '../init/plan.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
+import { daemonLive, readDaemonState } from '../daemon/control.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
 import type {
+  DaemonView,
   FileContent,
   FileEntry,
   IterationView,
@@ -85,6 +87,24 @@ export class RalphProject {
       tasks: this.tasks(),
       run: latest ? this.run(latest) : null,
       pending: this.pendingView(),
+      daemon: this.daemon(),
+    };
+  }
+
+  /** The project's daemon, without its heartbeat, so a live view changes only when it does. */
+  daemon(): DaemonView | null {
+    const state = readDaemonState(this.ralphRoot);
+    if (!state) return null;
+    const live = daemonLive(state);
+    return {
+      live,
+      status: live ? state.status : 'stopped',
+      pid: state.pid,
+      hostname: state.hostname,
+      startedAt: state.startedAt,
+      defaultIterations: state.defaultIterations,
+      batch: live ? state.batch : null,
+      lastBatch: state.lastBatch ?? null,
     };
   }
 

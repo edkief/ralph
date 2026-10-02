@@ -87,8 +87,26 @@ export interface StatusView {
   run: RunView | null;
   /** What a person is asked to settle, if anything. */
   pending: PendingView | null;
+  /** The project's daemon, if one has ever run here; `live` says whether it still does. */
+  daemon: DaemonView | null;
   /** Absent from a server that takes no actions at all. */
   actions?: ActionsView;
+}
+
+/** A `ralph daemon` that holds the loop and runs batches of iterations on request. */
+export interface DaemonView {
+  live: boolean;
+  /** `idle` between batches, `running` one, `stopping`, or `stopped` once gone. */
+  status: string;
+  pid: number;
+  hostname: string;
+  startedAt: string;
+  /** Iterations a run request without a number gets. */
+  defaultIterations: number;
+  /** The batch in progress. */
+  batch: { iterations: number; startedAt: string } | null;
+  /** How the last batch ended. */
+  lastBatch: { status: string; message: string; endedAt: string } | null;
 }
 
 export interface FileEntry {
