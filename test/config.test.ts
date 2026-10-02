@@ -56,6 +56,13 @@ describe('loadConfig', () => {
     expect(off.timeouts.wrapUpMs).toBe(0);
   });
 
+  it('assesses no task before attempting it unless asked', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).assess).toEqual({ mode: 'off', timeoutMs: 300_000 });
+    const root = project();
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ assess: { mode: 'split', thresholdMs: 1_200_000 } }));
+    expect(loadConfig({ projectRoot: root, env: {} }).assess).toEqual({ mode: 'split', thresholdMs: 1_200_000, timeoutMs: 300_000 });
+  });
+
   it('keeps the web UI off and on loopback unless asked', () => {
     expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280, basePath: '' });
     const fromEnv = loadConfig({

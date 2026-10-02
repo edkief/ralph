@@ -227,6 +227,46 @@ describe('web UI server', () => {
     expect((await get(`/api/runs/${LIVE_RUN}/splits/..%2Fstate/transcript`)).status).toBe(404);
   });
 
+  it('lists the assessment of a task among the split turns', async () => {
+    const root = project();
+    const history = resolve(root, '.ralph', 'history', LIVE_RUN);
+    writeFileSync(
+      resolve(history, 'splits.jsonl'),
+      line({
+        iteration: 1,
+        taskId: 'TASK-0',
+        causes: [],
+        trigger: 'assessment',
+        status: 'fits',
+        estimateMinutes: 12,
+        reason: 'one small change',
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:02:00.000Z',
+      }),
+    );
+    // The next task is being assessed: named by the state, not yet recorded.
+    writeFileSync(resolve(history, 'split-TASK-2.events.jsonl'), line(say('reading the spec')));
+    patchState(root, { split: { taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z', phase: 'assess' } });
+    await start(root);
+
+    const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
+    expect(body.run.split).toMatchObject({ taskId: 'TASK-2', phase: 'assess' });
+    expect(body.splits).toEqual([
+      {
+        taskId: 'TASK-0',
+        iteration: 1,
+        trigger: 'assessment',
+        estimateMinutes: 12,
+        status: 'fits',
+        reason: 'one small change',
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:02:00.000Z',
+        durationMs: 60_000,
+      },
+      { taskId: 'TASK-2', iteration: 2, trigger: 'assessment', status: 'running', startedAt: '2026-09-30T12:20:00.000Z', endedAt: null, durationMs: null },
+    ]);
+  });
+
   it('reports no split turns for a run without any', async () => {
     await start(project());
     const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);

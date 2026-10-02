@@ -46,6 +46,24 @@ const StallSchema = z.object({
 });
 
 /**
+ * Assessing a task before its first attempt. A short triage turn estimates
+ * the working time the task needs; one estimated over the threshold is split
+ * before any time is spent on it, instead of after it ran out of time.
+ */
+const AssessSchema = z.object({
+  /**
+   * `off` attempts every task as it is. `propose` has the agent propose a
+   * split of a task that is too big, then stops or waits for a person;
+   * `split` applies the split and carries on.
+   */
+  mode: z.enum(['off', 'propose', 'split']).default('off'),
+  /** A task estimated to need more than this is split. Defaults to `timeouts.iterationMs`. */
+  thresholdMs: z.number().int().positive().optional(),
+  /** Working time for the triage turn; then it is interrupted and the task attempted as it is. */
+  timeoutMs: z.number().int().positive().default(5 * 60_000),
+});
+
+/**
  * Publishing commits. The loop pushes, never the agent, whose `git push` stays
  * denied. `iteration` pushes after every iteration that committed; `end`
  * pushes once when the run finishes.
@@ -141,6 +159,7 @@ export const ConfigSchema = z.object({
   timeouts: TimeoutsSchema.prefault({}),
   retries: RetriesSchema.prefault({}),
   stall: StallSchema.prefault({}),
+  assess: AssessSchema.prefault({}),
   permissions: PermissionsSchema.prefault({}),
   git: GitSchema.prefault({}),
   plan: PlanSchema.prefault({}),

@@ -534,7 +534,7 @@ describe('runLoop', () => {
       ]);
       expect(existsSync(resolve(result.historyDir, 'split-TASK-1.events.jsonl'))).toBe(true);
       // The run ended on the split turn, so its state still names it.
-      expect(runState(result.historyDir).split).toEqual({ taskId: 'TASK-1', startedAt: expect.any(String) });
+      expect(runState(result.historyDir).split).toEqual({ taskId: 'TASK-1', startedAt: expect.any(String), phase: 'split' });
     });
 
     it('splits the task and carries on with the new tasks', async () => {
@@ -695,6 +695,205 @@ describe('runLoop', () => {
         'TASK-1 ran out of time 1 time after being split from TASK-0; stall.maxSplitDepth (1) allows no further split, so split it by hand (handoff: .ralph/handoff/TASK-1.md)',
       );
       expect(server?.prompts).toHaveLength(1);
+    });
+
+    describe('assessing a task before its first attempt', () => {
+      const estimate = (minutes: number) => say(`Plan: parser, then printer.\n<promise>ESTIMATE:${minutes}:parser and printer are separate changes</promise>`);
+      const assessment = (root: string) => JSON.parse(readFileSync(resolve(root, '.ralph', 'assess', 'TASK-1.json'), 'utf8'));
+
+      it('attempts a task estimated to fit, and does not assess it again', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 5, assess: { mode: 'split' } }), {
+          onPrompt: (count) => {
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? estimate(10) : say('done')),
+        });
+
+        expect(result.status).toBe('complete');
+        expect(result.iterations).toBe(2);
+        const triage = String(server?.prompts[0]?.['text']);
+        expect(triage).toContain('## Assess TASK-1');
+        expect(triage).toContain('TASK-1 works');
+        expect(triage).toContain('more than 30 minutes');
+        expect(String(server?.prompts[1]?.['text'])).toContain('Work on **TASK-1**');
+        expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1**');
+        expect(server?.prompts).toHaveLength(3);
+        expect(assessment(root)).toMatchObject({ task: 'TASK-1', verdict: 'fits', estimateMinutes: 10, thresholdMinutes: 30 });
+        expect(splits(result.historyDir)).toEqual([
+          expect.objectContaining({ taskId: 'TASK-1', iteration: 1, trigger: 'assessment', status: 'fits', estimateMinutes: 10, causes: [] }),
+        ]);
+        expect(existsSync(resolve(root, '.ralph', 'split'))).toBe(false);
+      });
+
+      it('splits a task estimated too big, without spending an iteration on it', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 2, assess: { mode: 'split' } }), {
+          onPrompt: (count) => {
+            if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+            if (count === 3) markPassing(root, 'TASK-1.1');
+            if (count === 4) markPassing(root, 'TASK-1.2');
+          },
+          script: (count) => (count === 1 ? estimate(50) : say(count === 2 ? 'proposed' : 'done')),
+        });
+
+        expect(result.status).toBe('complete');
+        expect(result.iterations).toBe(2);
+        const proposing = String(server?.prompts[1]?.['text']);
+        expect(proposing).toContain('## Split TASK-1');
+        expect(proposing).toContain('estimated at about 50 minutes');
+        expect(proposing).toContain('more than the 30 minutes a task may take');
+        // The split turn carried on in the triage session; the new tasks were not assessed.
+        expect(server?.sessionsCreated).toBe(3);
+        expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1.1**');
+        expect(execFileSync('git', ['log', '--format=%s'], { cwd: root, encoding: 'utf8' })).toContain(
+          'chore(plan): split TASK-1 into TASK-1.1 and TASK-1.2',
+        );
+        expect(assessment(root)).toMatchObject({ verdict: 'too-big', estimateMinutes: 50 });
+        expect(splits(result.historyDir)).toEqual([
+          expect.objectContaining({ iteration: 1, trigger: 'assessment', status: 'applied', estimateMinutes: 50, children: ['TASK-1.1', 'TASK-1.2'] }),
+        ]);
+        // One file holds both turns of the session.
+        const events = readFileSync(resolve(result.historyDir, 'split-TASK-1.events.jsonl'), 'utf8');
+        expect(events).toContain('ESTIMATE:50');
+        expect(events).toContain('proposed');
+      });
+
+      it('follows its own threshold when one is set', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 1, assess: { mode: 'split', thresholdMs: 60 * 60_000 } }), {
+          onPrompt: (count) => {
+            if (count === 2) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? estimate(50) : say('done')),
+        });
+
+        expect(result.status).toBe('complete');
+        expect(assessment(root)).toMatchObject({ verdict: 'fits', thresholdMinutes: 60 });
+      });
+
+      it('proposes the split and stops for review', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 5, assess: { mode: 'propose' } }), {
+          onPrompt: (count) => {
+            if (count === 2) writeProposal(root, split, ['TASK-1.1', 'TASK-1.2']);
+          },
+          script: (count) => (count === 1 ? estimate(50) : say('proposed')),
+        });
+
+        expect(result.status).toBe('stalled');
+        expect(result.iterations).toBe(0);
+        expect(result.message).toBe(
+          'TASK-1 was estimated at 50 minutes before any attempt, over the 30 minutes a task may take; proposed splitting it into TASK-1.1 and TASK-1.2 in .ralph/split/TASK-1/. Review it, then run `ralph split TASK-1 --apply`',
+        );
+        expect(JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8'))).toHaveLength(1);
+        expect(readPending(resolve(root, '.ralph'))).toMatchObject({ kind: 'split', taskId: 'TASK-1', waiting: false });
+        expect(splits(result.historyDir)).toEqual([expect.objectContaining({ trigger: 'assessment', status: 'proposed' })]);
+        expect(runState(result.historyDir).split).toMatchObject({ taskId: 'TASK-1', phase: 'split' });
+      });
+
+      it('waits for the proposal to be approved, or attempts the task when told to', async () => {
+        const approved = planned();
+        const running = waitingLoop(approved, config(approved, { maxIterations: 5, assess: { mode: 'propose' } }), {
+          onPrompt: (count) => {
+            if (count === 2) writeProposal(approved, split, ['TASK-1.1', 'TASK-1.2']);
+            if (count === 3) markPassing(approved, 'TASK-1.1');
+            if (count === 4) markPassing(approved, 'TASK-1.2');
+          },
+          script: (count) => (count === 1 ? estimate(50) : say('ok')),
+        });
+        expect(await answer(approved, { action: 'approve' })).toMatchObject({ kind: 'split', taskId: 'TASK-1' });
+        const result = await running;
+        expect(result.status).toBe('complete');
+        expect(splits(result.historyDir).map((record: { status: string }) => record.status)).toEqual(['proposed', 'applied']);
+        await server?.close();
+
+        const retried = planned();
+        const again = waitingLoop(retried, config(retried, { maxIterations: 5, assess: { mode: 'propose' } }), {
+          onPrompt: (count) => {
+            if (count === 2) writeProposal(retried, split, ['TASK-1.1', 'TASK-1.2']);
+            if (count === 3) markPassing(retried, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? estimate(50) : say('ok')),
+        });
+        await answer(retried, { action: 'retry', text: 'It is smaller than it looks.' });
+        expect((await again).status).toBe('complete');
+        const attempt = String(server?.prompts[2]?.['text']);
+        expect(attempt).toContain('Work on **TASK-1**');
+        expect(attempt).toContain('It is smaller than it looks.');
+      });
+
+      it('attempts the task when the agent then advises against splitting it', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 5, assess: { mode: 'split' } }), {
+          onPrompt: (count) => {
+            if (count === 2) writeProposal(root, { splittable: false, reason: 'one change that cannot be cut' });
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? estimate(50) : say('ok')),
+        });
+
+        expect(result.status).toBe('complete');
+        expect(result.iterations).toBe(1);
+        expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1**');
+        expect(splits(result.historyDir)).toEqual([expect.objectContaining({ trigger: 'assessment', status: 'declined' })]);
+      });
+
+      it('cuts a triage turn off at its own budget, then attempts the task', async () => {
+        const root = planned();
+
+        const result = await loop(root, config(root, { maxIterations: 5, assess: { mode: 'split', timeoutMs: 500 } }), {
+          onPrompt: (count) => {
+            if (count === 2) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count === 1 ? endless : say('done')),
+        });
+
+        expect(result.status).toBe('complete');
+        expect(result.iterations).toBe(1);
+        expect(server?.interrupts).toBe(1);
+        expect(assessment(root)).toMatchObject({ verdict: 'unknown' });
+        expect(splits(result.historyDir)).toEqual([expect.objectContaining({ trigger: 'assessment', status: 'failed' })]);
+      });
+
+      it('attempts the task when the reply has no estimate, and warns when the turn changed the project', async () => {
+        const root = planned();
+
+        server = await startFakeServer({
+          onPrompt: (count) => {
+            if (count === 1) writeFileSync(resolve(root, 'parser.ts'), 'export {};\n');
+            if (count === 2) markPassing(root, 'TASK-1');
+          },
+          script: (count) => say(count === 1 ? 'I went ahead and wrote the parser.' : 'done'),
+        });
+        const result = await runLoop({
+          config: config(root, { maxIterations: 5, assess: { mode: 'split' } }),
+          client: new OpencodeClient({ baseUrl: server.url }),
+          logger: new Logger({ level: 'warn', stream: sink }),
+          reporter,
+          signal: new AbortController().signal,
+        });
+
+        expect(result.status).toBe('complete');
+        expect(assessment(root)).toMatchObject({ verdict: 'unknown', reason: expect.stringContaining('no estimate') });
+        expect(readFileSync(resolve(result.historyDir, 'log.jsonl'), 'utf8')).toContain('the project changed during a planning turn');
+      });
+
+      it('assesses nothing by default, nor a task that cannot be split again', async () => {
+        const off = planned();
+        await loop(off, config(off, { maxIterations: 1 }), { script: say('done') });
+        expect(String(server?.prompts[0]?.['text'])).toContain('Work on **TASK-1**');
+        await server?.close();
+
+        const deep = planned({ splitFrom: 'TASK-0', splitDepth: 1 });
+        await loop(deep, config(deep, { maxIterations: 1, assess: { mode: 'split' } }), { script: say('done') });
+        expect(String(server?.prompts[0]?.['text'])).toContain('Work on **TASK-1**');
+      });
     });
   });
 

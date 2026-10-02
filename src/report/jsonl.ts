@@ -17,15 +17,25 @@ export interface IterationRecord {
   endedAt: string;
 }
 
-/** A split turn the loop ran for a task that kept running out of time or context. */
+/**
+ * A split turn the loop ran for a task that kept running out of time or
+ * context, or the assessment of a task before its first attempt.
+ */
 export interface SplitRecord {
-  /** The iteration after which the task stalled. */
+  /** The iteration after which the task stalled, or the one the assessment came before. */
   iteration: number;
   taskId: string;
-  /** What each attempt at the task ran out of. */
+  /** What each attempt at the task ran out of; none for an assessment. */
   causes: string[];
-  /** `applied` and `proposed` name the new tasks; `declined` and `failed` give the reason. */
-  status: 'proposed' | 'applied' | 'declined' | 'failed';
+  /** What led to the turn. Absent from records written before tasks were assessed, all stalls. */
+  trigger?: 'stall' | 'assessment';
+  /** The working time the agent estimated, for an assessment that gave an estimate. */
+  estimateMinutes?: number;
+  /**
+   * `applied` and `proposed` name the new tasks; `declined` and `failed` give
+   * the reason. `fits` is an assessment that found the task small enough.
+   */
+  status: 'proposed' | 'applied' | 'declined' | 'failed' | 'fits';
   children?: string[];
   reason?: string;
   committed?: boolean;
@@ -56,11 +66,12 @@ export interface RunState {
   tasksPassed: number;
   tasksTotal: number;
   /**
-   * The split turn in progress. Stays set once that turn ends, until the next
+   * The split turn in progress, or with `phase: 'assess'` the assessment of a
+   * task before its first attempt. Stays set once that turn ends, until the next
    * iteration starts, so a run that stops on a proposal still names its last
    * session. Absent from runs recorded before split turns were tracked.
    */
-  split?: { taskId: string; startedAt: string } | null;
+  split?: { taskId: string; startedAt: string; phase?: 'assess' | 'split' } | null;
   /** What the run is waiting on a person for, while it is `waiting`. */
   pending?: { id: string; kind: string; taskId: string | null } | null;
   message?: string;

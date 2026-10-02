@@ -242,6 +242,7 @@ export class RalphProject {
       splits.push({
         taskId: open.taskId,
         iteration: run.iteration,
+        ...(open.phase === 'assess' ? { trigger: 'assessment' as const } : {}),
         status: run.live ? 'running' : 'ended',
         startedAt: open.startedAt,
         endedAt: null,
@@ -412,6 +413,8 @@ function splitView(record: SplitRecord): SplitView {
   return {
     taskId: record.taskId,
     iteration: record.iteration,
+    ...(record.trigger === 'assessment' ? { trigger: record.trigger } : {}),
+    ...(record.estimateMinutes !== undefined ? { estimateMinutes: record.estimateMinutes } : {}),
     status: record.status,
     ...(record.children ? { children: record.children } : {}),
     ...(record.reason ? { reason: record.reason } : {}),

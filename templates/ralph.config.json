@@ -15,6 +15,9 @@
     "maxUnproductiveIterations": 3,
     "maxTimeoutsPerTask": 2
   },
+  "assess": {
+    "mode": "off"
+  },
   "permissions": {
     "fallback": "allow",
     "deny": ["git push", "git remote", "rm -rf /", "shutdown", "reboot"]

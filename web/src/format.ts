@@ -53,6 +53,7 @@ export function statusTone(status: string | null | undefined): Tone {
     case 'progressed':
     case 'proposed':
     case 'applied':
+    case 'fits':
       return 'good';
     case 'blocked':
     case 'stalled':
