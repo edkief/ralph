@@ -21,20 +21,13 @@ const LISTENING_PATTERN = /listening on (\S+)/;
  * Spawning is preferred for unattended runs: the server prints its generated
  * password on stdout at startup, so credentials are captured deterministically
  * instead of being scraped out of `opencode pair`.
+ *
+ * A spawned server is an ordinary child in Ralph's process group: the
+ * terminal's Ctrl-C and hangup reach it as they reach Ralph.
  */
 export async function startServer(
   config: ServerConfig,
-  options: {
-    cwd: string;
-    logger: Logger;
-    /**
-     * Run the server in its own process group, so a Ctrl-C meant for Ralph
-     * (which may only ask to stop after the current iteration) does not kill
-     * the server under it. The caller must then handle SIGINT and SIGHUP and
-     * call stop(), since the terminal no longer signals the server itself.
-     */
-    ownProcessGroup?: boolean;
-  },
+  options: { cwd: string; logger: Logger },
 ): Promise<ServerHandle> {
   if (config.url) {
     const client = new OpencodeClient({
@@ -51,12 +44,16 @@ export async function startServer(
     cwd: options.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: process.env,
-    detached: options.ownProcessGroup === true,
   });
-  // Detached, it would outlive a Ralph that exits without calling stop().
+  // A child is not stopped by its parent ending: not by an exit that skips
+  // stop(), and not by a crash, which runs no exit hook either.
   const killOnExit = () => child.kill('SIGTERM');
   process.once('exit', killOnExit);
-  child.once('exit', () => process.off('exit', killOnExit));
+  const disarm = stopWhenParentDies(child, config.shutdownTimeoutMs);
+  child.once('exit', () => {
+    process.off('exit', killOnExit);
+    disarm();
+  });
 
   const { url, password } = await readStartupBanner(child, config.startupTimeoutMs, options.logger);
   const client = new OpencodeClient({ baseUrl: url, password });
@@ -66,6 +63,52 @@ export async function startServer(
   return {
     client,
     stop: () => stopChild(child, config.shutdownTimeoutMs),
+  };
+}
+
+/**
+ * What the guard process runs: wait for stdin to end, which it does when the
+ * process holding the other end of the pipe is gone, then stop `pid`.
+ */
+export function guardScript(pid: number, graceMs: number): string {
+  return `
+    const alive = () => { try { process.kill(${pid}, 0); return true; } catch { return false; } };
+    const signal = (name) => { try { process.kill(${pid}, name); } catch {} };
+    process.stdin.resume();
+    process.stdin.on('error', () => {});
+    process.stdin.on('close', () => {
+      signal('SIGTERM');
+      const deadline = Date.now() + ${graceMs};
+      setInterval(() => {
+        if (!alive()) process.exit(0);
+        if (Date.now() < deadline) return;
+        signal('SIGKILL');
+        process.exit(0);
+      }, 100);
+    });
+  `;
+}
+
+/**
+ * Have `child` stopped when this process dies without stopping it: killed, or
+ * aborted by V8 when the heap is full. Nothing runs here then, so a small
+ * guard process holds a pipe from this one and acts when it closes. Returns
+ * a function that calls the guard off.
+ */
+function stopWhenParentDies(child: ChildProcess, graceMs: number): () => void {
+  if (child.pid === undefined) return () => undefined;
+  // In a process group of its own: a Ctrl-C that kills Ralph must not kill the guard first.
+  const guard = spawn(process.execPath, ['-e', guardScript(child.pid, graceMs)], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    detached: true,
+  });
+  guard.on('error', () => undefined);
+  guard.stdin?.on('error', () => undefined);
+  // Neither the guard nor its pipe should keep Ralph running.
+  guard.unref();
+  (guard.stdin as (NodeJS.WritableStream & { unref?: () => void }) | null)?.unref?.();
+  return () => {
+    guard.kill('SIGKILL');
   };
 }
 

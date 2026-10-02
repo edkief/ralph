@@ -214,10 +214,12 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     logger.warn('stopping now, interrupting the current iteration');
     controller.abort();
   };
-  // The first Ctrl-C asks to stop after the current iteration; a second one stops now.
+  // A Ctrl-C at a terminal reaches the opencode server as well, which ends
+  // its work there and then: nothing is left to finish. A SIGINT sent to
+  // Ralph alone asks to stop after the current iteration; a second one stops now.
   const onInterrupt = () => {
-    if (stop.signal.aborted) return onTerminate();
-    logger.warn('stopping after the current iteration; press Ctrl-C again to stop now');
+    if (process.stdin.isTTY || stop.signal.aborted) return onTerminate();
+    logger.warn('stopping after the current iteration; send SIGINT again or SIGTERM to stop now');
     stop.abort();
   };
   process.on('SIGINT', onInterrupt);
@@ -228,7 +230,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   const ui = config.ui.enabled && command !== 'doctor' ? await startUiBesideLoop(config, logger) : undefined;
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer(config.server, { cwd: config.projectRoot, logger, ownProcessGroup: true });
+    server = await startServer(config.server, { cwd: config.projectRoot, logger });
   } catch (cause) {
     await ui?.close();
     throw cause;

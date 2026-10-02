@@ -325,7 +325,8 @@ export async function runIteration(args: {
       }
     }
   } catch (cause) {
-    if (!isAbortError(cause)) throw cause;
+    // A stream cut off while stopping is the stop, e.g. a Ctrl-C that reached the server too.
+    if (!isAbortError(cause) && !streamAbort.signal.aborted) throw cause;
   } finally {
     clearInterval(timer);
     signal.removeEventListener('abort', onOuterAbort);
