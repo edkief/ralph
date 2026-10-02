@@ -28,6 +28,8 @@ const DaemonStateSchema = z.object({
   defaultIterations: z.number().int().positive(),
   /** The batch in progress, while `running`. */
   batch: z.object({ iterations: z.number().int().positive(), startedAt: z.string() }).nullable(),
+  /** How the last batch ended: its run's status, or `failed` when it never got going (e.g. preflight). */
+  lastBatch: z.object({ status: z.string(), message: z.string(), endedAt: z.string() }).nullable().optional(),
   uiUrl: z.string().optional(),
 });
 export type DaemonState = z.infer<typeof DaemonStateSchema>;

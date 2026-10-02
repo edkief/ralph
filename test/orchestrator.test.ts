@@ -71,9 +71,15 @@ async function loop(
 }
 
 /** Run the loop so that it waits for a person, looking for answers often. */
-async function waitingLoop(root: string, cfg: Config, options: Parameters<typeof startFakeServer>[0]) {
+async function waitingLoop(
+  root: string,
+  cfg: Config,
+  options: Parameters<typeof startFakeServer>[0],
+  extra: { askForMore?: boolean } = {},
+) {
   server = await startFakeServer(options);
   return runLoop({
+    ...extra,
     config: { ...cfg, ui: { ...cfg.ui, wait: true } },
     client: new OpencodeClient({ baseUrl: server.url }),
     logger,
@@ -1038,6 +1044,22 @@ describe('runLoop', () => {
       expect(result.status).toBe('complete');
       expect(result.iterations).toBe(2);
       expect(String(server?.prompts[1]?.['text'])).toContain('RALPH_ITERATION=2 of 4');
+    });
+
+    it('ends at a spent budget without asking, for a daemon batch', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+      const result = await waitingLoop(
+        root,
+        config(root, { maxIterations: 1 }),
+        { onPrompt: (count) => markPassing(root, `TASK-${count}`), script: say('done') },
+        { askForMore: false },
+      );
+
+      expect(result.status).toBe('max-iterations');
+      expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
     });
 
     it('stops waiting on a stop request, leaving the question for later', async () => {

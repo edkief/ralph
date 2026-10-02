@@ -9,6 +9,7 @@ import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
 import { runSplit } from './split/command.js';
 import { runRespond } from './human/command.js';
+import { controlDaemon, detachDaemon, ownerOf, runDaemon } from './daemon/command.js';
 import { pendingState, respond } from './human/respond.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
@@ -30,6 +31,9 @@ Usage:
                             Propose splitting a task into smaller ones, or apply the proposal
   ralph respond [action] [text]
                             Show what Ralph is asking a person, or answer it
+  ralph daemon [options]    Stay up and run batches of iterations on request
+  ralph daemon run|pause|status|shutdown
+                            Steer the project's daemon
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
@@ -39,6 +43,14 @@ Init options:
 Split options:
       --apply               Replace the task with the proposed ones and commit
   -m, --model <id>          Model for the proposal (default: plan.model, then model)
+
+Daemon options:
+      --detach              Start it in the background, logging to <ralph-dir>/history/daemon.log
+      --start               Run a first batch at once instead of waiting idle
+  -n, --max-iterations <n>  Iterations in a batch when a run request names none;
+                            with \`ralph daemon run\`, the iterations to run
+      --no-ui               Serve no web UI (it is on by default)
+      --now                 With \`ralph daemon pause\`: interrupt the iteration in progress
 
 Respond options:
       --iterations <n>      Iterations to add, for \`ralph respond continue\`
@@ -105,6 +117,9 @@ async function main(argv: string[]): Promise<number> {
       replan: { type: 'boolean', default: false },
       apply: { type: 'boolean', default: false },
       iterations: { type: 'string' },
+      detach: { type: 'boolean', default: false },
+      start: { type: 'boolean', default: false },
+      now: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -121,7 +136,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
@@ -153,15 +168,17 @@ async function main(argv: string[]): Promise<number> {
     },
   };
 
+  const read = (onWarning: (message: string) => void) =>
+    loadConfig({
+      projectRoot: values.cwd ?? process.cwd(),
+      overrides,
+      onWarning,
+      ...(values.config ? { configPath: values.config } : {}),
+    });
   const load = () => {
     // The logger's format comes from the config, so hold warnings until it exists.
     const warnings: string[] = [];
-    const config = loadConfig({
-      projectRoot: values.cwd ?? process.cwd(),
-      overrides,
-      onWarning: (message) => warnings.push(message),
-      ...(values.config ? { configPath: values.config } : {}),
-    });
+    const config = read((message) => warnings.push(message));
     const logger = new Logger({ level: config.log.level, format: config.log.format });
     for (const warning of warnings) logger.warn(warning);
     return { config, logger };
@@ -199,6 +216,32 @@ async function main(argv: string[]): Promise<number> {
       text: positionals.slice(2).join(' '),
       ...(iterations !== undefined ? { iterations } : {}),
     });
+  }
+
+  if (command === 'daemon') {
+    const action = positionals[1];
+    if (action) {
+      const iterations = values['max-iterations'] ? Number(values['max-iterations']) : undefined;
+      if (iterations !== undefined && (!Number.isInteger(iterations) || iterations < 1)) {
+        process.stderr.write('--max-iterations must be a positive whole number\n');
+        return ExitCode.ConfigError;
+      }
+      return controlDaemon({ config, action, now: values.now === true, ...(iterations !== undefined ? { iterations } : {}) });
+    }
+    if (values.detach) return detachDaemon(config, argv);
+    return runDaemon({
+      config,
+      logger,
+      reload: () => read((message) => logger.warn(message)),
+      start: values.start === true,
+      ui: values.ui !== false,
+    });
+  }
+
+  const owner = command === 'doctor' ? undefined : ownerOf(config);
+  if (owner) {
+    process.stderr.write(`Not starting: ${owner}\n`);
+    return ExitCode.ConfigError;
   }
 
   return runCommand(command, config, logger);

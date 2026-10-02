@@ -7,6 +7,12 @@ const POLL_MS = 500;
 /** How often it rewrites its state, so a reader on another host knows it is up. */
 const HEARTBEAT_MS = 5_000;
 
+/** How a batch ended, kept in the daemon's state for the web UI and `ralph daemon status`. */
+export interface BatchOutcome {
+  status: string;
+  message: string;
+}
+
 export interface DaemonLoopArgs {
   ralphRoot: string;
   logger: Logger;
@@ -16,7 +22,7 @@ export interface DaemonLoopArgs {
    * Run one batch of `iterations`. `interrupt` aborts when the daemon is shut
    * down meanwhile. Whatever it resolves or throws, the daemon goes idle after.
    */
-  runBatch(iterations: number, interrupt: AbortSignal): Promise<void>;
+  runBatch(iterations: number, interrupt: AbortSignal): Promise<BatchOutcome>;
   defaultIterations: number;
   /** Run a first batch at once, of this many iterations, rather than wait to be asked. */
   start?: number;
@@ -43,6 +49,7 @@ export async function daemonLoop(args: DaemonLoopArgs): Promise<void> {
     status: 'idle',
     defaultIterations: args.defaultIterations,
     batch: null,
+    lastBatch: null,
     ...(args.uiUrl ? { uiUrl: args.uiUrl } : {}),
   };
   let lastWrite = 0;
@@ -82,10 +89,12 @@ export async function daemonLoop(args: DaemonLoopArgs): Promise<void> {
   stopping.addEventListener('abort', () => wake?.(), { once: true });
 
   save();
-  logger.info('daemon idle: run a batch from the web UI or with `ralph daemon run`', {
-    pid: process.pid,
-    defaultIterations: args.defaultIterations,
-  });
+  if (next === undefined) {
+    logger.info('daemon idle: run a batch from the web UI or with `ralph daemon run`', {
+      pid: process.pid,
+      defaultIterations: args.defaultIterations,
+    });
+  }
   try {
     while (!stopping.aborted) {
       if (next === undefined) {
@@ -99,15 +108,18 @@ export async function daemonLoop(args: DaemonLoopArgs): Promise<void> {
       const iterations = next;
       save({ status: 'running', batch: { iterations, startedAt: new Date().toISOString() } });
       logger.info('daemon running a batch', { iterations });
+      let outcome: BatchOutcome;
       try {
-        await args.runBatch(iterations, stopping);
+        outcome = await args.runBatch(iterations, stopping);
       } catch (cause) {
-        logger.error('batch failed', { error: cause instanceof Error ? cause.message : String(cause) });
+        outcome = { status: 'failed', message: cause instanceof Error ? cause.message : String(cause) };
+        logger.error('batch failed', { error: outcome.message });
       }
       next = undefined;
+      state.lastBatch = { ...outcome, endedAt: new Date().toISOString() };
       if (stopping.aborted) break;
       save({ status: 'idle', batch: null });
-      logger.info('daemon idle');
+      logger.info('daemon idle', { last: outcome.status });
     }
   } finally {
     clearInterval(timer);

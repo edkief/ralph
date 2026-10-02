@@ -59,11 +59,11 @@ function harness(options: { start?: number; fail?: boolean } = {}) {
     runBatch: async (iterations, interrupt) => {
       batches.push(iterations);
       if (options.fail) throw new Error('preflight failed');
-      await new Promise<void>((resolve) => {
-        finish = resolve;
+      return new Promise((resolve) => {
+        finish = () => resolve({ status: 'complete', message: 'All 3 tasks pass' });
         interrupt.addEventListener('abort', () => {
           interrupted = true;
-          resolve();
+          resolve({ status: 'interrupted', message: 'Interrupted' });
         });
       });
     },
@@ -127,6 +127,7 @@ describe('the daemon loop', () => {
     expect(readDaemonState(daemon.root)?.batch?.iterations).toBe(3);
     daemon.finish();
     await until(() => daemon.status() === 'idle');
+    expect(readDaemonState(daemon.root)?.lastBatch).toMatchObject({ status: 'complete', message: 'All 3 tasks pass' });
 
     writeDaemonRequest(daemon.root, { kind: 'run' }, 'ui');
     await until(() => daemon.batches.length === 2);
@@ -168,6 +169,7 @@ describe('the daemon loop', () => {
   it('stays up when a batch fails', async () => {
     const daemon = harness({ start: 2, fail: true });
     await until(() => daemon.batches.length === 1 && daemon.status() === 'idle');
+    expect(readDaemonState(daemon.root)?.lastBatch).toMatchObject({ status: 'failed', message: 'preflight failed' });
     writeDaemonRequest(daemon.root, { kind: 'run' }, 'cli');
     await until(() => daemon.batches.length === 2);
     daemon.shutdown.abort();
@@ -194,7 +196,10 @@ describe('the daemon loop', () => {
       signal: shutdown.signal,
       defaultIterations: 7,
       pollMs: 5,
-      runBatch: async (iterations) => void batches.push(iterations),
+      runBatch: async (iterations) => {
+        batches.push(iterations);
+        return { status: 'complete', message: '' };
+      },
     });
     await tick(50);
     expect(batches).toEqual([]);
