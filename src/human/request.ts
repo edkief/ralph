@@ -189,13 +189,13 @@ export function clearStopRequest(ralphRoot: string): void {
 }
 
 /** Replace `path` in one step, so a reader never sees half of it. */
-function writeAtomic(path: string, value: unknown): void {
+export function writeAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(`${path}.tmp`, `${JSON.stringify(value, null, 2)}\n`);
   renameSync(`${path}.tmp`, path);
 }
 
-function readAs<T>(path: string, schema: z.ZodType<T>): T | undefined {
+export function readAs<T>(path: string, schema: z.ZodType<T>): T | undefined {
   try {
     const parsed = schema.safeParse(JSON.parse(readFileSync(path, 'utf8')));
     return parsed.success ? parsed.data : undefined;
