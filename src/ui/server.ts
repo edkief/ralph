@@ -12,13 +12,15 @@ import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
 import type { OpencodeEvent } from '../opencode/events.js';
-import type { ActionsView, LiveEvents, LogLine, StatusView, TranscriptEntry } from './types.js';
+import type { ActionsView, LiveEvents, LiveTranscript, LogLine, StatusView, TranscriptEntry } from './types.js';
 
 /** The built React app, next to the compiled server: dist/ui → dist/web. */
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 
 const POLL_MS = 500;
 const HEARTBEAT_MS = 15_000;
+const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+const STALLED_MS = 60_000;
 /** An action's body is an id and a few lines of text. */
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -58,6 +60,16 @@ export interface UiServerOptions {
   webRoot?: string;
   /** How often live streams look for changes. */
   pollMs?: number;
+  /** A live stream with more than this waiting to be read by its client is falling behind. */
+  maxBufferedBytes?: number;
+  /** A live stream that has been falling behind for this long is dropped. */
+  stalledMs?: number;
+}
+
+/** One connection to `/api/live`. */
+interface LiveClient {
+  write(frame: string): void;
+  stop(): void;
 }
 
 export interface UiServer {
@@ -85,9 +97,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const project = new RalphProject(options.projectRoot, options.ralphDir);
   const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
   const pollMs = options.pollMs ?? POLL_MS;
+  const maxBufferedBytes = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES;
+  const stalledMs = options.stalledMs ?? STALLED_MS;
   const loopbackOnly = isLoopback(options.host);
   const basePath = (options.basePath ?? '').replace(/\/+$/, '');
-  const streams = new Set<() => void>();
   const token = options.token;
   const actions: ActionsView =
     loopbackOnly || token || options.openActions
@@ -226,10 +239,121 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   };
 
   /**
-   * Follow the latest run as server-sent events: the status whenever it
-   * changes, new log lines, and the transcript of the session in progress
-   * (an iteration, or the split turn that followed one).
+   * The latest run as server-sent events: the status whenever it changes, new
+   * log lines, and the transcript of the session in progress (an iteration, or
+   * the split turn that followed one).
+   *
+   * One feed serves every stream, so a second tab costs a socket rather than
+   * another copy of the transcript, and it only runs while someone listens.
    */
+  const clients = new Set<LiveClient>();
+  let timer: NodeJS.Timeout | undefined;
+  let heartbeat: NodeJS.Timeout | undefined;
+  let lastStatus: { view: StatusView; serialized: string } | null = null;
+  let logFeed: { runId: string; tailer: LineTailer } | null = null;
+  let transcriptFeed: {
+    runId: string;
+    iteration: number;
+    split: string | undefined;
+    tailer: LineTailer;
+    builder: TranscriptBuilder;
+    /** Still reading what was already in the file; nothing is sent until that is done. */
+    catchingUp: boolean;
+  } | null = null;
+
+  const broadcast = <K extends keyof LiveEvents>(event: K, data: LiveEvents[K]) => {
+    const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of [...clients]) client.write(frame);
+  };
+
+  const transcriptMessage = (feed: NonNullable<typeof transcriptFeed>, reset: boolean, entries: TranscriptEntry[]): LiveTranscript => ({
+    runId: feed.runId,
+    iteration: feed.iteration,
+    ...(feed.split ? { split: feed.split } : {}),
+    reset,
+    entries,
+  });
+
+  /** Bring the feed up to date and tell the clients. True when the event file has more to read. */
+  const tick = (): boolean => {
+    const view = status();
+    const serialized = JSON.stringify(view);
+    if (serialized !== lastStatus?.serialized) {
+      lastStatus = { view, serialized };
+      broadcast('status', view);
+    }
+
+    const runId = view.run?.runId;
+    if (!runId) return false;
+
+    let logReset = false;
+    if (logFeed?.runId !== runId) {
+      logFeed = { runId, tailer: new LineTailer(project.logPath(runId), { fromEnd: LOG_TAIL_BYTES }) };
+      logReset = true;
+    }
+    const logRead = logFeed.tailer.read();
+    const lines = parseJsonLines<LogLine>(logRead.lines).slice(-MAX_LOG_LINES);
+    if (logReset || logRead.reset || lines.length > 0) {
+      broadcast('log', { runId, reset: logReset || logRead.reset, lines });
+    }
+
+    const iteration = project.latestIteration(runId);
+    // The run's state names a split turn until the next iteration starts.
+    const splitTask = view.run?.split?.taskId;
+    const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
+    const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
+    if (iteration === 0 && !split) return false;
+    let transcriptReset = false;
+    if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
+      transcriptFeed = {
+        runId,
+        iteration,
+        split,
+        tailer: new LineTailer(split ? splitPath! : project.eventsPath(runId, iteration)),
+        builder: new TranscriptBuilder(),
+        catchingUp: false,
+      };
+      transcriptReset = true;
+    }
+    const feed = transcriptFeed;
+    // One stretch of the file a tick: a long iteration's backlog must not hold up the loop.
+    const eventRead = feed.tailer.read();
+    if (eventRead.reset) {
+      feed.builder = new TranscriptBuilder();
+      transcriptReset = true;
+    }
+    // Send each changed entry once, as it stands after this batch.
+    const changed = new Map<string, TranscriptEntry>();
+    for (const event of parseJsonLines<OpencodeEvent>(eventRead.lines)) {
+      for (const entry of feed.builder.push(event)) changed.set(entry.id, entry);
+    }
+    if (eventRead.more) {
+      feed.catchingUp = true;
+      return true;
+    }
+    if (transcriptReset || feed.catchingUp) {
+      feed.catchingUp = false;
+      broadcast('transcript', transcriptMessage(feed, true, feed.builder.all));
+    } else if (changed.size > 0) {
+      broadcast('transcript', transcriptMessage(feed, false, [...changed.values()]));
+    }
+    return false;
+  };
+
+  const poll = (): boolean => {
+    try {
+      return tick();
+    } catch (cause) {
+      options.logger.debug('web UI live update failed', { error: (cause as Error).message });
+      return false;
+    }
+  };
+
+  const schedule = (more: boolean) => {
+    // A backlog is read without waiting, but between other work.
+    if (clients.size > 0) timer = setTimeout(() => schedule(poll()), more ? 0 : pollMs);
+  };
+
   const live = (req: IncomingMessage, res: ServerResponse) => {
     res.writeHead(200, {
       ...SECURITY_HEADERS,
@@ -238,98 +362,46 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    const send = <K extends keyof LiveEvents>(event: K, data: LiveEvents[K]) => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    let fullSince: number | null = null;
+    const client: LiveClient = {
+      write: (frame) => {
+        // A client that stopped reading (a sleeping laptop behind a proxy)
+        // would have everything since buffered here. Drop it instead: the
+        // browser reconnects and starts from what is current.
+        // A large first message is not that; one that is not drained in time is.
+        if (res.writableLength <= maxBufferedBytes) fullSince = null;
+        else if (Date.now() - (fullSince ??= Date.now()) > stalledMs) return client.stop();
+        res.write(frame);
+      },
+      stop: () => {
+        if (!clients.delete(client)) return;
+        res.destroy();
+        if (clients.size > 0) return;
+        clearTimeout(timer);
+        clearInterval(heartbeat);
+        timer = heartbeat = undefined;
+        // Nobody is watching: the transcript need not be kept.
+        lastStatus = logFeed = transcriptFeed = null;
+      },
     };
+    req.on('close', client.stop);
 
-    let lastStatus = '';
-    let logFeed: { runId: string; tailer: LineTailer } | null = null;
-    let transcriptFeed: {
-      runId: string;
-      iteration: number;
-      split: string | undefined;
-      tailer: LineTailer;
-      builder: TranscriptBuilder;
-    } | null = null;
-
-    const tick = () => {
-      const current = status();
-      const serialized = JSON.stringify(current);
-      if (serialized !== lastStatus) {
-        lastStatus = serialized;
-        send('status', current);
-      }
-
-      const runId = current.run?.runId;
-      if (!runId) return;
-
-      let logReset = false;
-      if (logFeed?.runId !== runId) {
-        logFeed = { runId, tailer: new LineTailer(project.logPath(runId), { fromEnd: LOG_TAIL_BYTES }) };
-        logReset = true;
-      }
-      const logRead = logFeed.tailer.read();
-      const lines = parseJsonLines<LogLine>(logRead.lines).slice(-MAX_LOG_LINES);
-      if (logReset || logRead.reset || lines.length > 0) {
-        send('log', { runId, reset: logReset || logRead.reset, lines });
-      }
-
-      const iteration = project.latestIteration(runId);
-      // The run's state names a split turn until the next iteration starts.
-      const splitTask = current.run?.split?.taskId;
-      const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
-      const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
-      if (iteration === 0 && !split) return;
-      let transcriptReset = false;
-      if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
-        transcriptFeed = {
-          runId,
-          iteration,
-          split,
-          tailer: new LineTailer(split ? splitPath! : project.eventsPath(runId, iteration)),
-          builder: new TranscriptBuilder(),
-        };
-        transcriptReset = true;
-      }
-      const eventRead = transcriptFeed.tailer.read();
-      if (eventRead.reset) {
-        transcriptFeed.builder = new TranscriptBuilder();
-        transcriptReset = true;
-      }
-      // Send each changed entry once, as it stands after this batch.
-      const changed = new Map<string, TranscriptEntry>();
-      for (const event of parseJsonLines<OpencodeEvent>(eventRead.lines)) {
-        for (const entry of transcriptFeed.builder.push(event)) changed.set(entry.id, entry);
-      }
-      if (transcriptReset || changed.size > 0) {
-        send('transcript', {
-          runId,
-          iteration,
-          ...(split ? { split } : {}),
-          reset: transcriptReset,
-          entries: transcriptReset ? transcriptFeed.builder.all : [...changed.values()],
-        });
-      }
-    };
-
-    const poll = () => {
-      try {
-        tick();
-      } catch (cause) {
-        options.logger.debug('web UI live update failed', { error: (cause as Error).message });
-      }
-    };
-    poll();
-    const timer = setInterval(poll, pollMs);
-    const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
-    const stop = () => {
-      clearInterval(timer);
-      clearInterval(heartbeat);
-      streams.delete(stop);
-      res.end();
-    };
-    streams.add(stop);
-    req.on('close', stop);
+    // Bring the feed up to date for everyone, then start this client from where it stands.
+    clearTimeout(timer);
+    const more = poll();
+    const send = <K extends keyof LiveEvents>(event: K, data: LiveEvents[K]) =>
+      client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    clients.add(client);
+    if (lastStatus) send('status', lastStatus.view);
+    if (logFeed) send('log', { runId: logFeed.runId, reset: true, lines: project.log(logFeed.runId) });
+    if (transcriptFeed && !transcriptFeed.catchingUp) {
+      send('transcript', transcriptMessage(transcriptFeed, true, transcriptFeed.builder.all));
+    }
+    schedule(more);
+    heartbeat ??= setInterval(() => {
+      for (const each of [...clients]) each.write(': ping\n\n');
+    }, HEARTBEAT_MS);
   };
 
   await new Promise<void>((resolveListen, reject) => {
@@ -350,7 +422,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     close: () =>
       new Promise<void>((resolveClose) => {
         // Live streams never end on their own.
-        for (const stop of [...streams]) stop();
+        for (const client of [...clients]) client.stop();
         server.close(() => resolveClose());
         server.closeAllConnections();
       }),

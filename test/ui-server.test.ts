@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
+import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -406,6 +407,98 @@ describe('web UI server', () => {
         reset: true,
         entries: [{ text: 'next one' }],
       });
+    } finally {
+      live.close();
+    }
+  });
+
+  it('starts a second stream from what the first has seen, then sends both the same', async () => {
+    const root = project();
+    const events = resolve(root, '.ralph', 'history', LIVE_RUN, 'iteration-002.events.jsonl');
+    await start(root);
+    const first = subscribe('/api/live');
+    let second: ReturnType<typeof subscribe> | undefined;
+    try {
+      await first.until(() => first.of('transcript').length >= 1);
+      appendFileSync(events, line(say('more work')));
+      await first.until(() => first.of('transcript').length >= 2);
+
+      second = subscribe('/api/live');
+      await second.until(() => second!.of('transcript').length >= 1 && second!.of('log').length >= 1 && second!.of('status').length >= 1);
+      expect(second.of('transcript')[0]).toMatchObject({
+        reset: true,
+        entries: [{ text: 'working on TASK-2' }, { text: 'more work' }],
+      });
+      expect(second.of('log')[0]).toMatchObject({ reset: true, lines: [{ message: 'hello' }] });
+
+      appendFileSync(events, line(say('and more')));
+      await second.until(() => second!.of('transcript').length >= 2);
+      await first.until(() => first.of('transcript').length >= 3);
+      expect(second.of('transcript')[1]).toEqual(first.of('transcript')[2]);
+      expect(second.of('transcript')[1]).toMatchObject({ reset: false, entries: [{ text: 'and more' }] });
+    } finally {
+      first.close();
+      second?.close();
+    }
+  });
+
+  it('reads a backlog of events a stretch at a time, then sends the transcript once', async () => {
+    const root = project();
+    const events = resolve(root, '.ralph', 'history', LIVE_RUN, 'iteration-002.events.jsonl');
+    // More than the tailer reads in one go.
+    const filler = 'x'.repeat(1000);
+    let backlog = '';
+    for (let index = 0; index < 9000; index += 1) backlog += line(say(`${index} ${filler}`));
+    writeFileSync(events, backlog);
+    await start(root);
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('transcript').length >= 1, 15_000);
+      const [message] = live.of('transcript');
+      expect(message).toMatchObject({ reset: true });
+      expect(message!.entries).toHaveLength(2001);
+      expect(message!.entries[0]).toMatchObject({ id: 'omitted', text: expect.stringContaining('7000 earlier entries') });
+      expect(message!.entries.at(-1)).toMatchObject({ text: expect.stringMatching(/^8999 /) });
+    } finally {
+      live.close();
+    }
+  });
+
+  it('drops a stream whose client stopped reading', async () => {
+    const root = project();
+    const log = resolve(root, '.ralph', 'history', LIVE_RUN, 'log.jsonl');
+    server = await startUiServer({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      host: '127.0.0.1',
+      port: 0,
+      logger,
+      pollMs: 20,
+      maxBufferedBytes: 64 * 1024,
+      stalledMs: 200,
+      webRoot: resolve(root, 'no-web'),
+    });
+    const url = new URL(server.url);
+    const socket = connect(Number(url.port), url.hostname);
+    const closed = new Promise<void>((resolveClosed) => socket.once('close', () => resolveClosed()));
+    socket.on('error', () => {});
+    socket.write(`GET /api/live HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
+    socket.pause();
+
+    // Far more than the kernel's socket buffers hold, so it backs up in the server.
+    const big = line({ time: 't', level: 'info', message: 'y'.repeat(100_000) });
+    for (let batch = 0; batch < 30; batch += 1) {
+      appendFileSync(log, big.repeat(10));
+      await new Promise((resolveWait) => setTimeout(resolveWait, 40));
+    }
+    // The server hung up; reading what was already sent reaches the end.
+    socket.resume();
+    await closed;
+
+    // Others are still served.
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('status').length >= 1 && live.of('transcript').length >= 1);
     } finally {
       live.close();
     }
