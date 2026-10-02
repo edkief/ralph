@@ -470,7 +470,14 @@ spec, its handoff and the commits that mention it, and either writes a spec per 
 `TASK-8.1.json`, `TASK-8.2.json`, … covering only the work that is left, plus a
 `proposal.json` listing them in order; or writes a `proposal.json` with `"splittable": false`
 and the reason, when a split would not help. Ralph checks the proposal like a plan and sends it
-back to the agent up to twice to fix problems. The web UI shows a split turn the loop runs
+back to the agent up to twice to fix problems.
+
+After a stall the agent has a third answer: `"splittable": false` with `"retry": true`, when the
+attempts made real progress, what is left fits in one more iteration and nothing needs a person.
+Ralph then attempts the task once more as it is, from its handoff, without stopping or asking
+anyone, whether `onRepeatedTimeout` is `propose` or `split`. A task gets this once per run and
+it buys one attempt: if that one is cut short too, the task has stalled again, the next split
+turn is not offered the answer, and one given anyway counts as advice against splitting. The web UI shows a split turn the loop runs
 like an iteration: followed live in the Transcript view, and listed on the Overview with its
 outcome. A turn started with `ralph split` runs outside any run and is not recorded.
 
@@ -486,12 +493,14 @@ A split is not tried, and the run stops, when:
   which smaller tasks would hit too;
 - the task was already split `stall.maxSplitDepth` times (default 1), counting its ancestors;
   0 turns splitting off;
-- the agent advises against it, giving its reason as the run's message.
+- the agent advises against it, giving its reason as the run's message; unless it advises
+  attempting the task again as it is, which Ralph does once.
 
 `ralph split TASK-8` does the same on demand: it shows the proposal in `.ralph/split/TASK-8/`,
 having the agent write one first if there is none, and `--apply` applies it. It exits 0 once
 proposed or applied, 4 for an unknown task or a proposal with problems, 5 when the agent could
-not propose one, and 6 when it advises against splitting. Delete the folder to have the agent
+not propose one, and 6 when it advises against splitting or, in a proposal written by the
+loop, attempting the task again as it is. Delete the folder to have the agent
 propose again. `ralph doctor` warns about a split proposed but not applied, since the loop
 would run the task as it is.
 

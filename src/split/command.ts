@@ -93,7 +93,7 @@ export async function runSplit(args: {
   const proposal = read.proposal;
   if (!proposal.splittable) {
     reporter.summary(
-      `Splitting ${taskId} would not help`,
+      proposal.retry ? `${taskId} is better attempted again as it is` : `Splitting ${taskId} would not help`,
       [proposal.reason, '', `The advice is in ${dir}/proposal.json. Delete ${dir}/ to have the agent try again.`],
       'warn',
     );

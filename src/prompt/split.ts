@@ -25,6 +25,8 @@ export function buildSplitPrompt(args: {
   proposalDir: string;
   /** What the person who turned down an earlier proposal wants from this one. */
   note?: string;
+  /** Offer the answer "attempt it again as it is". */
+  allowRetry?: boolean;
 }): string {
   const minutes = Math.max(1, Math.round(args.iterationMs / 60_000));
   const attempts = args.cutShort.length;
@@ -106,6 +108,16 @@ export function buildSplitPrompt(args: {
     ``,
     `   If splitting would not help, write \`{ "task": "${args.taskId}", "splittable": false, "reason": "…" }\``,
     `   instead, with the reason a person needs to unblock the task, and no specs.`,
+    ...(args.allowRetry
+      ? [
+          ``,
+          `   If neither is called for, because the attempts made real progress, what is left clearly fits in`,
+          `   one more iteration and nothing needs a person, add \`"retry": true\` to that:`,
+          `   \`{ "task": "${args.taskId}", "splittable": false, "retry": true, "reason": "…" }\`, the reason saying what`,
+          `   is left. Ralph then attempts ${args.taskId} once more as it is, from its handoff. This is granted once:`,
+          `   do not use it to put off a split the task needs.`,
+        ]
+      : []),
     ``,
     `Write only inside \`${args.proposalDir}/\`. Do not edit tasks.json, the spec or the handoff: Ralph applies`,
     `the split. Then stop.`,

@@ -57,6 +57,15 @@ const goodSpecs = { 'TASK-2.1': spec('TASK-2.1'), 'TASK-2.2': spec('TASK-2.2') }
 const tasksOf = (root: string) => TaskStore.forProject(root, '.ralph').readTasks();
 
 describe('readProposal', () => {
+  it('accepts advice to retry the task as it is', () => {
+    const root = project();
+    propose(root, { task: 'TASK-2', splittable: false, retry: true, reason: 'only the docs are left' });
+    expect(readProposal(root, '.ralph', 'TASK-2', tasksOf(root))).toMatchObject({
+      status: 'ok',
+      proposal: { splittable: false, retry: true, reason: 'only the docs are left' },
+    });
+  });
+
   it('reports a missing proposal', () => {
     const root = project();
     expect(readProposal(root, '.ralph', 'TASK-2', tasksOf(root))).toEqual({ status: 'missing' });
@@ -102,6 +111,10 @@ describe('readProposal', () => {
     propose(root, { task: 'TASK-2', splittable: false, reason: ' ' });
     const declined = readProposal(root, '.ralph', 'TASK-2', tasksOf(root));
     expect(declined.status === 'invalid' && declined.problems.join()).toContain('needs a reason');
+
+    propose(root, { task: 'TASK-2', splittable: false, retry: true, reason: '' });
+    const retry = readProposal(root, '.ralph', 'TASK-2', tasksOf(root));
+    expect(retry.status === 'invalid' && retry.problems.join()).toContain('needs a reason');
   });
 
   it('rejects ids that already exist and specs for another task', () => {

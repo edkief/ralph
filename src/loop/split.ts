@@ -38,6 +38,8 @@ const ProposalSchema = z.discriminatedUnion('splittable', [
   z.looseObject({
     task: z.string(),
     splittable: z.literal(false),
+    /** Attempt the task again as it is: little is left of it, and nothing a person must fix. */
+    retry: z.boolean().optional(),
     reason: z.string(),
     appliedAt: z.string().optional(),
   }),
@@ -49,6 +51,8 @@ export type Split = Extract<SplitProposal, { splittable: true }>;
 export type SplitOutcome =
   | { status: 'proposed'; proposal: Split }
   | { status: 'declined'; reason: string }
+  /** The agent would have the task attempted again as it is. */
+  | { status: 'retry'; reason: string }
   | { status: 'failed'; reason: string };
 
 export class SplitError extends Error {}
@@ -132,6 +136,8 @@ export async function proposeSplit(args: {
   estimate?: { minutes: number; thresholdMinutes: number };
   /** Carry on in this session, the one that assessed the task, instead of opening a new one. */
   sessionId?: string;
+  /** Offer the agent the answer "attempt it again as it is"; given anyway, that answer counts as declining. */
+  allowRetry?: boolean;
   signal: AbortSignal;
   hooks?: IterationHooks;
   templatesDir?: string;
@@ -168,6 +174,7 @@ export async function proposeSplit(args: {
     iterationMs: config.timeouts.iterationMs,
     proposalDir: dir,
     ...(args.note ? { note: args.note } : {}),
+    ...(args.allowRetry ? { allowRetry: true } : {}),
   });
   let sessionId = args.sessionId;
 
@@ -192,9 +199,9 @@ export async function proposeSplit(args: {
 
     const read = readProposal(projectRoot, ralphDir, taskId, tasks, args.templatesDir);
     if (read.status === 'ok') {
-      return read.proposal.splittable
-        ? { status: 'proposed', proposal: read.proposal }
-        : { status: 'declined', reason: read.proposal.reason.trim() };
+      if (read.proposal.splittable) return { status: 'proposed', proposal: read.proposal };
+      const reason = read.proposal.reason.trim();
+      return read.proposal.retry && args.allowRetry ? { status: 'retry', reason } : { status: 'declined', reason };
     }
     const problems = read.status === 'missing' ? [`${dir}/proposal.json was not written`] : read.problems;
     if (attempt >= MAX_FIX_ATTEMPTS) {

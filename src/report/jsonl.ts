@@ -33,9 +33,10 @@ export interface SplitRecord {
   estimateMinutes?: number;
   /**
    * `applied` and `proposed` name the new tasks; `declined` and `failed` give
-   * the reason. `fits` is an assessment that found the task small enough.
+   * the reason, as does `retry`, after which the task was attempted again as
+   * it is. `fits` is an assessment that found the task small enough.
    */
-  status: 'proposed' | 'applied' | 'declined' | 'failed' | 'fits';
+  status: 'proposed' | 'applied' | 'declined' | 'retry' | 'failed' | 'fits';
   children?: string[];
   reason?: string;
   committed?: boolean;

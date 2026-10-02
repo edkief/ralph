@@ -653,6 +653,46 @@ describe('runLoop', () => {
       expect(splits(result.historyDir)).toEqual([expect.objectContaining({ status: 'declined' })]);
     });
 
+    it('attempts the task again, without a person, when the agent says it is nearly done', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({}) }), {
+        onPrompt: (count) => {
+          if (count === 2) writeProposal(root, { splittable: false, retry: true, reason: 'ten minutes of work are left' });
+          if (count === 3) markPassing(root, 'TASK-1');
+        },
+        script: (count) => (count === 1 ? endless : say('ok')),
+      });
+
+      expect(result.status).toBe('complete');
+      expect(String(server?.prompts[1]?.['text'])).toContain('"retry": true');
+      expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1**');
+      expect(splits(result.historyDir)).toEqual([
+        expect.objectContaining({ status: 'retry', reason: 'ten minutes of work are left' }),
+      ]);
+      expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
+    });
+
+    it('takes that advice once: a task that stalls again is not offered it, nor given it', async () => {
+      const root = planned();
+
+      const result = await loop(root, config(root, { maxIterations: 5, timeouts, stall: stall({ onRepeatedTimeout: 'split' }) }), {
+        onPrompt: (count) => {
+          if (count === 2 || count === 4) writeProposal(root, { splittable: false, retry: true, reason: 'ten minutes of work are left' });
+        },
+        script: (count) => (count % 2 === 1 ? endless : say('ok')),
+      });
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(2);
+      expect(result.message).toBe(
+        'TASK-1 ran out of time 1 time; splitting it would not help: ten minutes of work are left (handoff: .ralph/handoff/TASK-1.md)',
+      );
+      expect(String(server?.prompts[3]?.['text'])).toContain('## Split TASK-1');
+      expect(String(server?.prompts[3]?.['text'])).not.toContain('"retry": true');
+      expect(splits(result.historyDir).map((record: { status: string }) => record.status)).toEqual(['retry', 'declined']);
+    });
+
     it('sends a broken proposal back, then gives up on it', async () => {
       const root = planned();
 
@@ -832,7 +872,7 @@ describe('runLoop', () => {
 
         const result = await loop(root, config(root, { maxIterations: 5, assess: { mode: 'split' } }), {
           onPrompt: (count) => {
-            if (count === 2) writeProposal(root, { splittable: false, reason: 'one change that cannot be cut' });
+            if (count === 2) writeProposal(root, { splittable: false, retry: true, reason: 'one change that cannot be cut' });
             if (count === 3) markPassing(root, 'TASK-1');
           },
           script: (count) => (count === 1 ? estimate(50) : say('ok')),
