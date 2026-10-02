@@ -33,10 +33,6 @@ const PromptSchema = z.looseObject({
 const MAX_OUTPUT = 20_000;
 /** What the agent wrote or was sent, likewise. */
 const MAX_TEXT = 100_000;
-/** Entries kept, the latest. A long iteration makes many thousands. */
-export const MAX_ENTRIES = 2000;
-/** The entry that says how many earlier ones were dropped; always the first. */
-export const OMITTED_ID = 'omitted';
 
 /**
  * Folds an iteration's event stream into transcript entries: what the agent
@@ -47,9 +43,9 @@ export const OMITTED_ID = 'omitted';
  * send just those. An entry keeps its id as it changes, e.g. a text part
  * growing delta by delta.
  *
- * What it holds is bounded, whatever the size of the event file: long texts
- * are clipped and only the latest entries are kept, behind a notice that
- * counts the ones dropped. A live view holds a builder for a whole iteration.
+ * Every entry of the session is kept, so a whole round can be read back; long
+ * texts and tool input and output are clipped, so one entry stays small. The
+ * live feed holds one builder for the session in progress, whoever watches.
  */
 export class TranscriptBuilder {
   private readonly entries = new Map<string, TranscriptEntry>();
@@ -58,21 +54,9 @@ export class TranscriptBuilder {
   /** Open text or reasoning parts that arrived without ids, by session. */
   private readonly anonymous = new Map<string, string>();
 
-  private omitted = 0;
 
   get all(): TranscriptEntry[] {
-    const notice = this.omittedNotice();
-    return notice ? [notice, ...this.entries.values()] : [...this.entries.values()];
-  }
-
-  private omittedNotice(): TranscriptEntry | undefined {
-    if (this.omitted === 0) return undefined;
-    return {
-      id: OMITTED_ID,
-      kind: 'notice',
-      level: 'info',
-      text: `${this.omitted} earlier ${this.omitted === 1 ? 'entry is' : 'entries are'} not shown; the event file has them all`,
-    };
+    return [...this.entries.values()];
   }
 
   push(event: OpencodeEvent): TranscriptEntry[] {
@@ -221,14 +205,7 @@ export class TranscriptBuilder {
 
   private add(entry: TranscriptEntry): TranscriptEntry[] {
     this.entries.set(entry.id, entry);
-    if (this.entries.size <= MAX_ENTRIES) return [entry];
-    // A Map keeps the order entries were first added in.
-    for (const id of this.entries.keys()) {
-      if (this.entries.size <= MAX_ENTRIES) break;
-      this.entries.delete(id);
-      this.omitted += 1;
-    }
-    return [entry, this.omittedNotice()!];
+    return [entry];
   }
 
   private nextId(prefix: string): string {

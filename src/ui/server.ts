@@ -21,6 +21,8 @@ const POLL_MS = 500;
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const STALLED_MS = 60_000;
+/** Times the buffer limit beyond which a stream is dropped without waiting. */
+const HARD_LIMIT_FACTOR = 4;
 /** An action's body is an id and a few lines of text. */
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -68,7 +70,8 @@ export interface UiServerOptions {
 
 /** One connection to `/api/live`. */
 interface LiveClient {
-  write(frame: string): void;
+  /** `whole` marks a message that replaces what the client has, such as a full transcript: large by nature. */
+  write(frame: string, whole?: boolean): void;
   stop(): void;
 }
 
@@ -257,13 +260,17 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     split: string | undefined;
     tailer: LineTailer;
     builder: TranscriptBuilder;
-    /** Still reading what was already in the file; nothing is sent until that is done. */
-    catchingUp: boolean;
+    /**
+     * The transcript has been sent whole once. Until then the file's backlog is
+     * still being read and nothing is sent; after it, only what changed is.
+     */
+    announced: boolean;
   } | null = null;
 
   const broadcast = <K extends keyof LiveEvents>(event: K, data: LiveEvents[K]) => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of [...clients]) client.write(frame);
+    const whole = 'reset' in data && data.reset;
+    for (const client of [...clients]) client.write(frame, whole);
   };
 
   const transcriptMessage = (feed: NonNullable<typeof transcriptFeed>, reset: boolean, entries: TranscriptEntry[]): LiveTranscript => ({
@@ -303,7 +310,6 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
     const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
     if (iteration === 0 && !split) return false;
-    let transcriptReset = false;
     if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
       transcriptFeed = {
         runId,
@@ -311,33 +317,28 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         split,
         tailer: new LineTailer(split ? splitPath! : project.eventsPath(runId, iteration)),
         builder: new TranscriptBuilder(),
-        catchingUp: false,
+        announced: false,
       };
-      transcriptReset = true;
     }
     const feed = transcriptFeed;
     // One stretch of the file a tick: a long iteration's backlog must not hold up the loop.
     const eventRead = feed.tailer.read();
     if (eventRead.reset) {
       feed.builder = new TranscriptBuilder();
-      transcriptReset = true;
+      feed.announced = false;
     }
     // Send each changed entry once, as it stands after this batch.
     const changed = new Map<string, TranscriptEntry>();
     for (const event of parseJsonLines<OpencodeEvent>(eventRead.lines)) {
       for (const entry of feed.builder.push(event)) changed.set(entry.id, entry);
     }
-    if (eventRead.more) {
-      feed.catchingUp = true;
-      return true;
-    }
-    if (transcriptReset || feed.catchingUp) {
-      feed.catchingUp = false;
+    if (feed.announced) {
+      if (changed.size > 0) broadcast('transcript', transcriptMessage(feed, false, [...changed.values()]));
+    } else if (!eventRead.more) {
+      feed.announced = true;
       broadcast('transcript', transcriptMessage(feed, true, feed.builder.all));
-    } else if (changed.size > 0) {
-      broadcast('transcript', transcriptMessage(feed, false, [...changed.values()]));
     }
-    return false;
+    return eventRead.more;
   };
 
   const poll = (): boolean => {
@@ -364,14 +365,27 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     });
 
     let fullSince: number | null = null;
+    let drained = 0;
+    // What may wait for this client before it is dropped without waiting. A
+    // whole transcript is allowed on top: it is as large as the round is long.
+    const baseLimit = maxBufferedBytes * HARD_LIMIT_FACTOR;
+    let limit = baseLimit;
     const client: LiveClient = {
-      write: (frame) => {
-        // A client that stopped reading (a sleeping laptop behind a proxy)
+      write: (frame, whole = false) => {
+        // A client that stopped reading (a phone asleep, a tab behind a proxy)
         // would have everything since buffered here. Drop it instead: the
-        // browser reconnects and starts from what is current.
-        // A large first message is not that; one that is not drained in time is.
-        if (res.writableLength <= maxBufferedBytes) fullSince = null;
+        // browser reconnects and starts from what is current. One that is
+        // slow but still reading is left to it.
+        // What the socket has handed on, not what is still queued in it.
+        const sent = (res.socket?.bytesWritten ?? 0) - (res.socket?.writableLength ?? 0);
+        if (res.writableLength <= maxBufferedBytes) {
+          fullSince = null;
+          limit = baseLimit;
+        } else if (sent > drained) fullSince = Date.now();
         else if (Date.now() - (fullSince ??= Date.now()) > stalledMs) return client.stop();
+        drained = sent;
+        if (res.writableLength > limit) return client.stop();
+        if (whole) limit = Buffer.byteLength(frame) + baseLimit;
         res.write(frame);
       },
       stop: () => {
@@ -391,11 +405,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     clearTimeout(timer);
     const more = poll();
     const send = <K extends keyof LiveEvents>(event: K, data: LiveEvents[K]) =>
-      client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`, true);
     clients.add(client);
     if (lastStatus) send('status', lastStatus.view);
     if (logFeed) send('log', { runId: logFeed.runId, reset: true, lines: project.log(logFeed.runId) });
-    if (transcriptFeed && !transcriptFeed.catchingUp) {
+    if (transcriptFeed?.announced) {
       send('transcript', transcriptMessage(transcriptFeed, true, transcriptFeed.builder.all));
     }
     schedule(more);

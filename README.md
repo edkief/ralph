@@ -118,8 +118,8 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
   is an iteration, or the turn in which the agent assessed a task or proposed splitting it.
-  A long session shows its latest 2000 entries, with long tool input, output and text cut;
-  the event file in `.ralph/history/` keeps everything
+  Long tool input, output and text are cut; the event file in `.ralph/history/` keeps them
+  whole
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
   and `ralph.config.json`, with Markdown rendered and images shown as pictures
