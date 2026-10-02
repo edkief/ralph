@@ -27,6 +27,9 @@ const STATUS_ICON: Record<IterationStatus, string> = {
   interrupted: '■',
 };
 
+/** Pieces of output kept while held; more than a menu left open should gather. */
+const MAX_HELD = 2000;
+
 /**
  * Human-facing progress output on stdout.
  *
@@ -39,6 +42,7 @@ export class ConsoleReporter {
   private readonly tty: boolean;
   private statusActive = false;
   private day: string;
+  private held: string[] | null = null;
 
   constructor(
     private readonly stream: NodeJS.WriteStream = process.stdout,
@@ -49,8 +53,28 @@ export class ConsoleReporter {
     this.day = formatDay(this.now());
   }
 
+  /**
+   * Keep output off the terminal, e.g. while a menu is on it. Durable lines
+   * are kept for `release`; the transient status line is just dropped.
+   */
+  hold(): void {
+    this.clearStatus();
+    this.held ??= [];
+  }
+
+  release(): void {
+    const held = this.held;
+    this.held = null;
+    for (const text of held ?? []) this.stream.write(text);
+  }
+
+  private write(text: string): void {
+    if (!this.held) this.stream.write(text);
+    else if (this.held.length < MAX_HELD) this.held.push(text);
+  }
+
   banner(lines: string[]): void {
-    this.stream.write(`\n${lines.map((line) => this.paint(line, C.cyan)).join('\n')}\n\n`);
+    this.write(`\n${lines.map((line) => this.paint(line, C.cyan)).join('\n')}\n\n`);
   }
 
   iterationStart(iteration: number, max: number, taskId: string | null): void {
@@ -58,10 +82,10 @@ export class ConsoleReporter {
     const day = formatDay(now);
     if (day !== this.day) {
       this.day = day;
-      this.stream.write(`\n${this.paint(`── ${day} ──`, C.dim)}\n`);
+      this.write(`\n${this.paint(`── ${day} ──`, C.dim)}\n`);
     }
     const task = taskId ? ` ${this.paint(`→ ${taskId}`, C.yellow)}` : '';
-    this.stream.write(
+    this.write(
       `\n${this.paint(formatClock(now), C.dim)} ${this.paint(`Iteration ${iteration}/${max}`, C.bold)}${task}\n`,
     );
   }
@@ -70,16 +94,17 @@ export class ConsoleReporter {
   status(text: string): void {
     const line = `${formatClock(this.now())}   ${truncate(text, 100)}`;
     if (!this.tty) {
-      this.stream.write(`${line}\n`);
+      this.write(`${line}\n`);
       return;
     }
-    this.stream.write(`\r\x1b[2K${this.paint(line, C.dim)}`);
+    if (this.held) return;
+    this.write(`\r\x1b[2K${this.paint(line, C.dim)}`);
     this.statusActive = true;
   }
 
   clearStatus(): void {
     if (this.tty && this.statusActive) {
-      this.stream.write('\r\x1b[2K');
+      this.write('\r\x1b[2K');
       this.statusActive = false;
     }
   }
@@ -98,16 +123,16 @@ export class ConsoleReporter {
     if (result.compactions > 0) parts.push(`compacted ×${result.compactions}`);
 
     const stamp = this.stamp();
-    this.stream.write(`${stamp}   ${icon} ${status} ${this.paint(`· ${parts.join(' · ')}`, C.dim)}\n`);
-    if (result.error) this.stream.write(`${stamp}   ${this.paint(result.error, C.yellow)}\n`);
+    this.write(`${stamp}   ${icon} ${status} ${this.paint(`· ${parts.join(' · ')}`, C.dim)}\n`);
+    if (result.error) this.write(`${stamp}   ${this.paint(result.error, C.yellow)}\n`);
   }
 
   summary(title: string, lines: string[], tone: 'good' | 'warn' | 'bad' = 'good'): void {
     this.clearStatus();
     const color = tone === 'good' ? C.green : tone === 'warn' ? C.yellow : C.red;
-    this.stream.write(`\n${this.stamp()} ${this.paint(title, color)}\n`);
-    for (const line of lines) this.stream.write(`  ${line}\n`);
-    this.stream.write('\n');
+    this.write(`\n${this.stamp()} ${this.paint(title, color)}\n`);
+    for (const line of lines) this.write(`  ${line}\n`);
+    this.write('\n');
   }
 
   private stamp(): string {

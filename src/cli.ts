@@ -9,8 +9,10 @@ import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
 import { runSplit } from './split/command.js';
 import { runRespond } from './human/command.js';
+import { pendingState, respond } from './human/respond.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
 import { Logger } from './report/logger.js';
+import { startMenu } from './report/menu.js';
 import { formatTimestamp } from './report/time.js';
 import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
@@ -66,8 +68,9 @@ Exit codes:
   4 config/preflight · 5 provider · 6 stalled · 130 interrupted or stopped
 
 Stopping:
-  Ctrl-C once to stop after the current iteration, twice to stop now.
-  Unattended, send SIGINT for the first and SIGTERM for the second.
+  At a terminal, Enter opens a menu to stop after the current iteration or
+  now, and to answer what Ralph asks. Ctrl-C stops now.
+  Unattended, send SIGINT to stop after the current iteration, SIGTERM to stop now.
 `;
 
 /** From package.json, one level up from both src/cli.ts and dist/cli.js. */
@@ -225,6 +228,9 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   process.on('SIGINT', onInterrupt);
   process.on('SIGTERM', onTerminate);
   process.on('SIGHUP', onTerminate);
+  // With a terminal on both ends, the run is steered from a menu there.
+  const interactive = command !== 'doctor' && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  let closeMenu: (() => void) | undefined;
 
   // Up before the opencode server, so preflight problems are visible in it too.
   const ui = config.ui.enabled && command !== 'doctor' ? await startUiBesideLoop(config, logger) : undefined;
@@ -242,6 +248,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
       'ralph · opencode loop',
       `  started ${formatTimestamp(new Date())}`,
       ...checks.map((check) => `  ${check.ok ? '✓' : check.fatal ? '✗' : '!'} ${check.name}: ${check.detail}`),
+      ...(interactive ? ['  Enter for a menu: stop, or answer what Ralph asks · Ctrl-C to stop now'] : []),
     ]);
 
     const blocking = checks.filter((check) => !check.ok && check.fatal);
@@ -256,6 +263,39 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     if (command === 'doctor') {
       reporter.summary('Environment looks runnable', [], 'good');
       return 0;
+    }
+
+    if (interactive) {
+      closeMenu = startMenu({
+        input: process.stdin,
+        output: process.stdout,
+        hold: () => {
+          reporter.hold();
+          logger.hold();
+        },
+        release: () => {
+          reporter.release();
+          logger.release();
+        },
+        stopAfterIteration: () => {
+          if (stop.signal.aborted) return;
+          logger.warn('stopping after the current iteration');
+          stop.abort();
+        },
+        stopNow: () => {
+          // Asked twice: the stop itself is stuck. The exit hook takes the server along.
+          if (controller.signal.aborted) {
+            closeMenu?.();
+            process.exit(ExitCode.Interrupted);
+          }
+          onTerminate();
+        },
+        pending: () => pendingState(config.projectRoot, config.ralphDir),
+        answer: async (input) =>
+          (await respond({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, input, by: 'cli' })).message,
+      });
+      // Whatever ends the process, the terminal must not be left in raw mode.
+      process.once('exit', closeMenu);
     }
 
     const startedAt = Date.now();
@@ -284,6 +324,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     process.off('SIGINT', onInterrupt);
     process.off('SIGTERM', onTerminate);
     process.off('SIGHUP', onTerminate);
+    closeMenu?.();
     logger.beforeWrite(undefined);
     await server.stop();
     await ui?.close();

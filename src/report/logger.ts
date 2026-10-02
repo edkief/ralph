@@ -28,6 +28,9 @@ export interface LoggerOptions {
   now?: () => Date;
 }
 
+/** Lines kept while held. */
+const MAX_HELD = 2000;
+
 /**
  * Minimal leveled logger. Text for humans at a terminal, stamped with the
  * local time; JSON lines with UTC ISO times for k8s log collectors.
@@ -40,6 +43,7 @@ export class Logger {
   private readonly color: boolean;
   private readonly now: () => Date;
   private hook: (() => void) | undefined;
+  private held: string[] | null = null;
   private readonly sinks = new Set<(entry: LogEntry) => void>();
 
   constructor(options: LoggerOptions = {}) {
@@ -67,6 +71,25 @@ export class Logger {
     return () => this.sinks.delete(sink);
   }
 
+  /**
+   * Keep lines off the stream until `release`, e.g. while a menu is on the
+   * terminal. Sinks still get every line as it is logged.
+   */
+  hold(): void {
+    this.held ??= [];
+  }
+
+  release(): void {
+    const held = this.held;
+    this.held = null;
+    for (const line of held ?? []) this.stream.write(line);
+  }
+
+  private emit(line: string): void {
+    if (!this.held) this.stream.write(line);
+    else if (this.held.length < MAX_HELD) this.held.push(line);
+  }
+
   debug(message: string, fields?: Record<string, unknown>): void {
     this.write('debug', message, fields);
   }
@@ -85,21 +108,21 @@ export class Logger {
 
   private write(level: LogLevel, message: string, fields?: Record<string, unknown>): void {
     if (LEVELS[level] < this.level) return;
-    this.hook?.();
+    if (!this.held) this.hook?.();
     const now = this.now();
     for (const sink of this.sinks) {
       sink({ time: now.toISOString(), level, message, ...(fields && Object.keys(fields).length > 0 ? { fields } : {}) });
     }
 
     if (this.format === 'json') {
-      this.stream.write(`${JSON.stringify({ time: now.toISOString(), level, message, ...fields })}\n`);
+      this.emit(`${JSON.stringify({ time: now.toISOString(), level, message, ...fields })}\n`);
       return;
     }
 
     const clock = this.color ? `${COLORS.debug}${formatClock(now)}\x1b[0m` : formatClock(now);
     const prefix = this.color ? `${COLORS[level]}${level}\x1b[0m` : level;
     const extra = fields && Object.keys(fields).length > 0 ? ` ${formatFields(fields)}` : '';
-    this.stream.write(`${clock} ${prefix} ${message}${extra}\n`);
+    this.emit(`${clock} ${prefix} ${message}${extra}\n`);
   }
 }
 
