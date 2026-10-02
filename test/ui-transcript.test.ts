@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TranscriptBuilder } from '../src/ui/transcript.js';
+import { MAX_ENTRIES, OMITTED_ID, TranscriptBuilder } from '../src/ui/transcript.js';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
@@ -83,5 +83,52 @@ describe('TranscriptBuilder', () => {
     expect(entries[0]).toMatchObject({ kind: 'tool', status: 'error', exit: 2, subagent: true });
     expect(entries[1]).toMatchObject({ kind: 'notice', level: 'error', text: 'prompt is too long' });
     expect(entries[1]).not.toHaveProperty('subagent');
+  });
+
+  it('clips long text, reasoning, prompts and tool input', () => {
+    const long = 'x'.repeat(150_000);
+    const entries = build([
+      { type: 'session.inbox.enqueued', data: { sessionID: 's', item: { payload: { text: long } } } },
+      { type: 'session.text.ended', data: { sessionID: 's', text: long } },
+      { type: 'session.reasoning.ended', data: { sessionID: 's', text: long } },
+      { type: 'session.tool.called', data: { sessionID: 's', id: 't1', input: { filePath: 'a.ts', content: long, edits: [long] } } },
+    ]);
+
+    for (const entry of entries.slice(0, 3)) {
+      const text = (entry as { text: string }).text;
+      expect(text.length).toBeLessThan(100_100);
+      expect(text).toMatch(/… \(50000 more characters\)$/);
+    }
+    const input = (entries[3] as { input: Record<string, string> }).input;
+    expect(input['filePath']).toBe('a.ts');
+    expect(input['content']!.length).toBeLessThan(20_100);
+    expect(input['content']).toMatch(/more characters\)$/);
+    expect(typeof input['edits']).toBe('string');
+    expect(input['edits']!.length).toBeLessThan(20_100);
+  });
+
+  it('stops a text part growing once it is full', () => {
+    const builder = new TranscriptBuilder();
+    const delta = { type: 'session.text.delta', data: { sessionID: 's', delta: 'y'.repeat(60_000) } };
+    expect(builder.push(delta)).toHaveLength(1);
+    expect(builder.push(delta)).toHaveLength(1);
+    expect(builder.push(delta)).toEqual([]);
+    expect((builder.all[0] as { text: string }).text).toHaveLength(120_000);
+  });
+
+  it('keeps the latest entries and counts the ones it dropped', () => {
+    const builder = new TranscriptBuilder();
+    let last: ReturnType<TranscriptBuilder['push']> = [];
+    for (let index = 0; index < MAX_ENTRIES + 5; index += 1) {
+      last = builder.push({ type: 'session.text.ended', data: { sessionID: 's', text: `message ${index}` } });
+    }
+
+    const all = builder.all;
+    expect(all).toHaveLength(MAX_ENTRIES + 1);
+    expect(all[0]).toMatchObject({ id: OMITTED_ID, kind: 'notice', text: expect.stringContaining('5 earlier entries') });
+    expect(all[1]).toMatchObject({ text: 'message 5' });
+    expect(all.at(-1)).toMatchObject({ text: `message ${MAX_ENTRIES + 4}` });
+    // A live view is told about the entry and the new count together.
+    expect(last.map((entry) => entry.id)).toContain(OMITTED_ID);
   });
 });

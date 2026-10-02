@@ -29,8 +29,14 @@ const PromptSchema = z.looseObject({
   item: z.looseObject({ payload: z.looseObject({ text: z.string().optional() }).optional() }).optional(),
 });
 
-/** Tool output shown in the UI; the rest is in the event file. */
+/** Tool input and output shown in the UI; the rest is in the event file. */
 const MAX_OUTPUT = 20_000;
+/** What the agent wrote or was sent, likewise. */
+const MAX_TEXT = 100_000;
+/** Entries kept, the latest. A long iteration makes many thousands. */
+export const MAX_ENTRIES = 2000;
+/** The entry that says how many earlier ones were dropped; always the first. */
+export const OMITTED_ID = 'omitted';
 
 /**
  * Folds an iteration's event stream into transcript entries: what the agent
@@ -40,6 +46,10 @@ const MAX_OUTPUT = 20_000;
  * `push` returns the entries the event added or changed, so a live view can
  * send just those. An entry keeps its id as it changes, e.g. a text part
  * growing delta by delta.
+ *
+ * What it holds is bounded, whatever the size of the event file: long texts
+ * are clipped and only the latest entries are kept, behind a notice that
+ * counts the ones dropped. A live view holds a builder for a whole iteration.
  */
 export class TranscriptBuilder {
   private readonly entries = new Map<string, TranscriptEntry>();
@@ -48,8 +58,21 @@ export class TranscriptBuilder {
   /** Open text or reasoning parts that arrived without ids, by session. */
   private readonly anonymous = new Map<string, string>();
 
+  private omitted = 0;
+
   get all(): TranscriptEntry[] {
-    return [...this.entries.values()];
+    const notice = this.omittedNotice();
+    return notice ? [notice, ...this.entries.values()] : [...this.entries.values()];
+  }
+
+  private omittedNotice(): TranscriptEntry | undefined {
+    if (this.omitted === 0) return undefined;
+    return {
+      id: OMITTED_ID,
+      kind: 'notice',
+      level: 'info',
+      text: `${this.omitted} earlier ${this.omitted === 1 ? 'entry is' : 'entries are'} not shown; the event file has them all`,
+    };
   }
 
   push(event: OpencodeEvent): TranscriptEntry[] {
@@ -74,7 +97,7 @@ export class TranscriptBuilder {
     switch (event.type) {
       case 'session.inbox.enqueued': {
         const text = readData(event, PromptSchema)?.item?.payload?.text;
-        return text ? this.add({ ...base, id: this.nextId('prompt'), kind: 'prompt', text }) : [];
+        return text ? this.add({ ...base, id: this.nextId('prompt'), kind: 'prompt', text: clip(text, MAX_TEXT) }) : [];
       }
       case 'session.text.delta':
       case 'session.reasoning.delta': {
@@ -83,7 +106,10 @@ export class TranscriptBuilder {
         const kind = event.type === 'session.text.delta' ? 'text' : 'reasoning';
         const id = this.partId(kind, session, part, false);
         const current = this.entries.get(id);
-        const text = (current && 'text' in current ? current.text : '') + part.delta;
+        const before = current && 'text' in current ? current.text : '';
+        // Full already: the rest arrives with the part's end, clipped.
+        if (before.length >= MAX_TEXT) return [];
+        const text = before + part.delta;
         return this.add(
           kind === 'text'
             ? { ...base, id, kind, text, done: false }
@@ -95,14 +121,14 @@ export class TranscriptBuilder {
         const text = readData(event, TextEndedSchema)?.text ?? '';
         const id = this.partId('text', session, part, true);
         if (!text && !this.entries.has(id)) return [];
-        return this.add({ ...base, id, kind: 'text', text, done: true });
+        return this.add({ ...base, id, kind: 'text', text: clip(text, MAX_TEXT), done: true });
       }
       case 'session.reasoning.ended': {
         const part = readData(event, PartSchema);
         const id = this.partId('reasoning', session, part, true);
         // Reasoning often arrives encrypted, with no readable text.
         if (!part?.text) return [];
-        return this.add({ ...base, id, kind: 'reasoning', text: part.text });
+        return this.add({ ...base, id, kind: 'reasoning', text: clip(part.text, MAX_TEXT) });
       }
       case 'session.tool.input.started': {
         const data = readData(event, ToolInputStartedSchema);
@@ -121,7 +147,7 @@ export class TranscriptBuilder {
           kind: 'tool',
           name,
           status: current?.kind === 'tool' ? current.status : 'running',
-          ...(data?.input ? { input: data.input } : {}),
+          ...(data?.input ? { input: clipInput(data.input) } : {}),
         });
       }
       case 'session.tool.success':
@@ -195,7 +221,14 @@ export class TranscriptBuilder {
 
   private add(entry: TranscriptEntry): TranscriptEntry[] {
     this.entries.set(entry.id, entry);
-    return [entry];
+    if (this.entries.size <= MAX_ENTRIES) return [entry];
+    // A Map keeps the order entries were first added in.
+    for (const id of this.entries.keys()) {
+      if (this.entries.size <= MAX_ENTRIES) break;
+      this.entries.delete(id);
+      this.omitted += 1;
+    }
+    return [entry, this.omittedNotice()!];
   }
 
   private nextId(prefix: string): string {
@@ -225,6 +258,19 @@ export class TranscriptBuilder {
   }
 }
 
-function clip(text: string): string {
-  return text.length <= MAX_OUTPUT ? text : `${text.slice(0, MAX_OUTPUT)}\n… (${text.length - MAX_OUTPUT} more characters)`;
+function clip(text: string, max: number = MAX_OUTPUT): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n… (${text.length - max} more characters)`;
+}
+
+/** A tool's input with long values cut: a written file's content arrives whole. */
+function clipInput(input: Record<string, unknown>): Record<string, unknown> {
+  const clipped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === 'string') clipped[key] = clip(value);
+    else if (value !== null && typeof value === 'object') {
+      const json = JSON.stringify(value);
+      clipped[key] = json.length <= MAX_OUTPUT ? value : clip(json);
+    } else clipped[key] = value;
+  }
+  return clipped;
 }
