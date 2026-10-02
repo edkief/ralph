@@ -135,7 +135,7 @@ export interface SplitView {
   trigger?: 'assessment';
   /** The working time the agent estimated, in an assessment. */
   estimateMinutes?: number;
-  /** `proposed`, `applied`, `declined`, `failed` or `fits`; `running` or `ended` while it has no record. */
+  /** `proposed`, `applied`, `declined`, `retry`, `failed` or `fits`; `running` or `ended` while it has no record. */
   status: string;
   /** The tasks proposed in its place. */
   children?: string[];

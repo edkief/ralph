@@ -63,6 +63,7 @@ export function statusTone(status: string | null | undefined): Tone {
       return 'bad';
     case 'decide':
     case 'declined':
+    case 'retry':
     case 'max-iterations':
     case 'timeout':
     case 'wrapped-up':

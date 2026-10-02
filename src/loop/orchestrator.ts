@@ -220,6 +220,8 @@ async function loop(
   let unproductive = 0;
   // What each task's attempts ran out of, in order.
   const cutShortByTask = new Map<string, StallCause[]>();
+  // Tasks attempted again on the split agent's advice, which each may be once.
+  const retriedTasks = new Set<string>();
   // Handoff notes are how a task resumes, not progress on it.
   const notProgress = [handoffDir(config.ralphDir), assessDir(config.ralphDir)];
 
@@ -420,11 +422,17 @@ async function loop(
 
     const causes = cutShortByTask.get(taskId) ?? [];
     if (causes.length >= config.stall.maxTimeoutsPerTask) {
-      const stall = { args, recorder, saveState, iteration, taskId, causes, handoffFile, stop };
+      const stall = { args, recorder, saveState, iteration, taskId, causes, handoffFile, stop, retried: retriedTasks.has(taskId) };
       const outcome = await review(stall, await handleStall(stall));
       if (outcome.split) {
-        // New tasks with new ids, or a fresh start on this one.
-        cutShortByTask.delete(taskId);
+        if (outcome.retry) {
+          // One more attempt: cut short again, the task has stalled again.
+          retriedTasks.add(taskId);
+          cutShortByTask.set(taskId, causes.slice(1));
+        } else {
+          // New tasks with new ids, or a fresh start on this one.
+          cutShortByTask.delete(taskId);
+        }
         unproductive = 0;
         if (outcome.committed) unpushed = true;
         continue;
@@ -743,6 +751,8 @@ interface StallContext {
   };
   /** A person asked for another proposal: a turn of its own, in a new session. */
   reproposed?: boolean;
+  /** The task was already attempted again on the split agent's advice, which is not taken twice. */
+  retried?: boolean;
 }
 
 /** Why the task is up for a split, as the messages to a person start. */
@@ -765,7 +775,8 @@ interface Proposed {
 }
 
 type StallOutcome =
-  | { split: true; committed: boolean }
+  /** `retry` when the task is attempted again as it is, on the split agent's advice. */
+  | { split: true; committed: boolean; retry?: true }
   /** `proposal` when the run stops over a split to review rather than over the stall itself. */
   | { split: false; message: string; proposal?: Proposed };
 
@@ -827,6 +838,8 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
       ...(context.note ? { note: context.note } : {}),
       ...(estimate ? { estimate: { minutes: estimate.minutes, thresholdMinutes: estimate.thresholdMinutes } } : {}),
       ...(carriesOn && estimate.sessionId ? { sessionId: estimate.sessionId } : {}),
+      // An assessed task has had no attempt to try again.
+      allowRetry: !estimate && !context.retried,
       signal,
       hooks: {
         onEvent: (event) => recorder.recordEvent(event),
@@ -840,6 +853,11 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
     logger.warn('could not propose a split', { task: taskId, reason: outcome.reason });
     record({ status: 'failed', reason: outcome.reason });
     return stopped(`${spent}; Ralph could not propose a split (${outcome.reason}), so split it by hand`);
+  }
+  if (outcome.status === 'retry') {
+    logger.info('the agent advises attempting the task again as it is', { task: taskId, reason: outcome.reason });
+    record({ status: 'retry', reason: outcome.reason });
+    return { split: true, committed: false, retry: true };
   }
   if (outcome.status === 'declined') {
     logger.warn('the agent advises against splitting the task', { task: taskId, reason: outcome.reason });

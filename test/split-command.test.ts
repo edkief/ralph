@@ -108,6 +108,16 @@ describe('ralph split', () => {
     expect(ids(root)).toEqual(['TASK-1', 'TASK-2']);
   });
 
+  it('reports advice to attempt the task again as it is', async () => {
+    const root = project();
+    writeProposal(root, { splittable: false, retry: true, reason: 'only the docs are left' });
+    const { code, out } = await split_(root, 'TASK-1', true);
+    expect(code).toBe(ExitCode.Stalled);
+    expect(out).toContain('TASK-1 is better attempted again as it is');
+    expect(out).toContain('only the docs are left');
+    expect(ids(root)).toEqual(['TASK-1', 'TASK-2']);
+  });
+
   it('refuses a proposal with problems, a missing id, and a task that passes', async () => {
     const root = project();
     writeProposal(root, split, ['TASK-1.1']);
