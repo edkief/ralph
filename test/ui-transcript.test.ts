@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MAX_CHARS, MAX_ENTRIES, OMITTED_ID, TranscriptBuilder } from '../src/ui/transcript.js';
+import { TranscriptBuilder } from '../src/ui/transcript.js';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
@@ -115,36 +115,17 @@ describe('TranscriptBuilder', () => {
     expect(builder.push(delta)).toEqual([]);
     expect((builder.all[0] as { text: string }).text).toHaveLength(120_000);
   });
+});
 
-  it('keeps the latest entries and counts the ones it dropped', () => {
+describe('a long session', () => {
+  it('keeps every entry', () => {
     const builder = new TranscriptBuilder();
-    let last: ReturnType<TranscriptBuilder['push']> = [];
-    for (let index = 0; index < MAX_ENTRIES + 5; index += 1) {
-      last = builder.push({ type: 'session.text.ended', data: { sessionID: 's', text: `message ${index}` } });
+    for (let index = 0; index < 5000; index += 1) {
+      builder.push({ type: 'session.text.ended', data: { sessionID: 's', text: `message ${index}` } });
     }
-
     const all = builder.all;
-    expect(all).toHaveLength(MAX_ENTRIES + 1);
-    expect(all[0]).toMatchObject({ id: OMITTED_ID, kind: 'notice', text: expect.stringContaining('5 earlier entries') });
-    expect(all[1]).toMatchObject({ text: 'message 5' });
-    expect(all.at(-1)).toMatchObject({ text: `message ${MAX_ENTRIES + 4}` });
-    // A live view is told about the entry and the new count together.
-    expect(last.map((entry) => entry.id)).toContain(OMITTED_ID);
-  });
-
-  it('keeps what it holds under a size as well as a count', () => {
-    const builder = new TranscriptBuilder();
-    const output = 'y'.repeat(20_000);
-    for (let index = 0; index < 1500; index += 1) {
-      builder.push({ type: 'session.tool.called', data: { sessionID: 's', id: `t${index}`, input: { content: 'x'.repeat(8_000) } } });
-      builder.push({ type: 'session.tool.success', data: { sessionID: 's', id: `t${index}`, content: [{ text: output }] } });
-    }
-
-    const all = builder.all;
-    const held = all.reduce((sum, entry) => sum + JSON.stringify(entry).length, 0);
-    expect(held).toBeLessThan(MAX_CHARS * 1.05);
-    expect(all.length).toBeLessThan(700);
-    expect(all[0]).toMatchObject({ id: OMITTED_ID });
-    expect(all.at(-1)).toMatchObject({ id: 't1499'.replace('t', 'tool:t'), status: 'success' });
+    expect(all).toHaveLength(5000);
+    expect(all[0]).toMatchObject({ text: 'message 0' });
+    expect(all.at(-1)).toMatchObject({ text: 'message 4999' });
   });
 });

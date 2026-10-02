@@ -5,10 +5,6 @@ export type * from '../../src/ui/types.js';
 
 /** Log lines kept in the browser for the live run. */
 const MAX_LOG_LINES = 5000;
-/** Transcript entries kept for the live session, as many as the server keeps. */
-const MAX_ENTRIES = 2000;
-/** The server's notice of how many earlier entries it dropped. */
-const OMITTED_ID = 'omitted';
 
 /**
  * API paths are written from the root for readability but requested relative
@@ -150,14 +146,8 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
         state.transcript.iteration === iteration &&
         state.transcript.split === split;
       const next = same ? [...state.transcript!.entries] : [];
-      // The server keeps only the latest entries and says how many it dropped.
-      let omitted = next[0]?.id === OMITTED_ID ? next.shift() : undefined;
       const index = new Map(next.map((entry, position) => [entry.id, position]));
       for (const entry of entries) {
-        if (entry.id === OMITTED_ID) {
-          omitted = entry;
-          continue;
-        }
         const at = index.get(entry.id);
         if (at === undefined) {
           index.set(entry.id, next.length);
@@ -166,8 +156,7 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
           next[at] = entry;
         }
       }
-      const kept = omitted ? [omitted, ...next.slice(-MAX_ENTRIES)] : next;
-      return { ...state, transcript: { runId, iteration, ...(split ? { split } : {}), entries: kept } };
+      return { ...state, transcript: { runId, iteration, ...(split ? { split } : {}), entries: next } };
     }
   }
 }

@@ -456,9 +456,40 @@ describe('web UI server', () => {
       await live.until(() => live.of('transcript').length >= 1, 15_000);
       const [message] = live.of('transcript');
       expect(message).toMatchObject({ reset: true });
-      expect(message!.entries).toHaveLength(2001);
-      expect(message!.entries[0]).toMatchObject({ id: 'omitted', text: expect.stringContaining('7000 earlier entries') });
+      expect(message!.entries).toHaveLength(9000);
+      expect(message!.entries[0]).toMatchObject({ text: expect.stringMatching(/^0 /) });
       expect(message!.entries.at(-1)).toMatchObject({ text: expect.stringMatching(/^8999 /) });
+    } finally {
+      live.close();
+    }
+  });
+
+  it('keeps a stream that is reading, however large the transcript it is sent', async () => {
+    const root = project();
+    const events = resolve(root, '.ralph', 'history', LIVE_RUN, 'iteration-002.events.jsonl');
+    const filler = 'x'.repeat(1000);
+    let backlog = '';
+    for (let index = 0; index < 3000; index += 1) backlog += line(say(`${index} ${filler}`));
+    writeFileSync(events, backlog);
+    // Limits far below the transcript's size: only a client that stops reading may be dropped.
+    server = await startUiServer({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      host: '127.0.0.1',
+      port: 0,
+      logger,
+      pollMs: 20,
+      maxBufferedBytes: 16 * 1024,
+      stalledMs: 200,
+      webRoot: resolve(root, 'no-web'),
+    });
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('transcript').length >= 1, 15_000);
+      expect(live.of('transcript')[0]!.entries).toHaveLength(3000);
+      appendFileSync(events, line(say('and on')));
+      await live.until(() => live.of('transcript').length >= 2);
+      expect(live.of('transcript')[1]).toMatchObject({ reset: false, entries: [{ text: 'and on' }] });
     } finally {
       live.close();
     }
