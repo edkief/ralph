@@ -21,6 +21,8 @@ const POLL_MS = 500;
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const STALLED_MS = 60_000;
+/** Times the buffer limit beyond which a stream is dropped without waiting. */
+const HARD_LIMIT_FACTOR = 4;
 /** An action's body is an id and a few lines of text. */
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -370,7 +372,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         // would have everything since buffered here. Drop it instead: the
         // browser reconnects and starts from what is current.
         // A large first message is not that; one that is not drained in time is.
+        // Nor is it waited for once what is held for it is out of proportion.
         if (res.writableLength <= maxBufferedBytes) fullSince = null;
+        else if (res.writableLength > maxBufferedBytes * HARD_LIMIT_FACTOR) return client.stop();
         else if (Date.now() - (fullSince ??= Date.now()) > stalledMs) return client.stop();
         res.write(frame);
       },

@@ -35,6 +35,11 @@ const MAX_OUTPUT = 20_000;
 const MAX_TEXT = 100_000;
 /** Entries kept, the latest. A long iteration makes many thousands. */
 export const MAX_ENTRIES = 2000;
+/**
+ * Characters kept across all entries, roughly. The entry count alone lets
+ * 2000 large tool calls add up to more than a small heap holds.
+ */
+export const MAX_CHARS = 16 * 1024 * 1024;
 /** The entry that says how many earlier ones were dropped; always the first. */
 export const OMITTED_ID = 'omitted';
 
@@ -59,6 +64,8 @@ export class TranscriptBuilder {
   private readonly anonymous = new Map<string, string>();
 
   private omitted = 0;
+  private readonly sizes = new Map<string, number>();
+  private chars = 0;
 
   get all(): TranscriptEntry[] {
     const notice = this.omittedNotice();
@@ -221,11 +228,17 @@ export class TranscriptBuilder {
 
   private add(entry: TranscriptEntry): TranscriptEntry[] {
     this.entries.set(entry.id, entry);
-    if (this.entries.size <= MAX_ENTRIES) return [entry];
-    // A Map keeps the order entries were first added in.
+    const size = sizeOf(entry);
+    this.chars += size - (this.sizes.get(entry.id) ?? 0);
+    this.sizes.set(entry.id, size);
+    const fits = () => this.entries.size <= MAX_ENTRIES && this.chars <= MAX_CHARS;
+    if (fits()) return [entry];
+    // A Map keeps the order entries were first added in. The newest always stays.
     for (const id of this.entries.keys()) {
-      if (this.entries.size <= MAX_ENTRIES) break;
+      if (fits() || this.entries.size === 1) break;
       this.entries.delete(id);
+      this.chars -= this.sizes.get(id) ?? 0;
+      this.sizes.delete(id);
       this.omitted += 1;
     }
     return [entry, this.omittedNotice()!];
@@ -256,6 +269,14 @@ export class TranscriptBuilder {
     else this.anonymous.set(key, id);
     return id;
   }
+}
+
+/** About how many characters an entry holds; its few fixed fields count as nothing. */
+function sizeOf(entry: TranscriptEntry): number {
+  if (entry.kind === 'tool') {
+    return (entry.output?.length ?? 0) + (entry.input ? JSON.stringify(entry.input).length : 0);
+  }
+  return 'text' in entry ? entry.text.length : 0;
 }
 
 function clip(text: string, max: number = MAX_OUTPUT): string {

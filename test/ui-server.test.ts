@@ -495,7 +495,8 @@ describe('web UI server', () => {
     socket.resume();
     await closed;
 
-    // Others are still served.
+    // Others are still served. The log is far beyond what this server's small limit allows a stream.
+    writeFileSync(log, '');
     const live = subscribe('/api/live');
     try {
       await live.until(() => live.of('status').length >= 1 && live.of('transcript').length >= 1);

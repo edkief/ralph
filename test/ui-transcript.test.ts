@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MAX_ENTRIES, OMITTED_ID, TranscriptBuilder } from '../src/ui/transcript.js';
+import { MAX_CHARS, MAX_ENTRIES, OMITTED_ID, TranscriptBuilder } from '../src/ui/transcript.js';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
@@ -130,5 +130,21 @@ describe('TranscriptBuilder', () => {
     expect(all.at(-1)).toMatchObject({ text: `message ${MAX_ENTRIES + 4}` });
     // A live view is told about the entry and the new count together.
     expect(last.map((entry) => entry.id)).toContain(OMITTED_ID);
+  });
+
+  it('keeps what it holds under a size as well as a count', () => {
+    const builder = new TranscriptBuilder();
+    const output = 'y'.repeat(20_000);
+    for (let index = 0; index < 1500; index += 1) {
+      builder.push({ type: 'session.tool.called', data: { sessionID: 's', id: `t${index}`, input: { content: 'x'.repeat(8_000) } } });
+      builder.push({ type: 'session.tool.success', data: { sessionID: 's', id: `t${index}`, content: [{ text: output }] } });
+    }
+
+    const all = builder.all;
+    const held = all.reduce((sum, entry) => sum + JSON.stringify(entry).length, 0);
+    expect(held).toBeLessThan(MAX_CHARS * 1.05);
+    expect(all.length).toBeLessThan(700);
+    expect(all[0]).toMatchObject({ id: OMITTED_ID });
+    expect(all.at(-1)).toMatchObject({ id: 't1499'.replace('t', 'tool:t'), status: 'success' });
   });
 });
