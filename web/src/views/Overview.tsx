@@ -3,7 +3,7 @@ import { useJson, useNow, type RunDetail, type SplitView, type StatusView } from
 import { formatCount, formatDateTime, formatDuration, formatRunId, runBadge, statusLabel, statusTone } from '../format';
 import { href } from '../route';
 import { TaskRow, activeTaskId } from './TaskRow';
-import { Pending, StopButtons } from './Pending';
+import { Pending, RunButtons, StopButtons } from './Pending';
 
 /** Tasks listed under the iterations; the Tasks tab has them all. */
 const UP_NEXT = 5;
@@ -55,8 +55,10 @@ export function Overview({ status }: { status: StatusView }) {
               <span className="muted">none</span>
             )}
           </div>
-          <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : 'Start one with `ralph`'}</div>
+          <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : status.daemon?.live ? 'Run a batch below' : 'Start one with `ralph`'}</div>
+          <DaemonLine status={status} />
           <StopButtons status={status} />
+          <RunButtons key={run?.runId ?? 'none'} status={status} />
         </div>
         <div className="card">
           <div className="card-label">{run?.live ? 'Current iteration' : 'Iterations'}</div>
@@ -225,5 +227,20 @@ function SplitRow({ runId, split, now }: { runId: string; split: SplitView; now:
         {outcome}
       </td>
     </tr>
+  );
+}
+
+/** Whether a daemon holds the loop here, and what it is doing between runs. */
+function DaemonLine({ status }: { status: StatusView }) {
+  const { daemon, run } = status;
+  if (!daemon?.live) return null;
+  const idle = daemon.status === 'idle' && !run?.live;
+  const last = idle && daemon.lastBatch?.status === 'failed' ? daemon.lastBatch.message : null;
+  return (
+    <div className="card-detail daemon-line">
+      <span className={`badge tone-${idle ? 'muted' : 'live'}`}>{idle ? 'Daemon idle' : `Daemon ${daemon.status}`}</span>{' '}
+      <span className="muted">pid {daemon.pid}</span>
+      {last ? <div className="stop-note bad">Last batch failed: {last}</div> : null}
+    </div>
   );
 }

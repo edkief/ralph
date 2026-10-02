@@ -786,6 +786,18 @@ button.button {
   color: var(--bad);
 }
 
+.run-iterations {
+  width: 5.5em;
+}
+
+.run-token {
+  width: 9em;
+}
+
+.daemon-line {
+  margin-top: 6px;
+}
+
 /* ── Transcript ─────────────────────────────────────────────────────── */
 
 .transcript-view {
