@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
-import { MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
+import { LOG_TAIL_BYTES, MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
@@ -265,7 +265,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
       let logReset = false;
       if (logFeed?.runId !== runId) {
-        logFeed = { runId, tailer: new LineTailer(project.logPath(runId)) };
+        logFeed = { runId, tailer: new LineTailer(project.logPath(runId), { fromEnd: LOG_TAIL_BYTES }) };
         logReset = true;
       }
       const logRead = logFeed.tailer.read();

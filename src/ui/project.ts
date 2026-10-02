@@ -4,7 +4,7 @@ import { basename, extname, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
 import { TASK_ID } from '../init/plan.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
-import { parseJsonLines } from './tail.js';
+import { LineTailer, parseJsonLines } from './tail.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
@@ -40,6 +40,8 @@ const IMAGE_TYPES: Record<string, string> = {
 const MAX_FILES = 2000;
 /** Log lines returned at most, the latest. */
 export const MAX_LOG_LINES = 5000;
+/** How much of the end of a log file is read to find them. */
+export const LOG_TAIL_BYTES = 4 * 1024 * 1024;
 /**
  * A running run on another host (a sidecar, another pod) whose files have not
  * changed for this long is taken to have died. Iterations are quiet between
@@ -74,13 +76,14 @@ export class RalphProject {
   }
 
   status(): StatusView {
-    const latest = this.listRuns()[0];
+    // Only the newest run: this is read on every live tick, and history grows.
+    const latest = this.runIds()[0];
     return {
       project: basename(resolve(this.projectRoot)),
       projectRoot: resolve(this.projectRoot),
       ralphDir: this.ralphDir,
       tasks: this.tasks(),
-      run: latest ?? null,
+      run: latest ? this.run(latest) : null,
       pending: this.pendingView(),
     };
   }
@@ -148,13 +151,16 @@ export class RalphProject {
 
   /** Runs, newest first. Run ids are timestamps, so they sort by name. */
   listRuns(): RunView[] {
+    return this.runIds().map((runId) => this.run(runId));
+  }
+
+  private runIds(): string[] {
     if (!existsSync(this.historyRoot)) return [];
     return readdirSync(this.historyRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && RUN_ID.test(entry.name))
       .map((entry) => entry.name)
       .sort()
-      .reverse()
-      .map((runId) => this.run(runId));
+      .reverse();
   }
 
   run(runId: string): RunView {
@@ -253,7 +259,8 @@ export class RalphProject {
   }
 
   log(runId: string): LogLine[] {
-    return parseJsonLines<LogLine>(readLines(this.logPath(runId))).slice(-MAX_LOG_LINES);
+    const tailer = new LineTailer(this.logPath(runId), { fromEnd: LOG_TAIL_BYTES });
+    return parseJsonLines<LogLine>(tailer.read(LOG_TAIL_BYTES).lines).slice(-MAX_LOG_LINES);
   }
 
   transcript(runId: string, iteration: number): TranscriptEntry[] {
@@ -426,7 +433,12 @@ function splitView(record: SplitRecord): SplitView {
 
 function transcriptOf(path: string): TranscriptEntry[] {
   const builder = new TranscriptBuilder();
-  for (const event of parseJsonLines<OpencodeEvent>(readLines(path))) builder.push(event);
+  // Folded a stretch at a time: only the transcript is held, never the file.
+  const tailer = new LineTailer(path);
+  for (let read = tailer.read(); ; read = tailer.read()) {
+    for (const event of parseJsonLines<OpencodeEvent>(read.lines)) builder.push(event);
+    if (!read.more) break;
+  }
   return builder.all;
 }
 
