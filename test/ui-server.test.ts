@@ -174,6 +174,20 @@ describe('web UI server', () => {
     expect(body[1]).toMatchObject({ status: 'stalled', live: false, iteration: 3 });
   });
 
+  it('orders runs by when they started, not by their local-time ids', async () => {
+    // Run ahead of UTC, then interrupted: its id sorts after the live run's, run in UTC.
+    const root = project();
+    const ahead = resolve(root, '.ralph', 'history', '20260930-133000');
+    mkdirSync(ahead, { recursive: true });
+    writeFileSync(
+      resolve(ahead, 'state.json'),
+      JSON.stringify({ runId: '20260930-133000', status: 'interrupted', startedAt: '2026-09-30T11:30:00.000Z' }),
+    );
+    await start(root);
+    expect((await get<StatusView>('/api/status')).body.run).toMatchObject({ runId: LIVE_RUN, live: true });
+    expect((await get<RunView[]>('/api/runs')).body.map((run) => run.runId)).toEqual([LIVE_RUN, '20260930-133000', OLD_RUN]);
+  });
+
   it('lists recorded iterations and the one in progress', async () => {
     await start(project());
     const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);

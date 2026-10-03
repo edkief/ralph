@@ -53,6 +53,8 @@ export const LOG_TAIL_BYTES = 4 * 1024 * 1024;
 const STALE_MS = 15 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
+/** A run id as `newRunId` makes it: the start in the local time of the machine that ran it. */
+const RUN_ID_TIME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
 const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
 
 export class NotFoundError extends Error {}
@@ -71,6 +73,8 @@ export class RalphProject {
   readonly historyRoot: string;
   /** Runs as committed, for those whose history is on another machine. */
   readonly journalRoot: string;
+  /** When each run started, once its state says so: that never changes. */
+  private readonly startTimes = new Map<string, number>();
 
   constructor(
     readonly projectRoot: string,
@@ -173,7 +177,7 @@ export class RalphProject {
     }
   }
 
-  /** Runs, newest first. Run ids are timestamps, so they sort by name. */
+  /** Runs, newest first. */
   listRuns(): RunView[] {
     return this.runIds().map((runId) => this.run(runId));
   }
@@ -187,7 +191,27 @@ export class RalphProject {
         if (entry.isDirectory() && RUN_ID.test(entry.name)) ids.add(entry.name);
       }
     }
-    return [...ids].sort().reverse();
+    // By when they started, not by id: an id is in the local time of the
+    // machine that ran it, so runs from machines in other time zones (a UTC
+    // container beside a laptop, a journal pulled from elsewhere) misorder.
+    const starts = new Map([...ids].map((id) => [id, this.startTime(id)]));
+    return [...ids].sort((a, b) => starts.get(b)! - starts.get(a)! || (a < b ? 1 : a > b ? -1 : 0));
+  }
+
+  /** When a run started, from its state, or else from its id; 0 when neither says. */
+  private startTime(runId: string): number {
+    const known = this.startTimes.get(runId);
+    if (known !== undefined) return known;
+    const startedAt = Date.parse(readJson<RunState>(resolve(this.runDir(runId), 'state.json'))?.startedAt ?? '');
+    if (Number.isFinite(startedAt)) {
+      this.startTimes.set(runId, startedAt);
+      return startedAt;
+    }
+    // A run from before state.json, or one whose state is not written yet.
+    const parts = RUN_ID_TIME.exec(runId);
+    if (!parts) return 0;
+    const [year, month, day, hours, minutes, seconds] = parts.slice(1).map(Number) as [number, number, number, number, number, number];
+    return new Date(year, month - 1, day, hours, minutes, seconds).getTime();
   }
 
   /** Whether all there is of a run is its journal: it ran on another machine, or its history was removed. */
