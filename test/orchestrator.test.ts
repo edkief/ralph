@@ -1201,3 +1201,137 @@ describe('runLoop', () => {
     expect(existsSync(resolve(root, '.ralph'))).toBe(false);
   });
 });
+
+describe("Ralph's records", () => {
+  const git = (root: string, ...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  /** A project whose first commit ignores history/, as `ralph init` sets it up. */
+  function tracked(tasks: Array<{ id: string; passes: boolean }>): string {
+    const root = project(tasks);
+    writeFileSync(resolve(root, '.gitignore'), '.ralph/history/\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'init');
+    return root;
+  }
+  const writeDecision = (root: string) =>
+    writeFileSync(resolve(root, '.ralph', 'decisions.jsonl'), `${JSON.stringify({ time: 't', runId: 'r', taskId: null, kind: 'note', answer: 'Use REST' })}\n`);
+
+  it('commits them, and only them, when the run ends', async () => {
+    const root = tracked([{ id: 'TASK-1', passes: false }]);
+    writeDecision(root);
+    writeFileSync(resolve(root, 'scratch.txt'), 'not a record');
+
+    const result = await loop(root, config(root, { maxIterations: 1 }), { script: say('hi') });
+
+    expect(git(root, 'log', '-1', '--format=%s')).toBe(`chore(ralph): record run ${result.runId}`);
+    const files = git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n');
+    expect(files).toContain('.ralph/decisions.jsonl');
+    expect(files).toEqual(expect.arrayContaining([
+      `.ralph/journal/${result.runId}/run.json`,
+      `.ralph/journal/${result.runId}/state.json`,
+      `.ralph/journal/${result.runId}/iteration-001.transcript.jsonl`,
+    ]));
+    expect(files.some((file) => file.startsWith('.ralph/history/') || file.endsWith('.events.jsonl'))).toBe(false);
+    const state = JSON.parse(git(root, 'show', `HEAD:.ralph/journal/${result.runId}/state.json`));
+    expect(state).toMatchObject({ status: 'max-iterations' });
+    expect(files).not.toContain('scratch.txt');
+    expect(git(root, 'status', '--porcelain', '--', 'scratch.txt')).toBe('?? scratch.txt');
+  });
+
+  it('commits nothing with git.records "never"', async () => {
+    const root = tracked([{ id: 'TASK-1', passes: false }]);
+    writeDecision(root);
+
+    await loop(root, config(root, { maxIterations: 1, git: { records: 'never' } }), { script: say('hi') });
+
+    expect(git(root, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(existsSync(resolve(root, '.ralph', 'journal'))).toBe(false);
+  });
+
+  it('commits after each iteration without taking the commit for progress', async () => {
+    const root = tracked([{ id: 'TASK-1', passes: false }]);
+
+    const result = await loop(root, config(root, { maxIterations: 2, git: { records: 'iteration' } }), {
+      onPrompt: () => writeDecision(root),
+      script: say('hi'),
+    });
+
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([
+      `chore(ralph): record run ${result.runId}`,
+      `chore(ralph): record run ${result.runId}, iteration 2`,
+      `chore(ralph): record run ${result.runId}, iteration 1`,
+      'init',
+    ]);
+    const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => record.delta.committed)).toEqual([false, false]);
+  });
+});
+
+describe('parking', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  /** A committed project with a remote it is pushed to. */
+  function published(): { root: string; remote: string } {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    writeFileSync(resolve(root, '.gitignore'), '.ralph/history/\n');
+    writeFileSync(resolve(root, 'app.ts'), 'v1');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'init');
+    const remote = mkdtempSync(resolve(tmpdir(), 'ralph-remote-'));
+    git(remote, 'init', '-q', '--bare');
+    git(root, 'remote', 'add', 'origin', remote);
+    git(root, 'push', '-q', '-u', 'origin', 'HEAD');
+    return { root, remote };
+  }
+  const endless: ScriptedEvent[] = [{ after: 60_000, type: 'session.execution.succeeded' }];
+
+  it('has the agent hand off at once, commits what it left and pushes, whatever git.push says', async () => {
+    const { root, remote } = published();
+    const result = await loop(
+      root,
+      config(root, { maxIterations: 5, timeouts: { iterationMs: 60_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+      {
+        steer: true,
+        onPrompt: (count) => {
+          if (count !== 1) return;
+          writeFileSync(resolve(root, 'app.ts'), 'v2, half done');
+          writeFileSync(resolve(root, 'notes.txt'), 'scratch');
+          setTimeout(() => requestStop(resolve(root, '.ralph'), 'park', 'cli'), 50);
+        },
+        script: (count) => (count === 1 ? endless : say('handed off')),
+      },
+    );
+
+    expect(result.status).toBe('stopped');
+    expect(result.message).toBe('Parked after 1 iteration');
+    expect(String(server?.prompts[1]?.['text'])).toContain('## Parking — hand off TASK-1');
+    expect(readFileSync(resolve(root, '.ralph', 'handoff', 'TASK-1.md'), 'utf8')).toContain('the run was parked');
+
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([`chore(ralph): record run ${result.runId}`, 'wip(TASK-1): parked', 'init']);
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD~1')).toBe('app.ts');
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toContain('.ralph/handoff/TASK-1.md');
+    expect(git(root, 'status', '--porcelain')).toBe('?? notes.txt');
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
+
+    const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ handoff: 'fallback', result: { status: 'wrapped-up', wrapUp: { trigger: 'park' } } });
+  });
+
+  it('without a wrap-up, stops after the iteration, then commits and pushes', async () => {
+    const { root, remote } = published();
+    const result = await loop(root, config(root, { maxIterations: 5, timeouts: { wrapUpMs: 0 } }), {
+      onPrompt: () => {
+        writeFileSync(resolve(root, 'app.ts'), 'v2');
+        requestStop(resolve(root, '.ralph'), 'park', 'cli');
+      },
+      script: [{ type: 'session.text.ended', data: { text: 'done' } }, { after: 700, type: 'session.execution.succeeded' }],
+    });
+
+    expect(result.status).toBe('stopped');
+    expect(server?.prompts).toHaveLength(1);
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([`chore(ralph): record run ${result.runId}`, 'wip(TASK-1): parked', 'init']);
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
+  });
+});
+

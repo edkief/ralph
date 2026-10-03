@@ -37,6 +37,7 @@ function menu(options: { pending?: PendingState; idleMs?: number; answer?: (inpu
     release: () => calls.push('release'),
     stopAfterIteration: () => calls.push('stop-after'),
     stopNow: () => calls.push('stop-now'),
+    park: () => calls.push('park'),
     pending: () => options.pending,
     answer:
       options.answer ??
@@ -79,6 +80,14 @@ describe('the run menu', () => {
     const second = menu();
     await second.press('\r|q');
     expect(second.calls).toEqual(['hold', 'release', 'stop-now']);
+  });
+
+  it('parks on h', async () => {
+    const { calls, press, screen } = menu();
+    await press('\r');
+    expect(screen()).toContain('park: hand off, commit and push');
+    await press('h');
+    expect(calls).toEqual(['hold', 'release', 'park']);
   });
 
   it('stops now on Ctrl-C, menu or not', async () => {

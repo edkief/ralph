@@ -100,6 +100,8 @@ export async function runIteration(args: {
    * instead of interrupting it outright.
    */
   wrapUp?: { prompt: (trigger: WrapUpTrigger) => string };
+  /** Once aborted, ask for the wrap-up at once: a person is parking the run. Needs `wrapUp`. */
+  park?: AbortSignal;
   logger: Logger;
   hooks?: IterationHooks;
   signal: AbortSignal;
@@ -164,9 +166,9 @@ export async function runIteration(args: {
       sent: false,
     };
     wrapUp.state = state;
-    // The time budget can steer a working agent; a quiet one is stuck in a
-    // tool, which only an interrupt ends.
-    if (trigger === 'iteration-timeout' && (await client.supportsSteering())) state.delivery = 'steer';
+    // The time budget and a park can steer a working agent; a quiet one is
+    // stuck in a tool, which only an interrupt ends.
+    if (trigger !== 'inactivity' && (await client.supportsSteering())) state.delivery = 'steer';
     // The iteration may have ended while this was waiting.
     if (streamAbort.signal.aborted) return;
     logger.warn('asking the agent to wrap up', { reason: trigger, delivery: state.delivery });
@@ -185,6 +187,14 @@ export async function runIteration(args: {
   };
 
   const timer = setInterval(() => {
+    if (args.park?.aborted && args.wrapUp && config.timeouts.wrapUpMs > 0 && sessionId && !watchdog.wrappingUp) {
+      watchdog.beginWrapUp();
+      startWrapUp('park').catch((cause: unknown) => {
+        logger.warn('wrap-up request failed', { error: (cause as Error).message });
+        streamAbort.abort();
+      });
+      return;
+    }
     const tripped = watchdog.check();
     if (!tripped) return;
     const canWrapUp =
@@ -343,7 +353,7 @@ export async function runIteration(args: {
   const tags = parsePromiseTags(text);
   const wrapped = wrapUp.state;
   const reasons = [wrapped?.trigger, trip].flatMap((reason) =>
-    reason ? [describeTrip(reason, watchdogOptions)] : [],
+    reason === 'park' ? ['Parked on request'] : reason ? [describeTrip(reason, watchdogOptions)] : [],
   );
 
   return {

@@ -4,7 +4,8 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
+import type { RecordsMode } from '../loop/records.js';
+import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
@@ -60,6 +61,8 @@ export interface UiServerOptions {
   /** Take actions from other hosts without a token: access to the UI is controlled in front of it. */
   openActions?: boolean;
   logger: Logger;
+  /** `git.records`: whether answers given with no loop waiting are committed. */
+  records?: RecordsMode;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
   /** How often live streams look for changes. */
@@ -231,14 +234,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
     if (path === '/api/actions/stop') {
       const parsed = StopSchema.safeParse(body);
-      if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration" or "now"');
+      if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration", "now" or "park"');
       const run = project.status().run;
       if (!run?.live) throw new RequestError(409, 'No run is in progress');
       requestStop(project.ralphRoot, parsed.data.mode, 'ui');
       options.logger.info('web UI action', { action: 'stop', mode: parsed.data.mode, run: run.runId });
-      return sendJson(res, 200, {
-        message: parsed.data.mode === 'now' ? 'Ralph stops now.' : 'Ralph stops after the current iteration.',
-      });
+      return sendJson(res, 200, { message: STOP_MESSAGES[parsed.data.mode] });
     }
 
     const parsed = AnswerInputSchema.safeParse(body);
@@ -249,6 +250,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         ralphDir: options.ralphDir,
         input: parsed.data,
         by: 'ui',
+        ...(options.records ? { records: options.records } : {}),
       });
       options.logger.info('web UI action', { action: parsed.data.action, request: parsed.data.id, delivered: result.delivered });
       return sendJson(res, 200, result);
@@ -327,6 +329,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
     const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
     if (iteration === 0 && !split) return false;
+    // A run known only from its journal has no event stream to follow.
+    if (!split && !existsSync(project.eventsPath(runId, iteration))) return false;
     if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
       transcriptFeed = {
         runId,

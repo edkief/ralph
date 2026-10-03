@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { startServer, sleep } from '../opencode/server.js';
 import { preflight } from '../opencode/preflight.js';
 import { runLoop } from '../loop/orchestrator.js';
-import { requestStop } from '../human/request.js';
+import { requestStop, STOP_MESSAGES } from '../human/request.js';
 import { startUiBesideLoop } from '../ui/command.js';
 import { RalphProject } from '../ui/project.js';
 import { ConsoleReporter } from '../report/console.js';
@@ -205,6 +205,8 @@ export async function controlDaemon(args: {
   action: string;
   iterations?: number;
   now: boolean;
+  /** With `pause`: park the run rather than just stop it. */
+  park?: boolean;
   /** How long `shutdown` waits for the daemon to be gone. */
   waitMs?: number;
 }): Promise<number> {
@@ -223,8 +225,9 @@ export async function controlDaemon(args: {
           process.stderr.write('Nothing is running to pause.\n');
           return ExitCode.ConfigError;
         }
-        requestStop(ralphRoot, args.now ? 'now' : 'after-iteration', 'cli');
-        process.stdout.write(args.now ? 'Ralph stops now.\n' : 'Ralph stops after the current iteration.\n');
+        const mode = args.park ? 'park' : args.now ? 'now' : 'after-iteration';
+        requestStop(ralphRoot, mode, 'cli');
+        process.stdout.write(`${STOP_MESSAGES[mode]}\n`);
         return 0;
       }
       case 'status':

@@ -13,6 +13,7 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     basePath: config.ui.basePath,
     ...(config.ui.token ? { token: config.ui.token } : {}),
     openActions: config.ui.actions === 'open',
+    records: config.git.records,
     logger,
   });
   if (!isLoopback(config.ui.host)) {

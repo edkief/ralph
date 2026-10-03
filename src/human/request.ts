@@ -74,7 +74,11 @@ export class RespondError extends Error {
   }
 }
 
-export const STOP_MODES = ['after-iteration', 'now'] as const;
+/**
+ * `park` hands the project over: the agent wraps up and hands off, its work is
+ * committed and pushed, so the run can resume elsewhere from the repository.
+ */
+export const STOP_MODES = ['after-iteration', 'now', 'park'] as const;
 export type StopMode = (typeof STOP_MODES)[number];
 
 // Beside the runs in history/, which projects already keep out of git: these
@@ -175,7 +179,14 @@ export async function waitForAnswer(args: {
   }
 }
 
-/** Ask the running loop to stop: after its current iteration, or now. */
+/** What a person is told when they ask a run to stop. */
+export const STOP_MESSAGES: Record<StopMode, string> = {
+  'after-iteration': 'Ralph stops after the current iteration.',
+  now: 'Ralph stops now.',
+  park: 'Ralph parks: the agent hands off, then the work is committed and pushed.',
+};
+
+/** Ask the running loop to stop: after its current iteration, now, or parked. */
 export function requestStop(ralphRoot: string, mode: StopMode, by: 'ui' | 'cli'): void {
   writeAtomic(stopPath(ralphRoot), { mode, by, requestedAt: new Date().toISOString() });
 }

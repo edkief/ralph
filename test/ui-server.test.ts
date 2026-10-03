@@ -741,6 +741,10 @@ describe('web UI actions', () => {
     expect((await post('/api/actions/stop', { mode: 'sometime' })).status).toBe(400);
     expect((await post('/api/actions/stop', { mode: 'after-iteration' })).status).toBe(200);
     expect(readStopRequest(resolve(root, '.ralph'))).toEqual({ mode: 'after-iteration' });
+    const parked = await post('/api/actions/stop', { mode: 'park' });
+    expect(parked.status).toBe(200);
+    expect(parked.body.message).toMatch(/^Ralph parks/);
+    expect(readStopRequest(resolve(root, '.ralph'))).toEqual({ mode: 'park' });
 
     writeFileSync(resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json'), JSON.stringify({ runId: LIVE_RUN, status: 'complete', pid: process.pid, hostname: hostname() }));
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(409);

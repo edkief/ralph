@@ -7,6 +7,7 @@ import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
+import { commitParkedWork, commitRecords, journalDir } from './records.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
@@ -65,6 +66,9 @@ export interface RunResult {
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
  * A stop request left in the Ralph folder (by the web UI) does the same.
+ * Aborting `park` (or a park request in the folder) stops as well, but first
+ * has the agent wrap up and hand off at once; then the work left uncommitted
+ * is committed and the branch pushed, whatever `git.push` says.
  */
 export async function runLoop(args: LoopArgs): Promise<RunResult> {
   const { config, logger } = args;
@@ -105,6 +109,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
   // The web UI asks for a stop through a file, as it may be another process.
   const stopLater = new AbortController();
   const stopNow = new AbortController();
+  const parkNow = new AbortController();
   const stopWatch = setInterval(() => {
     const request = readStopRequest(ralphRoot);
     if (!request) return;
@@ -112,6 +117,9 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     if (request.mode === 'now') {
       logger.warn('stop requested: stopping now, interrupting the current iteration');
       stopNow.abort();
+    } else if (request.mode === 'park') {
+      if (!parkNow.signal.aborted) logger.warn('park requested: handing off, then committing and pushing the work');
+      parkNow.abort();
     } else if (!stopLater.signal.aborted) {
       logger.warn('stop requested: stopping after the current iteration');
     }
@@ -121,6 +129,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     ...args,
     signal: AbortSignal.any([args.signal, stopNow.signal]),
     stop: AbortSignal.any([...(args.stop ? [args.stop] : []), stopLater.signal]),
+    park: AbortSignal.any([...(args.park ? [args.park] : []), parkNow.signal]),
   };
 
   try {
@@ -152,6 +161,8 @@ interface LoopArgs {
   reporter: ConsoleReporter;
   signal: AbortSignal;
   stop?: AbortSignal;
+  /** Hand the project over: wrap up and hand off now, stop, commit the work and push. */
+  park?: AbortSignal;
   /** How often to look for answers and stop requests; for tests. */
   pollMs?: number;
   /**
@@ -168,7 +179,9 @@ async function loop(
   saveState: (patch: Partial<RunState>) => void,
 ): Promise<RunResult> {
   const { config, client, logger, reporter, signal } = args;
-  const stop = args.stop ?? new AbortController().signal;
+  const park = args.park ?? new AbortController().signal;
+  // A park is a stop that also hands off.
+  const stop = AbortSignal.any([...(args.stop ? [args.stop] : []), park]);
   // Waits between iterations end early for either request.
   const pause = AbortSignal.any([signal, stop]);
   const tasks = TaskStore.forProject(config.projectRoot, config.ralphDir);
@@ -228,8 +241,13 @@ async function loop(
   const cutShortByTask = new Map<string, StallCause[]>();
   // Tasks attempted again on the split agent's advice, which each may be once.
   const retriedTasks = new Set<string>();
-  // Handoff notes are how a task resumes, not progress on it.
-  const notProgress = [handoffDir(config.ralphDir), assessDir(config.ralphDir)];
+  // Handoffs are how a task resumes, the journal what Ralph saw and decisions what people said: none is progress.
+  const notProgress = [
+    handoffDir(config.ralphDir),
+    assessDir(config.ralphDir),
+    journalDir(config.ralphDir),
+    `${config.ralphDir.replace(/\/+$/, '')}/decisions.jsonl`,
+  ];
 
   /**
    * Have a person settle a stall or a proposed split, any number of times: they
@@ -267,6 +285,8 @@ async function loop(
   // Commits the loop has not yet published. A failed push leaves this set,
   // so the next push attempt (or the one at run end) catches up.
   let unpushed = false;
+  // The task last worked on, which work left behind by a park belongs to.
+  let lastTaskId: string | null = null;
   let iteration = 0;
   let budget = config.maxIterations;
   let finalStatus: RunResult['status'] = 'max-iterations';
@@ -298,13 +318,14 @@ async function loop(
 
     if (stop.aborted) {
       finalStatus = 'stopped';
-      message = `Stopped on request after ${iteration - 1} iteration${iteration === 2 ? '' : 's'}`;
+      message = `${park.aborted ? 'Parked' : 'Stopped on request'} after ${iteration - 1} iteration${iteration === 2 ? '' : 's'}`;
       iteration -= 1;
       break;
     }
 
     const next = summary.next;
     const taskId = next.id;
+    lastTaskId = taskId;
     const handoffFile = handoffPath(config.projectRoot, config.ralphDir, taskId);
 
     if (shouldAssess(config, next)) {
@@ -341,7 +362,7 @@ async function loop(
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
 
     const { result, cutShort, handoff } = await attemptIteration({
-      args: { client, config, logger, reporter, signal, stop },
+      args: { client, config, logger, reporter, signal, stop, park },
       recorder,
       iteration,
       // Built per attempt, so a retry sees the handoff the failed one left.
@@ -397,6 +418,10 @@ async function loop(
     }
 
     if (delta.committed) unpushed = true;
+    // After the snapshot, so Ralph's own commit is never taken for the agent's progress.
+    if (config.git.records === 'iteration' && (await commitRunRecords(config, logger, runId, { iteration }))) {
+      unpushed = true;
+    }
     if (config.git.push === 'iteration' && unpushed) {
       unpushed = !(await publish(config, logger, { iteration }));
     }
@@ -474,10 +499,6 @@ async function loop(
     }
   }
 
-  if (config.git.push !== 'never' && unpushed && !signal.aborted) {
-    await publish(config, logger, {});
-  }
-
   const finalSummary = tasks.reload();
 
   // The budget may run out on an iteration that finished the backlog; judge
@@ -497,7 +518,59 @@ async function loop(
     message,
   };
   recorder.recordSummary(runResult);
+  saveState({
+    status: runResult.status,
+    tasksPassed: runResult.tasksPassed,
+    tasksTotal: runResult.tasksTotal,
+    message: runResult.message,
+    pending: null,
+  });
+
+  if (park.aborted && !signal.aborted && (await commitParked(config, logger, lastTaskId))) unpushed = true;
+  // Whatever ended the run: the records are what the next one resumes from, wherever it runs.
+  if (config.git.records !== 'never' && (await commitRunRecords(config, logger, runId, {}))) unpushed = true;
+  // A park is for picking the work up elsewhere: it pushes whatever git.push says.
+  if (((config.git.push !== 'never' && unpushed) || park.aborted) && !signal.aborted) {
+    await publish(config, logger, {});
+  }
   return runResult;
+}
+
+/** Commit what a parked run left uncommitted, logging the outcome. Whether a commit was made. */
+async function commitParked(config: Config, logger: Logger, taskId: string | null): Promise<boolean> {
+  const result = await commitParkedWork({
+    projectRoot: config.projectRoot,
+    ralphDir: config.ralphDir,
+    subject: `wip(${taskId ?? 'ralph'}): parked`,
+  });
+  if (result.error) logger.warn('could not commit the parked work', { error: result.error });
+  else if (result.committed) logger.info('committed the work left uncommitted', { task: taskId ?? 'none' });
+  if (result.untracked.length > 0) {
+    logger.warn('untracked files left out of the commit; commit them yourself if they matter', {
+      files: result.untracked.slice(0, 10).join(', ') + (result.untracked.length > 10 ? ` and ${result.untracked.length - 10} more` : ''),
+    });
+  }
+  return result.committed;
+}
+
+/** Commit Ralph's records for the run, logging the outcome. Whether a commit was made. */
+async function commitRunRecords(
+  config: Config,
+  logger: Logger,
+  runId: string,
+  context: { iteration?: number },
+): Promise<boolean> {
+  const subject =
+    context.iteration !== undefined
+      ? `chore(ralph): record run ${runId}, iteration ${context.iteration}`
+      : `chore(ralph): record run ${runId}`;
+  const result = await commitRecords({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, subject, runId });
+  if (result.error) {
+    logger.warn('could not commit Ralph\'s records', { ...context, error: result.error });
+  } else if (result.committed) {
+    logger.info('committed Ralph\'s records', { ...context, files: result.files.length });
+  }
+  return result.committed;
 }
 
 /** Decisions shown to the agent: the latest ones, as old ones are in the code by now. */
@@ -519,6 +592,7 @@ async function attemptIteration(context: {
     reporter: ConsoleReporter;
     signal: AbortSignal;
     stop: AbortSignal;
+    park: AbortSignal;
   };
   recorder: RunRecorder;
   iteration: number;
@@ -529,7 +603,7 @@ async function attemptIteration(context: {
   /** Attempts that may still run out of time or context before the task is given up on. */
   cutShortLeft: number;
 }): Promise<{ result: IterationResult; cutShort: StallCause[]; handoff?: 'agent' | 'fallback' }> {
-  const { client, config, logger, reporter, signal, stop } = context.args;
+  const { client, config, logger, reporter, signal, stop, park } = context.args;
   const handoffShown = display(config, context.handoffFile);
   let attempt = 0;
   const cutShort: StallCause[] = [];
@@ -556,6 +630,7 @@ async function attemptIteration(context: {
                   wrapUpMs: config.timeouts.wrapUpMs,
                 }),
             },
+            park,
           }
         : {}),
       hooks: {
@@ -568,9 +643,11 @@ async function attemptIteration(context: {
     });
 
     handoff = undefined;
+    // Parked by a person: handed off, but not a sign the task is too big.
+    const parked = result.wrapUp?.trigger === 'park';
     const cause = stallCause(result);
-    if (cause) {
-      cutShort.push(cause);
+    if (cause) cutShort.push(cause);
+    if (cause || parked) {
       handoff = await ensureHandoff({
         path: context.handoffFile,
         projectRoot: config.projectRoot,
@@ -579,7 +656,7 @@ async function attemptIteration(context: {
         since,
         sinceHead: context.sinceHead,
         reason: result.error ?? result.status,
-        cutShortBy: ranOutOf(cause),
+        cutShortBy: cause ? ranOutOf(cause) : 'park',
         agentText: result.text,
       });
       logger.info(handoff === 'agent' ? 'agent left a handoff' : 'agent left no handoff; wrote one from what the loop saw', {
@@ -616,6 +693,7 @@ async function attemptIteration(context: {
 /** What cut an attempt short before it finished its task, if anything did. */
 function stallCause(result: IterationResult): StallCause | undefined {
   if (result.status === 'context-overflow') return 'context';
+  if (result.wrapUp?.trigger === 'park') return undefined;
   if (result.status !== 'wrapped-up' && result.status !== 'timeout') return undefined;
   return (result.wrapUp?.trigger ?? result.trip) === 'inactivity' ? 'inactivity' : 'iteration-timeout';
 }

@@ -27,6 +27,9 @@ Complete those items in sequence and remove them from the file when done.
   `<promise>TASK-{ID}:DONE</promise>` and **stop immediately**.
 - Kill any background processes you started before finishing.
 - No `git push`, no changes to git remotes.
+- Keep evidence worth keeping (a screenshot of the finished screen, a short report) in
+  `{{RALPH_DIR}}/artifacts/TASK-${ID}/` and commit it with the task. Keep it small: final shots,
+  not every step. Scratch output, such as a browser tool's own folder, does not belong in git.
 - When **every** task passes, output `<promise>COMPLETE</promise>` and nothing else.
 
 ## Help Tags

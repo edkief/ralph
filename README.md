@@ -30,8 +30,10 @@ ralph init -m anthropic/claude-x  # plan with a different model than the loop us
 ```
 
 First it scaffolds: it creates `.ralph/` from `templates/`, writes `ralph.config.json` at the
-project root and adds `.ralph/history/` to `.gitignore`. Scaffolding never overwrites a file,
-so running it again is harmless.
+project root, adds `.ralph/history/` and `.playwright-mcp/` to `.gitignore`, and has
+`.gitattributes` merge `.ralph/**/*.jsonl` as a union, so two machines appending to the same
+record keep both sides' lines. Scaffolding never overwrites a file or removes a line, so
+running it again is harmless.
 
 Then, in a terminal, it starts an interview with the configured opencode agent:
 
@@ -81,6 +83,7 @@ ralph respond answer "REST" # answer it, as the web UI does
 ralph daemon --detach      # stay up in the background, running batches on request
 ralph daemon run -n 5       # have it run 5 iterations
 ralph daemon pause          # stop its batch after the current iteration
+ralph stop --park           # hand the project over: hand off, commit and push
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -88,7 +91,9 @@ ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 Without `npm link`, substitute `node ~/Dev/ralph/dist/cli.js`.
 
 Start with `ralph doctor`. It reports every check it makes and runs no model, so it costs
-nothing to get wrong.
+nothing to get wrong. It also warns about anything another machine would not get from the
+repository: uncommitted files in `.ralph/` (bar its history), commits not pushed to the
+upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
 
 ### Exit codes
 
@@ -206,7 +211,8 @@ next run, `dismiss` closes the request. Then run `ralph` again.
 
 Whatever you write (an answer, a note) is appended to `.ralph/decisions.jsonl` and the latest
 20 entries are shown to the agent at the top of every later prompt, in this run and the next,
-as decided. Commit the file with the project if the answers should outlive the checkout.
+as decided. Ralph commits the file with its other [records](#carrying-on-from-another-machine),
+and an answer given with no run waiting is committed straight away.
 
 ### Stopping a run
 
@@ -215,6 +221,8 @@ At a terminal, press Enter for a menu:
 - `s` lets the current iteration finish, pushes its commits if `git.push` is set, and exits
   before starting another.
 - `q` interrupts the iteration and stops now; its work is left uncommitted in the working tree.
+- `h` parks the run, to [carry on elsewhere](#carrying-on-from-another-machine): the agent
+  hands off at once, then its work is committed and pushed.
 - When Ralph is [waiting for a person](#when-ralph-needs-a-person), the menu also takes the
   answer: approve a split or ask for another, answer a question, carry on past the budget.
 - Enter or Esc closes it. Log lines wait while it is open, and it closes by itself after a
@@ -229,8 +237,16 @@ The opencode server Ralph starts is its child, in its process group, and stops w
 includes a Ralph that is killed or crashes: a small guard process notices and stops the server
 within `server.shutdownTimeoutMs`, so nothing is left to clean up before the next run.
 
-The web UI's Overview has a button for each while a run is in progress. They leave a request
-in `.ralph/history/stop.json`, which the loop picks up within a second.
+The web UI's Overview has a button for each while a run is in progress, and so does `ralph stop`
+from another terminal:
+
+```bash
+ralph stop          # after the current iteration
+ralph stop --now    # now, interrupting the iteration
+ralph stop --park   # park: hand off, commit and push
+```
+
+Both leave a request in `.ralph/history/stop.json`, which the loop picks up within a second.
 
 ### Daemon mode
 
@@ -246,6 +262,7 @@ ralph daemon --start -n 20   # run a first batch of 20 at once, then go idle
 ralph daemon run -n 5        # have the daemon run 5 iterations (default: its -n, then maxIterations)
 ralph daemon pause           # stop the batch after the current iteration
 ralph daemon pause --now     # stop it now, interrupting the iteration
+ralph daemon pause --park    # park it: hand off, commit and push
 ralph daemon status          # what the daemon and its latest run are doing
 ralph daemon shutdown        # stop any batch now, and exit
 ```
@@ -280,11 +297,13 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   prd/PRD.md       # optional — what the project is for
   STEERING.md      # optional — work to do before feature tasks
   logs/LOG.md      # optional — the agent's own running log
-  handoff/         # written when a task runs out of time; commit it with the work
+  handoff/         # written when a task runs out of time or is parked
   split/           # proposed and applied splits of tasks that were too big
   assess/          # the estimate of each task assessed before its first attempt
   decisions.jsonl  # what a person answered or noted; shown to the agent in later prompts
-  history/         # written by ralph; ignore it in git
+  artifacts/       # evidence the agent keeps, by task: screenshots, short reports
+  journal/         # what each run did, committed by ralph
+  history/         # written by ralph for this machine; ignore it in git
 ralph.config.json  # optional
 ```
 
@@ -363,6 +382,7 @@ See `templates/ralph.config.json` for a complete file.
   },
   "git": {
     "push": "never",               // never | iteration (after each commit) | end (once, when the run finishes)
+    "records": "end",              // when Ralph commits its records: end (of a run) | iteration | never
     "remote": "origin"
   },
   "server": { "url": "http://opencode:4096" }, // attach instead of spawning
@@ -388,7 +408,7 @@ server's default until you choose one.
 
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
-`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
 `RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`.
 
 Console lines are stamped with the local time, and the banner records the start date and
@@ -593,6 +613,59 @@ In `propose` mode with nobody waiting, the run stops with the proposal in `.ralp
 Apply it with `ralph split TASK-8 --apply` before the next run, which would otherwise attempt
 the task as it is; `ralph doctor` warns about it.
 
+## Carrying on from another machine
+
+Everything a run resumes from is in git, so work stopped on one machine carries on on
+another after a `git pull`. The agent commits its work as it goes; Ralph commits the rest.
+
+**Ralph's records** are `decisions.jsonl`, `handoff/`, `assess/`, `split/`, `journal/` and
+`artifacts/` in the Ralph folder. Ralph commits them, and nothing else, as
+`chore(ralph): record run <runId>`:
+
+- once a run ends, however it ends, before the push at its end (`git.records: "end"`, the
+  default);
+- or after every iteration as well (`"iteration"`), so a machine that dies mid-run loses
+  little. The commit comes after the iteration's checks, so it never counts as its progress;
+- or never (`"never"`), as before.
+
+The commit is pushed with the run's own commits when `git.push` is set. An answer given while
+no run waits for it is committed at once.
+
+**The journal**, `.ralph/journal/<runId>/`, is what the web UI shows of a run on any machine.
+`history/` cannot travel: its event streams grow with every iteration, and its control files
+(`stop.json`, `pending.json`, `daemon.json`, a `state.json` with a pid) would act on another
+machine. The journal mirrors a run without them: `run.json`, `iterations.jsonl`, `splits.jsonl`,
+`actions.jsonl`, the log from `info` up, `state.json` without pid and host, and a condensed
+transcript per iteration and split turn, with long text and tool output cut and each file kept
+under 256 KB. The UI lists runs from both places, prefers the history where it has one, and
+never shows a journal-only run as live.
+
+**Artifacts.** The prompt template asks the agent to keep evidence worth keeping (a screenshot
+of the finished screen, a short report) in `.ralph/artifacts/<task>/` and commit it with the
+task; the Files tab shows the pictures. Browser tools' own scratch folders, such as
+`.playwright-mcp/`, stay out of git. Keep artifacts small; past 25 MB `ralph doctor` warns, and
+Git LFS is the way to keep more.
+
+**Parking** hands a project over in one step: `ralph stop --park`, `h` in the terminal menu,
+`ralph daemon pause --park`, or **Park** in the web UI.
+
+1. In an iteration, the agent gets the wrap-up prompt at once: commit the work as
+   `wip(TASK-x): …` and write the handoff. If it leaves no complete handoff, Ralph writes one,
+   as when time runs out, but a park does not count towards the task's
+   [stall limit](#running-out-of-time). Waiting for a person or between iterations, the run
+   just stops. With `timeouts.wrapUpMs` at 0, the iteration finishes first.
+2. What is still uncommitted is committed as `wip(TASK-x): parked`: changes to tracked files,
+   and new files in the Ralph folder. Untracked files elsewhere (a stray `.env`, say) are left
+   alone and listed in the log.
+3. Ralph's records are committed and the branch is pushed, whatever `git.push` says. A failed
+   push is logged; the run still ends `stopped`.
+
+With nothing running, `ralph stop --park` commits Ralph's records and pushes; work left
+uncommitted outside them stays as it is.
+
+On the other machine: `git pull`, then `ralph`. The next attempt at the task resumes from its
+handoff, with the decisions in its prompt.
+
 ## Run artefacts
 
 Each run writes to the project's `.ralph/history/<runId>/`:
@@ -609,7 +682,8 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 - `actions.jsonl` — what a person answered, from the web UI or `ralph respond`
 - `run.json` — the run summary, once the run ends
 
-The web UI reads all of these, so it needs nothing else from the loop. Beside the runs,
+The web UI reads all of these, so it needs nothing else from the loop. What of them travels
+in git is in the [journal](#carrying-on-from-another-machine). Beside the runs,
 `history/pending.json` holds what Ralph is asking a person while it asks, and
 `history/answer.json` and `history/stop.json` carry an answer or a stop request to the loop.
 

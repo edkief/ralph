@@ -20,7 +20,13 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['ralph.config.json', 'ralph.config.json'],
 ];
 
-const GITIGNORE_ENTRY = `${RALPH_DIR}/history/`;
+/**
+ * Ralph's run history (raw event streams and files that steer a live
+ * process), and the scratch output of browser tools agents test with.
+ */
+const GITIGNORE_ENTRIES = [`${RALPH_DIR}/history/`, '.playwright-mcp/'];
+/** Two machines appending to the same record merge by keeping both sides' lines. */
+const GITATTRIBUTES_ENTRIES = [`${RALPH_DIR}/**/*.jsonl merge=union`];
 
 export type ScaffoldResult =
   | { status: 'scaffolded'; created: string[]; updated: string[]; skipped: string[] }
@@ -57,22 +63,36 @@ export function scaffold(projectRoot: string, templatesDir = TEMPLATES_DIR): Sca
     created.push(destination);
   }
 
-  const gitignore = resolve(root, '.gitignore');
-  if (!existsSync(gitignore)) {
-    writeFileSync(gitignore, `${GITIGNORE_ENTRY}\n`);
-    created.push('.gitignore');
-  } else {
-    const content = readFileSync(gitignore, 'utf8');
-    if (ignores(content, GITIGNORE_ENTRY)) {
-      skipped.push('.gitignore');
-    } else {
-      const separator = content === '' || content.endsWith('\n') ? '' : '\n';
-      writeFileSync(gitignore, `${content}${separator}${GITIGNORE_ENTRY}\n`);
-      updated.push('.gitignore');
-    }
+  for (const [file, entries, has] of [
+    ['.gitignore', GITIGNORE_ENTRIES, ignores],
+    ['.gitattributes', GITATTRIBUTES_ENTRIES, attributes],
+  ] as const) {
+    const outcome = addLines(resolve(root, file), entries, has);
+    ({ created, updated, skipped })[outcome].push(file);
   }
 
   return { status: 'scaffolded', created, updated, skipped };
+}
+
+/**
+ * Add the lines `content` lacks to the end of `path`, creating it if need be.
+ * Never removes or reorders a line.
+ */
+function addLines(
+  path: string,
+  entries: readonly string[],
+  has: (content: string, entry: string) => boolean,
+): 'created' | 'updated' | 'skipped' {
+  if (!existsSync(path)) {
+    writeFileSync(path, `${entries.join('\n')}\n`);
+    return 'created';
+  }
+  const content = readFileSync(path, 'utf8');
+  const missing = entries.filter((entry) => !has(content, entry));
+  if (missing.length === 0) return 'skipped';
+  const separator = content === '' || content.endsWith('\n') ? '' : '\n';
+  writeFileSync(path, `${content}${separator}${missing.join('\n')}\n`);
+  return 'updated';
 }
 
 /** Whether a .gitignore already lists the entry, allowing for a leading or missing trailing slash. */
@@ -80,4 +100,11 @@ function ignores(content: string, entry: string): boolean {
   const normalise = (line: string) => line.trim().replace(/^\//, '').replace(/\/$/, '');
   const wanted = normalise(entry);
   return content.split(/\r?\n/).some((line) => normalise(line) === wanted);
+}
+
+/** Whether a .gitattributes already sets attributes for the entry's pattern, whichever they are. */
+function attributes(content: string, entry: string): boolean {
+  const pattern = (line: string) => line.trim().split(/\s+/)[0]?.replace(/^\//, '');
+  const wanted = pattern(entry);
+  return content.split(/\r?\n/).some((line) => pattern(line) === wanted);
 }

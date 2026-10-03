@@ -6,6 +6,7 @@ import { TASK_ID } from '../init/plan.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
 import { daemonLive, readDaemonState } from '../daemon/control.js';
 import { LineTailer, parseJsonLines } from './tail.js';
+import { readJournalTranscript } from '../report/journal.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
@@ -52,7 +53,7 @@ export const LOG_TAIL_BYTES = 4 * 1024 * 1024;
 const STALE_MS = 15 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
-const EVENTS_FILE = /^iteration-(\d+)\.events\.jsonl$/;
+const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
 
 export class NotFoundError extends Error {}
 
@@ -68,6 +69,8 @@ function imageType(path: string): string | undefined {
 export class RalphProject {
   readonly ralphRoot: string;
   readonly historyRoot: string;
+  /** Runs as committed, for those whose history is on another machine. */
+  readonly journalRoot: string;
 
   constructor(
     readonly projectRoot: string,
@@ -75,6 +78,7 @@ export class RalphProject {
   ) {
     this.ralphRoot = resolve(projectRoot, ralphDir);
     this.historyRoot = resolve(this.ralphRoot, 'history');
+    this.journalRoot = resolve(this.ralphRoot, 'journal');
   }
 
   status(): StatusView {
@@ -174,13 +178,21 @@ export class RalphProject {
     return this.runIds().map((runId) => this.run(runId));
   }
 
+  /** Runs in the history and in the journal, which has those run elsewhere. */
   private runIds(): string[] {
-    if (!existsSync(this.historyRoot)) return [];
-    return readdirSync(this.historyRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && RUN_ID.test(entry.name))
-      .map((entry) => entry.name)
-      .sort()
-      .reverse();
+    const ids = new Set<string>();
+    for (const root of [this.historyRoot, this.journalRoot]) {
+      if (!existsSync(root)) continue;
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory() && RUN_ID.test(entry.name)) ids.add(entry.name);
+      }
+    }
+    return [...ids].sort().reverse();
+  }
+
+  /** Whether all there is of a run is its journal: it ran on another machine, or its history was removed. */
+  private journalOnly(runId: string): boolean {
+    return !existsSync(resolve(this.historyRoot, runId));
   }
 
   run(runId: string): RunView {
@@ -195,7 +207,8 @@ export class RalphProject {
       return {
         runId,
         status: state.status,
-        live: (state.status === 'running' || state.status === 'waiting') && this.isAlive(state, dir),
+        live:
+          (state.status === 'running' || state.status === 'waiting') && !this.journalOnly(runId) && this.isAlive(state, dir),
         startedAt: state.startedAt,
         updatedAt: state.updatedAt,
         maxIterations: state.maxIterations,
@@ -285,18 +298,22 @@ export class RalphProject {
 
   transcript(runId: string, iteration: number): TranscriptEntry[] {
     const path = this.eventsPath(runId, iteration);
-    if (!existsSync(path)) throw new NotFoundError(`No events for iteration ${iteration} of run ${runId}`);
-    return transcriptOf(path);
+    if (existsSync(path)) return transcriptOf(path);
+    const journal = journalTranscriptPath(path);
+    if (!existsSync(journal)) throw new NotFoundError(`No events for iteration ${iteration} of run ${runId}`);
+    return readJournalTranscript(journal);
   }
 
   /** The transcript of the turn that proposed splitting `taskId`. */
   splitTranscript(runId: string, taskId: string): TranscriptEntry[] {
     const path = this.splitEventsPath(runId, taskId);
-    if (!existsSync(path)) throw new NotFoundError(`No split of ${taskId} in run ${runId}`);
-    return transcriptOf(path);
+    if (existsSync(path)) return transcriptOf(path);
+    const journal = journalTranscriptPath(path);
+    if (!existsSync(journal)) throw new NotFoundError(`No split of ${taskId} in run ${runId}`);
+    return readJournalTranscript(journal);
   }
 
-  /** The highest iteration with an event file, 0 before the first. */
+  /** The highest iteration with an event file (or a journal transcript), 0 before the first. */
   latestIteration(runId: string): number {
     let latest = 0;
     for (const name of safeReaddir(this.runDir(runId))) {
@@ -306,11 +323,14 @@ export class RalphProject {
     return latest;
   }
 
+  /** The run's folder in the history, or else in the journal. */
   runDir(runId: string): string {
     if (!RUN_ID.test(runId)) throw new NotFoundError(`No run ${runId}`);
-    const dir = resolve(this.historyRoot, runId);
-    if (!existsSync(dir)) throw new NotFoundError(`No run ${runId}`);
-    return dir;
+    for (const root of [this.historyRoot, this.journalRoot]) {
+      const dir = resolve(root, runId);
+      if (existsSync(dir)) return dir;
+    }
+    throw new NotFoundError(`No run ${runId}`);
   }
 
   logPath(runId: string): string {
@@ -327,8 +347,8 @@ export class RalphProject {
   }
 
   /**
-   * The Ralph folder's files, without its history (which the UI shows as
-   * runs), plus the project's ralph.config.json.
+   * The Ralph folder's files, without its history and journal (which the UI
+   * shows as runs), plus the project's ralph.config.json.
    */
   listFiles(): FileEntry[] {
     const files: FileEntry[] = [];
@@ -336,7 +356,7 @@ export class RalphProject {
       for (const entry of safeReaddir(dir).sort()) {
         if (files.length >= MAX_FILES) return;
         const path = resolve(dir, entry);
-        if (path === this.historyRoot) continue;
+        if (path === this.historyRoot || path === this.journalRoot) continue;
         const target = this.inside(path);
         if (!target) continue;
         const stat = statSync(target, { throwIfNoEntry: false });
@@ -352,7 +372,7 @@ export class RalphProject {
     return files;
   }
 
-  /** A listed file's content. Anything else, and anything under history/, is not found. */
+  /** A listed file's content. Anything else, and anything under history/ or journal/, is not found. */
   readFile(path: string): FileContent {
     const listed = this.listFiles().find((file) => file.path === path);
     if (!listed) throw new NotFoundError(`No file ${path}`);
@@ -460,6 +480,11 @@ function transcriptOf(path: string): TranscriptEntry[] {
     if (!read.more) break;
   }
   return builder.all;
+}
+
+/** Where the journal keeps the condensed transcript of an event file. */
+function journalTranscriptPath(eventsPath: string): string {
+  return eventsPath.replace(/\.events\.jsonl$/, '.transcript.jsonl');
 }
 
 function readJson<T>(path: string): T | undefined {

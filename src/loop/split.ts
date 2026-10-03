@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { runIteration, type IterationHooks } from './iteration.js';
 import { handoffPath, readHandoff } from './handoff.js';
 import { restrictWrites } from './permissions.js';
+import { commitPaths } from './records.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { checkSpec, readTemplate, TASK_ID } from '../init/plan.js';
 import { TEMPLATES_DIR } from '../init/scaffold.js';
@@ -301,28 +302,6 @@ export async function applySplit(args: {
 export function describeIds(ids: string[]): string {
   if (ids.length <= 2) return ids.join(' and ');
   return `${ids[0]}–${ids[ids.length - 1]}`;
-}
-
-/** Stage and commit just these paths; returns why that failed, if it did. */
-async function commitPaths(cwd: string, paths: string[], message: string): Promise<string | undefined> {
-  try {
-    await run('git', ['rev-parse', '--git-dir'], { cwd });
-  } catch {
-    return 'not a git repository';
-  }
-  try {
-    // A moved file that was never tracked matches nothing and would fail the whole add.
-    const known: string[] = [];
-    for (const path of paths) {
-      if (existsSync(resolve(cwd, path)) || (await git(cwd, ['ls-files', '--', path])) !== '') known.push(path);
-    }
-    await run('git', ['add', '-A', '--', ...known], { cwd });
-    await run('git', ['commit', '-q', '-m', message, '--only', '--', ...known], { cwd });
-    return undefined;
-  } catch (cause) {
-    const error = cause as Error & { stderr?: string };
-    return (error.stderr || error.message).trim().split('\n')[0];
-  }
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
