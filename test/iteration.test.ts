@@ -192,6 +192,38 @@ describe('runIteration', () => {
     expect(server?.replies).toEqual([{ requestID: 'per_child', reply: 'once' }]);
   });
 
+  it('interrupts the session when the turn is stopped from outside, as the server may outlive it', async () => {
+    server = await startFakeServer({ script: [{ after: 30_000, type: 'session.execution.succeeded' }] });
+    const client = new OpencodeClient({ baseUrl: server.url });
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 300);
+    const result = await runIteration({ client, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
+
+    expect(result.status).toBe('interrupted');
+    expect(server.interrupted).toEqual(['ses_fake_1']);
+  });
+
+  it('interrupts the subagents a stopped turn started, too', async () => {
+    server = await startFakeServer({
+      script: [
+        { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_fake_1' } },
+        { after: 30_000, type: 'session.execution.succeeded' },
+      ],
+    });
+    const client = new OpencodeClient({ baseUrl: server.url });
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 300);
+    await runIteration({ client, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
+
+    expect([...server.interrupted].sort()).toEqual(['ses_child', 'ses_fake_1']);
+  });
+
+  it('does not interrupt a turn whose execution ended on its own', async () => {
+    await iterate({ script: [{ type: 'session.execution.succeeded' }] }, config());
+
+    expect(server?.interrupts).toBe(0);
+  });
+
   it('finds a subagent by looking up its session when the event omits the parent', async () => {
     const seen: string[] = [];
     server = await startFakeServer({

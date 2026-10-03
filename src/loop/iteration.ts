@@ -141,6 +141,9 @@ export async function runIteration(args: {
   let permissionFailure: string | undefined;
   let compactions = 0;
   let sessionId = '';
+  // Whether opencode reported the turn's execution over. Until it does, the
+  // agent is still at work on the server.
+  let executionEnded = false;
   // Subagents run in child sessions. Their work keeps the iteration alive and
   // their permission requests need answers, but their text, tools and
   // completion are not the iteration's own.
@@ -331,6 +334,7 @@ export async function runIteration(args: {
           executionError = `execution ${event.type.split('.').pop()}`;
         }
         if (wrapUp.state) wrapUp.state.completed = !executionError;
+        executionEnded = true;
         break;
       }
     }
@@ -341,11 +345,22 @@ export async function runIteration(args: {
     clearInterval(timer);
     signal.removeEventListener('abort', onOuterAbort);
     streamAbort.abort();
-    if ((trip || permissionFailure) && sessionId) {
-      await client.interrupt(sessionId).catch((cause: unknown) => {
-        // The session may still be running and competing with the retry.
-        logger.warn('interrupt failed', { sessionId, error: (cause as Error).message });
-      });
+    // However the turn ended early (a watchdog, a permission reply that never
+    // landed, a stop, a broken stream), stop the agent too: closing the stream
+    // does not, and a daemon's or an attached server outlives the turn.
+    if (sessionId && !executionEnded) {
+      await Promise.all([
+        client.interrupt(sessionId).catch((cause: unknown) => {
+          // The session may still be running and competing with the retry.
+          logger.warn('interrupt failed', { sessionId, error: (cause as Error).message });
+        }),
+        ...[...subagentSessions].map((id) =>
+          client.interrupt(id).catch((cause: unknown) => {
+            // It may well have finished already.
+            logger.debug('subagent interrupt failed', { sessionId: id, error: (cause as Error).message });
+          }),
+        ),
+      ]);
     }
   }
 

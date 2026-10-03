@@ -32,6 +32,8 @@ export interface FakeServer {
   /** Reply requests received, accepted or not. */
   replyAttempts: number;
   interrupts: number;
+  /** The session each interrupt was for, in order. */
+  interrupted: string[];
   sessionsCreated: number;
   prompts: Array<Record<string, unknown>>;
   close(): Promise<void>;
@@ -47,6 +49,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     replies: [] as Array<{ requestID: string; reply: string }>,
     replyAttempts: 0,
     interrupts: 0,
+    interrupted: [] as string[],
     sessionsCreated: 0,
     prompts: [] as Array<Record<string, unknown>>,
     listeners: new Set<ServerResponse>(),
@@ -117,6 +120,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
 
     if (path.endsWith('/interrupt') && req.method === 'POST') {
       state.interrupts += 1;
+      state.interrupted.push(path.split('/').at(-2) ?? '');
       state.generation += 1;
       json(res, {});
       // Like the real server: the running execution ends as aborted.
@@ -180,6 +184,9 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     },
     get interrupts() {
       return state.interrupts;
+    },
+    get interrupted() {
+      return state.interrupted;
     },
     get sessionsCreated() {
       return state.sessionsCreated;

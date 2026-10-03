@@ -247,6 +247,9 @@ ralph stop --park   # park: hand off, commit and push
 ```
 
 Both leave a request in `.ralph/history/stop.json`, which the loop picks up within a second.
+Stopping now interrupts the agent's session (and any subagents) on the opencode server, so
+nothing carries on working where an opencode server outlives the run: under a
+[daemon](#daemon-mode), or attached with `server.url`.
 
 ### Daemon mode
 
