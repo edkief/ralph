@@ -115,6 +115,7 @@ export async function changedFiles(cwd: string, paths: string[]): Promise<string
 /** Stage and commit just these paths; returns why that failed, if it did. */
 export async function commitPaths(cwd: string, paths: string[], message: string): Promise<string | undefined> {
   if (!(await isRepository(cwd))) return 'not a git repository';
+  let staged: string[] = [];
   try {
     // A moved file that was never tracked matches nothing and would fail the whole add.
     const known: string[] = [];
@@ -123,9 +124,17 @@ export async function commitPaths(cwd: string, paths: string[], message: string)
     }
     if (known.length === 0) return 'nothing to commit';
     await run('git', ['add', '-A', '--', ...known], { cwd });
-    await run('git', ['commit', '-q', '-m', message, '--only', '--', ...known], { cwd });
+    // Commit the files staged, not the paths: a folder git has never tracked
+    // anything in passes the add but fails the commit. Deletions are listed,
+    // and a move under both its names.
+    const { stdout } = await run('git', ['diff', '--cached', '--name-only', '--no-renames', '-z', '--', ...known], { cwd });
+    staged = stdout.split('\0').filter((file) => file !== '');
+    if (staged.length === 0) return 'nothing to commit';
+    await run('git', ['commit', '-q', '-m', message, '--only', '--', ...staged], { cwd });
     return undefined;
   } catch (cause) {
+    // Left staged, the files would go in whatever commit comes next, the agent's included.
+    if (staged.length > 0) await git(cwd, ['reset', '-q', '--', ...staged]);
     const error = cause as Error & { stderr?: string };
     return (error.stderr || error.message).trim().split('\n')[0];
   }

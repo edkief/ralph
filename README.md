@@ -632,7 +632,9 @@ another after a `git pull`. The agent commits its work as it goes; Ralph commits
 - or never (`"never"`), as before.
 
 The commit is pushed with the run's own commits when `git.push` is set. An answer given while
-no run waits for it is committed at once.
+no run waits for it is committed at once. If the commit fails (a pre-commit hook says no, say),
+Ralph unstages the records again, so the agent's next commit doesn't take them, and the run's
+summary says why; commit them yourself.
 
 **The journal**, `.ralph/journal/<runId>/`, is what the web UI shows of a run on any machine.
 `history/` cannot travel: its event streams grow with every iteration, and its control files

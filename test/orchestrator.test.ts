@@ -1247,6 +1247,18 @@ describe("Ralph's records", () => {
     expect(existsSync(resolve(root, '.ralph', 'journal'))).toBe(false);
   });
 
+  it('says why when the records could not be committed, leaving nothing staged', async () => {
+    const root = tracked([{ id: 'TASK-1', passes: false }]);
+    writeFileSync(resolve(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho "hook says no" >&2\nexit 1\n', { mode: 0o755 });
+    writeDecision(root);
+
+    const result = await loop(root, config(root, { maxIterations: 1 }), { script: say('hi') });
+
+    expect(result).toMatchObject({ status: 'max-iterations', recordsError: 'hook says no' });
+    expect(git(root, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(git(root, 'diff', '--cached', '--name-only')).toBe('');
+  });
+
   it('commits after each iteration without taking the commit for progress', async () => {
     const root = tracked([{ id: 'TASK-1', passes: false }]);
 
