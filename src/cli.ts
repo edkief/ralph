@@ -393,6 +393,9 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
         `Tasks: ${result.tasksPassed}/${result.tasksTotal} passing`,
         `Iterations: ${result.iterations} · Total: ${formatDuration(Date.now() - startedAt)}`,
         `History: ${result.historyDir}`,
+        ...(result.recordsError
+          ? [`Ralph's records not committed: ${result.recordsError}. Commit ${config.ralphDir}/ yourself.`]
+          : []),
       ],
       summaryTone(result.status),
     );

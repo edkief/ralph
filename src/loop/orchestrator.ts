@@ -7,7 +7,7 @@ import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
-import { commitParkedWork, commitRecords, journalDir } from './records.js';
+import { commitParkedWork, commitRecords, journalDir, type RecordsCommit } from './records.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
@@ -39,6 +39,8 @@ export interface RunResult {
   tasksPassed: number;
   tasksTotal: number;
   message: string;
+  /** Why Ralph's records could not be committed when the run ended, if they could not. */
+  recordsError?: string;
 }
 
 /**
@@ -419,7 +421,7 @@ async function loop(
 
     if (delta.committed) unpushed = true;
     // After the snapshot, so Ralph's own commit is never taken for the agent's progress.
-    if (config.git.records === 'iteration' && (await commitRunRecords(config, logger, runId, { iteration }))) {
+    if (config.git.records === 'iteration' && (await commitRunRecords(config, logger, runId, { iteration })).committed) {
       unpushed = true;
     }
     if (config.git.push === 'iteration' && unpushed) {
@@ -528,7 +530,11 @@ async function loop(
 
   if (park.aborted && !signal.aborted && (await commitParked(config, logger, lastTaskId))) unpushed = true;
   // Whatever ended the run: the records are what the next one resumes from, wherever it runs.
-  if (config.git.records !== 'never' && (await commitRunRecords(config, logger, runId, {}))) unpushed = true;
+  if (config.git.records !== 'never') {
+    const records = await commitRunRecords(config, logger, runId, {});
+    if (records.committed) unpushed = true;
+    if (records.error) runResult.recordsError = records.error;
+  }
   // A park is for picking the work up elsewhere: it pushes whatever git.push says.
   if (((config.git.push !== 'never' && unpushed) || park.aborted) && !signal.aborted) {
     await publish(config, logger, {});
@@ -553,13 +559,13 @@ async function commitParked(config: Config, logger: Logger, taskId: string | nul
   return result.committed;
 }
 
-/** Commit Ralph's records for the run, logging the outcome. Whether a commit was made. */
+/** Commit Ralph's records for the run, logging the outcome. */
 async function commitRunRecords(
   config: Config,
   logger: Logger,
   runId: string,
   context: { iteration?: number },
-): Promise<boolean> {
+): Promise<RecordsCommit> {
   const subject =
     context.iteration !== undefined
       ? `chore(ralph): record run ${runId}, iteration ${context.iteration}`
@@ -570,7 +576,7 @@ async function commitRunRecords(
   } else if (result.committed) {
     logger.info('committed Ralph\'s records', { ...context, files: result.files.length });
   }
-  return result.committed;
+  return result;
 }
 
 /** Decisions shown to the agent: the latest ones, as old ones are in the code by now. */
