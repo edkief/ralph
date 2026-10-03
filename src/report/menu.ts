@@ -26,6 +26,8 @@ export interface MenuOptions {
   release(): void;
   stopAfterIteration(): void;
   stopNow(): void;
+  /** Hand the project over: the agent hands off, then the work is committed and pushed. */
+  park?(): void;
   /** What the loop is asking a person, if it is. */
   pending(): PendingState | undefined;
   /** Hand the loop an answer; resolves to what to tell the person. */
@@ -35,7 +37,7 @@ export interface MenuOptions {
 
 /**
  * The run's controls at a terminal. Enter opens a menu to stop the run, after
- * the current iteration or now, and to answer what the loop is waiting on;
+ * the current iteration, now or parked, and to answer what the loop is waiting on;
  * Ctrl-C stops now, menu or not. The terminal is in raw mode meanwhile, so
  * Ctrl-C arrives here as a key rather than as a signal to Ralph and the
  * opencode server both.
@@ -75,6 +77,7 @@ export function startMenu(options: MenuOptions): () => void {
     const pending = options.pending();
     const actions = new Map<string, Action>();
     const lines = [`${BOLD}ralph${RESET}`, '  s      stop after the current iteration', '  q      stop now'];
+    if (options.park) lines.push('  h      park: hand off, commit and push, to carry on elsewhere');
     if (pending?.waiting) {
       lines.push('', `  Waiting for you: ${pending.pending.question ?? pending.pending.message}`);
       for (const task of pending.pending.split?.tasks ?? []) lines.push(`    ${task.id}  ${task.title}`);
@@ -120,6 +123,10 @@ export function startMenu(options: MenuOptions): () => void {
       if (char === 'q' || char === 'Q') {
         close();
         return options.stopNow();
+      }
+      if ((char === 'h' || char === 'H') && options.park) {
+        close();
+        return options.park();
       }
       if (action && state.pending) {
         const id = state.pending.pending.id;

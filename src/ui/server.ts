@@ -5,7 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RecordsMode } from '../loop/records.js';
-import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
+import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
@@ -234,14 +234,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
     if (path === '/api/actions/stop') {
       const parsed = StopSchema.safeParse(body);
-      if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration" or "now"');
+      if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration", "now" or "park"');
       const run = project.status().run;
       if (!run?.live) throw new RequestError(409, 'No run is in progress');
       requestStop(project.ralphRoot, parsed.data.mode, 'ui');
       options.logger.info('web UI action', { action: 'stop', mode: parsed.data.mode, run: run.runId });
-      return sendJson(res, 200, {
-        message: parsed.data.mode === 'now' ? 'Ralph stops now.' : 'Ralph stops after the current iteration.',
-      });
+      return sendJson(res, 200, { message: STOP_MESSAGES[parsed.data.mode] });
     }
 
     const parsed = AnswerInputSchema.safeParse(body);

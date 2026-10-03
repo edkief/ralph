@@ -1268,3 +1268,70 @@ describe("Ralph's records", () => {
     expect(records.map((record) => record.delta.committed)).toEqual([false, false]);
   });
 });
+
+describe('parking', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  /** A committed project with a remote it is pushed to. */
+  function published(): { root: string; remote: string } {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    writeFileSync(resolve(root, '.gitignore'), '.ralph/history/\n');
+    writeFileSync(resolve(root, 'app.ts'), 'v1');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'init');
+    const remote = mkdtempSync(resolve(tmpdir(), 'ralph-remote-'));
+    git(remote, 'init', '-q', '--bare');
+    git(root, 'remote', 'add', 'origin', remote);
+    git(root, 'push', '-q', '-u', 'origin', 'HEAD');
+    return { root, remote };
+  }
+  const endless: ScriptedEvent[] = [{ after: 60_000, type: 'session.execution.succeeded' }];
+
+  it('has the agent hand off at once, commits what it left and pushes, whatever git.push says', async () => {
+    const { root, remote } = published();
+    const result = await loop(
+      root,
+      config(root, { maxIterations: 5, timeouts: { iterationMs: 60_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+      {
+        steer: true,
+        onPrompt: (count) => {
+          if (count !== 1) return;
+          writeFileSync(resolve(root, 'app.ts'), 'v2, half done');
+          writeFileSync(resolve(root, 'notes.txt'), 'scratch');
+          setTimeout(() => requestStop(resolve(root, '.ralph'), 'park', 'cli'), 50);
+        },
+        script: (count) => (count === 1 ? endless : say('handed off')),
+      },
+    );
+
+    expect(result.status).toBe('stopped');
+    expect(result.message).toBe('Parked after 1 iteration');
+    expect(String(server?.prompts[1]?.['text'])).toContain('## Parking — hand off TASK-1');
+    expect(readFileSync(resolve(root, '.ralph', 'handoff', 'TASK-1.md'), 'utf8')).toContain('the run was parked');
+
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([`chore(ralph): record run ${result.runId}`, 'wip(TASK-1): parked', 'init']);
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD~1')).toBe('app.ts');
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toContain('.ralph/handoff/TASK-1.md');
+    expect(git(root, 'status', '--porcelain')).toBe('?? notes.txt');
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
+
+    const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ handoff: 'fallback', result: { status: 'wrapped-up', wrapUp: { trigger: 'park' } } });
+  });
+
+  it('without a wrap-up, stops after the iteration, then commits and pushes', async () => {
+    const { root, remote } = published();
+    const result = await loop(root, config(root, { maxIterations: 5, timeouts: { wrapUpMs: 0 } }), {
+      onPrompt: () => {
+        writeFileSync(resolve(root, 'app.ts'), 'v2');
+        requestStop(resolve(root, '.ralph'), 'park', 'cli');
+      },
+      script: [{ type: 'session.text.ended', data: { text: 'done' } }, { after: 700, type: 'session.execution.succeeded' }],
+    });
+
+    expect(result.status).toBe('stopped');
+    expect(server?.prompts).toHaveLength(1);
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([`chore(ralph): record run ${result.runId}`, 'wip(TASK-1): parked', 'init']);
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
+  });
+});
+

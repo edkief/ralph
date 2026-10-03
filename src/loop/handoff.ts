@@ -24,7 +24,8 @@ const MAX_PROMPT_BYTES = 8_000;
 /** The most of an earlier handoff, or of the agent's last words, kept in a fallback. */
 const MAX_QUOTED_CHARS = 3_000;
 
-export type CutShortBy = 'time' | 'context';
+/** What an attempt ran out of, or `park` when a person parked the run. */
+export type CutShortBy = 'time' | 'context' | 'park';
 
 /** For the attempt after one whose conversation outgrew the model's context window. */
 const CONTEXT_ADVICE = [
@@ -95,7 +96,9 @@ export async function ensureHandoff(args: {
   const document = [
     `# Handoff: ${args.taskId}`,
     ``,
-    `Written by Ralph: the agent ran out of ${args.cutShortBy ?? 'time'} without leaving a complete handoff,`,
+    args.cutShortBy === 'park'
+      ? `Written by Ralph: the run was parked before the agent left a complete handoff,`
+      : `Written by Ralph: the agent ran out of ${args.cutShortBy ?? 'time'} without leaving a complete handoff,`,
     `so this records what the loop could see.`,
     ``,
     `## Status`,

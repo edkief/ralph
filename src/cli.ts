@@ -9,6 +9,7 @@ import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
 import { runSplit } from './split/command.js';
 import { runRespond } from './human/command.js';
+import { runStop } from './human/stop.js';
 import { controlDaemon, detachDaemon, ownerOf, runDaemon } from './daemon/command.js';
 import { pendingState, respond } from './human/respond.js';
 import { ConsoleReporter, formatDuration } from './report/console.js';
@@ -34,6 +35,8 @@ Usage:
   ralph daemon [options]    Stay up and run batches of iterations on request
   ralph daemon run|pause|status|shutdown
                             Steer the project's daemon
+  ralph stop [--now | --park]
+                            Stop the project's run from another terminal, or park it
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
@@ -51,6 +54,13 @@ Daemon options:
                             with \`ralph daemon run\`, the iterations to run
       --no-ui               Serve no web UI (it is on by default)
       --now                 With \`ralph daemon pause\`: interrupt the iteration in progress
+      --park                With \`ralph daemon pause\`: park the run (see Stop options)
+
+Stop options:
+      --now                 Interrupt the iteration in progress
+      --park                Have the agent hand off now, then commit the work and push it,
+                            whatever git.push says. With nothing running, commit Ralph's
+                            records and push
 
 Respond options:
       --iterations <n>      Iterations to add, for \`ralph respond continue\`
@@ -80,8 +90,9 @@ Exit codes:
   4 config/preflight · 5 provider · 6 stalled · 130 interrupted or stopped
 
 Stopping:
-  At a terminal, Enter opens a menu to stop after the current iteration or
-  now, and to answer what Ralph asks. Ctrl-C stops now.
+  At a terminal, Enter opens a menu to stop after the current iteration, now,
+  or parked, and to answer what Ralph asks. Ctrl-C stops now. From another
+  terminal, \`ralph stop\` does the same.
   Unattended, send SIGINT to stop after the current iteration, SIGTERM to stop now.
 `;
 
@@ -120,6 +131,7 @@ async function main(argv: string[]): Promise<number> {
       detach: { type: 'boolean', default: false },
       start: { type: 'boolean', default: false },
       now: { type: 'boolean', default: false },
+      park: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -136,7 +148,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon', 'stop'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
@@ -226,7 +238,13 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write('--max-iterations must be a positive whole number\n');
         return ExitCode.ConfigError;
       }
-      return controlDaemon({ config, action, now: values.now === true, ...(iterations !== undefined ? { iterations } : {}) });
+      return controlDaemon({
+        config,
+        action,
+        now: values.now === true,
+        park: values.park === true,
+        ...(iterations !== undefined ? { iterations } : {}),
+      });
     }
     if (values.detach) return detachDaemon(config, argv);
     return runDaemon({
@@ -236,6 +254,14 @@ async function main(argv: string[]): Promise<number> {
       start: values.start === true,
       ui: values.ui !== false,
     });
+  }
+
+  if (command === 'stop') {
+    if (values.now && values.park) {
+      process.stderr.write('Choose one of --now and --park\n');
+      return ExitCode.ConfigError;
+    }
+    return runStop({ config, mode: values.park ? 'park' : values.now ? 'now' : 'after-iteration' });
   }
 
   const owner = command === 'doctor' ? undefined : ownerOf(config);
@@ -252,6 +278,8 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   // `stop` lets the current iteration finish; `controller` interrupts it.
   const stop = new AbortController();
   const controller = new AbortController();
+  // `park` stops too, having the agent hand off first; then the work is committed and pushed.
+  const park = new AbortController();
   // Both write to the terminal: keep log lines off the end of the status line.
   logger.beforeWrite(() => reporter.clearStatus());
 
@@ -325,6 +353,11 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
           logger.warn('stopping after the current iteration');
           stop.abort();
         },
+        park: () => {
+          if (park.signal.aborted) return;
+          logger.warn('parking: handing off, then committing and pushing the work');
+          park.abort();
+        },
         stopNow: () => {
           // Asked twice: the stop itself is stuck. The exit hook takes the server along.
           if (controller.signal.aborted) {
@@ -350,6 +383,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
       reporter,
       signal: controller.signal,
       stop: stop.signal,
+      park: park.signal,
     });
 
     reporter.summary(

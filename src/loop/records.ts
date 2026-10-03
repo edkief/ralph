@@ -57,6 +57,48 @@ export async function commitRecords(args: {
   return { committed: error === undefined, files, ...(error ? { error } : {}) };
 }
 
+export interface ParkedWork {
+  committed: boolean;
+  /** Untracked files outside the Ralph folder, left as they are. */
+  untracked: string[];
+  error?: string;
+}
+
+/**
+ * Commit the work a parked run leaves in the working tree, so it travels with
+ * the repository: changes to tracked files, and new files in the Ralph folder.
+ * Ralph's records are left to their own commit, and untracked files elsewhere
+ * (a stray `.env`, say) are only reported: nobody chose to keep them.
+ */
+export async function commitParkedWork(args: {
+  projectRoot: string;
+  ralphDir: string;
+  subject: string;
+}): Promise<ParkedWork> {
+  const cwd = args.projectRoot;
+  if (!(await isRepository(cwd))) return { committed: false, untracked: [] };
+  const dir = args.ralphDir.replace(/\/+$/, '');
+  const records = recordPaths(dir).map((path) => `:(exclude)${path}`);
+  let committed = false;
+  let error: string | undefined;
+  try {
+    await run('git', ['add', '-u', '--', '.', ...records], { cwd });
+    if (existsSync(resolve(cwd, dir))) await run('git', ['add', '-A', '--', dir, ...records], { cwd });
+    const staged = await git(cwd, ['diff', '--cached', '--name-only']);
+    if (staged !== '') {
+      await run('git', ['commit', '-q', '-m', args.subject], { cwd });
+      committed = true;
+    }
+  } catch (cause) {
+    const failure = cause as Error & { stderr?: string };
+    error = (failure.stderr || failure.message).trim().split('\n')[0];
+  }
+  const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '--', '.', `:(exclude)${dir}`]))
+    .split('\n')
+    .filter((line) => line !== '');
+  return { committed, untracked, ...(error ? { error } : {}) };
+}
+
 /** Files under `paths` that differ from HEAD, untracked ones included; ignored ones are not. */
 export async function changedFiles(cwd: string, paths: string[]): Promise<string[]> {
   try {

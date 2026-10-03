@@ -1,6 +1,7 @@
 import { HANDOFF_HEADINGS } from '../loop/handoff.js';
 
-export type WrapUpTrigger = 'iteration-timeout' | 'inactivity';
+/** What ended the working time: the budget, a quiet agent, or a person parking the run. */
+export type WrapUpTrigger = 'iteration-timeout' | 'inactivity' | 'park';
 
 /**
  * The message that ends an iteration's working time. It asks the agent to
@@ -19,10 +20,12 @@ export function buildWrapUpPrompt(args: {
   const reason =
     args.trigger === 'inactivity'
       ? 'Your last step produced no output for too long and was interrupted. Do not run that command again as it was.'
-      : 'This iteration has used its working time.';
+      : args.trigger === 'park'
+        ? 'The run is being parked: the work carries on later, maybe on another machine, from the repository alone.'
+        : 'This iteration has used its working time.';
 
   return [
-    `## Time is up — hand off ${args.taskId}`,
+    args.trigger === 'park' ? `## Parking — hand off ${args.taskId}` : `## Time is up — hand off ${args.taskId}`,
     ``,
     `${reason} You have about ${minutes} minute${minutes === 1 ? '' : 's'} to hand off, then this session ends.`,
     ``,

@@ -188,15 +188,20 @@ export function Pending({ status }: { status: StatusView }) {
   );
 }
 
-/** Ask a run in progress to stop: after its iteration, or at once. Under a daemon, that pauses it. */
+/**
+ * Ask a run in progress to stop: after its iteration, at once, or parked (the
+ * agent hands off, then the work is committed and pushed, to carry on
+ * elsewhere). Under a daemon, that pauses it.
+ */
 export function StopButtons({ status }: { status: StatusView }) {
   const [state, setState] = useState<{ message: string; bad: boolean } | null>(null);
   const run = status.run;
   if (!run?.live || run.status === 'waiting' || !status.actions?.enabled) return null;
   const daemon = status.daemon?.live === true;
 
-  const stop = async (mode: 'after-iteration' | 'now') => {
+  const stop = async (mode: 'after-iteration' | 'now' | 'park') => {
     if (mode === 'now' && !window.confirm(`${daemon ? 'Pause' : 'Stop'} now? The iteration in progress is interrupted and its uncommitted work is left as it is.`)) return;
+    if (mode === 'park' && !window.confirm('Park the run? The agent hands off at once, then its work is committed and pushed so the run can carry on elsewhere.')) return;
     try {
       const result = await postJson<{ message: string }>('/api/actions/stop', { mode });
       setState({ message: result.message, bad: false });
@@ -209,6 +214,9 @@ export function StopButtons({ status }: { status: StatusView }) {
     <div className="stop-buttons">
       <button type="button" className="button small" onClick={() => void stop('after-iteration')}>
         {daemon ? 'Pause after this iteration' : 'Stop after this iteration'}
+      </button>
+      <button type="button" className="button small" onClick={() => void stop('park')}>
+        Park
       </button>
       <button type="button" className="button small danger" onClick={() => void stop('now')}>
         {daemon ? 'Pause now' : 'Stop now'}

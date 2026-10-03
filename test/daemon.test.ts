@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +17,9 @@ import {
 } from '../src/daemon/control.js';
 import { daemonLoop, markStopped } from '../src/daemon/daemon.js';
 import { Logger } from '../src/report/logger.js';
+import { controlDaemon } from '../src/daemon/command.js';
+import { readStopRequest } from '../src/human/request.js';
+import { ConfigSchema } from '../src/config/schema.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const folder = () => mkdtempSync(resolve(tmpdir(), 'ralph-daemon-'));
@@ -205,5 +208,25 @@ describe('the daemon loop', () => {
     expect(batches).toEqual([]);
     shutdown.abort();
     await done;
+  });
+});
+
+describe('ralph daemon pause', () => {
+  it('parks the run in progress with --park', async () => {
+    const root = folder();
+    const run = resolve(root, '.ralph', 'history', '20261003-101500-abcd');
+    mkdirSync(run, { recursive: true });
+    writeFileSync(
+      resolve(run, 'state.json'),
+      JSON.stringify({ runId: '20261003-101500-abcd', status: 'running', pid: process.pid, hostname: hostname(), startedAt: 't', updatedAt: 't' }),
+    );
+    const write = process.stdout.write;
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try {
+      expect(await controlDaemon({ config: ConfigSchema.parse({ projectRoot: root }), action: 'pause', now: false, park: true })).toBe(0);
+    } finally {
+      process.stdout.write = write;
+    }
+    expect(readStopRequest(resolve(root, '.ralph'))).toEqual({ mode: 'park' });
   });
 });
