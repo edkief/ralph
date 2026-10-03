@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -61,6 +61,56 @@ describe('commitRecords', () => {
     ]);
     expect(git(root, 'diff', '--cached', '--name-only')).toBe('app.ts');
     expect(git(root, 'diff', '--name-only')).toBe('.ralph/tasks.json');
+  });
+
+  it('commits past a record folder git has never tracked anything in', async () => {
+    const root = project();
+    // As a split leaves it, having moved the task's handoff out.
+    mkdirSync(resolve(root, '.ralph', 'handoff'));
+    mkdirSync(resolve(root, '.ralph', 'journal', 'run'), { recursive: true });
+    writeFileSync(resolve(root, '.ralph', 'journal', 'run', 'run.json'), '{}');
+
+    const result = await commitRecords({ projectRoot: root, ralphDir: '.ralph', subject: 'chore(ralph): record' });
+
+    expect(result).toEqual({ committed: true, files: ['.ralph/journal/run/run.json'] });
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD')).toBe('.ralph/journal/run/run.json');
+    expect(git(root, 'diff', '--cached', '--name-only')).toBe('');
+  });
+
+  it('commits a deleted record, and a moved one under both its names', async () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph', 'handoff'));
+    writeFileSync(resolve(root, '.ralph', 'handoff', 'TASK-1.md'), '# Handoff');
+    mkdirSync(resolve(root, '.ralph', 'assess'));
+    writeFileSync(resolve(root, '.ralph', 'assess', 'TASK-1.json'), '{}');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'records');
+    rmSync(resolve(root, '.ralph', 'assess', 'TASK-1.json'));
+    mkdirSync(resolve(root, '.ralph', 'split', 'TASK-1'), { recursive: true });
+    renameSync(resolve(root, '.ralph', 'handoff', 'TASK-1.md'), resolve(root, '.ralph', 'split', 'TASK-1', 'handoff.md'));
+
+    const result = await commitRecords({ projectRoot: root, ralphDir: '.ralph', subject: 'chore(ralph): record' });
+
+    expect(result).toMatchObject({ committed: true });
+    expect(git(root, 'show', '--name-status', '--no-renames', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      'A\t.ralph/split/TASK-1/handoff.md',
+      'D\t.ralph/assess/TASK-1.json',
+      'D\t.ralph/handoff/TASK-1.md',
+    ]);
+    expect(git(root, 'status', '--porcelain')).toBe('');
+  });
+
+  it('leaves nothing staged when the commit fails', async () => {
+    const root = project();
+    writeFileSync(resolve(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho "hook says no" >&2\nexit 1\n', { mode: 0o755 });
+    writeFileSync(resolve(root, '.ralph', 'decisions.jsonl'), '{}\n');
+
+    const result = await commitRecords({ projectRoot: root, ralphDir: '.ralph', subject: 'chore(ralph): record' });
+
+    expect(result).toEqual({ committed: false, files: ['.ralph/decisions.jsonl'], error: 'hook says no' });
+    expect(git(root, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(git(root, 'diff', '--cached', '--name-only')).toBe('');
+    expect(git(root, 'status', '--porcelain')).toBe('?? .ralph/decisions.jsonl');
   });
 
   it('does nothing when the records are unchanged, or outside a repository', async () => {
