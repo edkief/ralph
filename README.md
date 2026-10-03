@@ -78,6 +78,9 @@ ralph split TASK-8 --apply  # replace it with the proposed tasks and commit
 ralph --ui                  # run the loop and serve the web UI beside it
 ralph respond               # show what Ralph is asking a person
 ralph respond answer "REST" # answer it, as the web UI does
+ralph daemon --detach      # stay up in the background, running batches on request
+ralph daemon run -n 5       # have it run 5 iterations
+ralph daemon pause          # stop its batch after the current iteration
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -109,7 +112,8 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 <http://127.0.0.1:4280> by default:
 
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
-  buttons to answer; buttons to stop the run; the run's status, then each iteration's outcome,
+  buttons to answer; buttons to stop the run (to pause it, under a [daemon](#daemon-mode)),
+  and to have an idle daemon run a batch; the run's status, then each iteration's outcome,
   duration, tool calls, tokens and changes, with a row for every split turn or assessment and
   its outcome,
   then the task in progress and the few that come next
@@ -227,6 +231,41 @@ within `server.shutdownTimeoutMs`, so nothing is left to clean up before the nex
 
 The web UI's Overview has a button for each while a run is in progress. They leave a request
 in `.ralph/history/stop.json`, which the loop picks up within a second.
+
+### Daemon mode
+
+`ralph daemon` keeps Ralph up between runs. It holds the opencode server and the web UI, and
+runs a batch of iterations whenever asked, from the web UI or another terminal. Pausing a
+batch is stopping it, as above. However a batch ends, the daemon goes idle rather than
+exiting, and waits for the next one.
+
+```bash
+ralph daemon                 # in the foreground, for systemd, nohup or a pod; idle until asked
+ralph daemon --detach        # in the background; returns once it is up
+ralph daemon --start -n 20   # run a first batch of 20 at once, then go idle
+ralph daemon run -n 5        # have the daemon run 5 iterations (default: its -n, then maxIterations)
+ralph daemon pause           # stop the batch after the current iteration
+ralph daemon pause --now     # stop it now, interrupting the iteration
+ralph daemon status          # what the daemon and its latest run are doing
+ralph daemon shutdown        # stop any batch now, and exit
+```
+
+- Each batch is a run of its own in `.ralph/history/`, with a budget of the iterations asked
+  for. `ralph.config.json` is read again for each one, so changes apply from the next batch.
+- A batch that spends its budget ends there rather than asking for more; run another. One
+  that [needs a person](#when-ralph-needs-a-person) for anything else waits for the answer,
+  as with `--ui`, unless `ui.wait` is `false`.
+- The web UI is served unless you pass `--no-ui`. Its Overview shows whether the daemon is
+  idle or running, has a **Run** button with the number of iterations while it is idle, and
+  **Pause** buttons while a batch runs. These are actions, so they are guarded like the others.
+  A batch whose preflight fails is shown there too, and the daemon stays idle.
+- `--detach` sends the daemon's output to `.ralph/history/daemon.log`.
+- One daemon per project: a second one refuses to start, and so does `ralph` itself while a
+  daemon is up. Steer the daemon instead.
+- `ralph daemon run`, `pause`, `status` and `shutdown` work through files in
+  `.ralph/history/` (`daemon.json`, `daemon-request.json`), so they, and the web UI, also work
+  from another terminal or container that shares the folder.
+- SIGTERM, SIGINT or SIGHUP to the daemon shuts it down like `ralph daemon shutdown`; it exits 0.
 
 ## What a project must provide
 

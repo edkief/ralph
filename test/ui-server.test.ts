@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
+import { readDaemonRequest, writeDaemonState, type DaemonState } from '../src/daemon/control.js';
 import type { FileContent, GitCommitDetail, GitView, LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
@@ -92,6 +93,18 @@ function project(): string {
 }
 
 /** Rewrite the live run's state.json with `patch` applied. */
+const daemon = (patch: Partial<DaemonState> = {}): DaemonState => ({
+  pid: process.pid,
+  hostname: hostname(),
+  startedAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: new Date().toISOString(),
+  status: 'idle',
+  defaultIterations: 10,
+  batch: null,
+  lastBatch: { status: 'stopped', message: 'Stopped on request after 2 iterations', endedAt: '2026-10-01T00:05:00.000Z' },
+  ...patch,
+});
+
 function patchState(root: string, patch: Record<string, unknown>): void {
   const file = resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json');
   writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), ...patch }));
@@ -733,6 +746,48 @@ describe('web UI actions', () => {
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(409);
   });
 
+  it('reports the daemon without its heartbeat, and one that is gone as stopped', async () => {
+    const root = project();
+    await start(root);
+    expect((await get<StatusView>('/api/status')).body.daemon).toBeNull();
+
+    writeDaemonState(resolve(root, '.ralph'), daemon());
+    expect((await get<StatusView>('/api/status')).body.daemon).toEqual({
+      live: true,
+      status: 'idle',
+      pid: process.pid,
+      hostname: hostname(),
+      startedAt: '2026-10-01T00:00:00.000Z',
+      defaultIterations: 10,
+      batch: null,
+      lastBatch: { status: 'stopped', message: 'Stopped on request after 2 iterations', endedAt: '2026-10-01T00:05:00.000Z' },
+    });
+
+    writeDaemonState(resolve(root, '.ralph'), daemon({ pid: 2 ** 22 + 12345, status: 'running', batch: { iterations: 3, startedAt: 't' } }));
+    expect((await get<StatusView>('/api/status')).body.daemon).toMatchObject({ live: false, status: 'stopped', batch: null });
+  });
+
+  it('asks an idle daemon to run a batch, and only an idle one', async () => {
+    const root = project();
+    const ralph = resolve(root, '.ralph');
+    await start(root);
+
+    const none = await post('/api/actions/run', { iterations: 3 });
+    expect(none.status).toBe(409);
+    expect(none.body.error).toContain('No daemon is running');
+
+    writeDaemonState(ralph, daemon());
+    expect((await post('/api/actions/run', { iterations: 0 })).status).toBe(400);
+    expect((await post('/api/actions/run', { iterations: 'many' })).status).toBe(400);
+    const asked = await post('/api/actions/run', { iterations: 3 });
+    expect(asked).toMatchObject({ status: 200, body: { message: 'Ralph runs 3 iterations.' } });
+    expect(readDaemonRequest(ralph)).toEqual({ kind: 'run', iterations: 3 });
+    expect((await post('/api/actions/run', {})).body.message).toBe('Ralph runs 10 iterations.');
+
+    writeDaemonState(ralph, daemon({ status: 'running', batch: { iterations: 3, startedAt: 't' } }));
+    expect((await post('/api/actions/run', { iterations: 3 })).status).toBe(409);
+  });
+
   it('takes actions only as JSON, which a form on another site cannot send', async () => {
     const root = project();
     ask(root);
@@ -779,6 +834,9 @@ describe('web UI actions', () => {
     expect(refused.body.error).toContain('no ui.token is set');
     expect(refused.body.error).toContain('ui.actions');
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(403);
+    writeDaemonState(resolve(root, '.ralph'), daemon());
+    expect((await post('/api/actions/run', { iterations: 1 })).status).toBe(403);
+    expect(readDaemonRequest(resolve(root, '.ralph'))).toBeUndefined();
     expect((await get<StatusView>('/api/status')).body.actions).toMatchObject({ enabled: false, token: false });
     expect(existsSync(resolve(root, '.ralph', 'history', 'answer.json'))).toBe(false);
     expect(existsSync(resolve(root, '.ralph', 'history', 'stop.json'))).toBe(false);

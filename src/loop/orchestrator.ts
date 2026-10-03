@@ -154,6 +154,12 @@ interface LoopArgs {
   stop?: AbortSignal;
   /** How often to look for answers and stop requests; for tests. */
   pollMs?: number;
+  /**
+   * Ask a person for more iterations when the budget is spent, if the run
+   * waits for people. Off for a daemon's batch, which ends there: the daemon
+   * itself takes the next batch.
+   */
+  askForMore?: boolean;
 }
 
 async function loop(
@@ -269,7 +275,7 @@ async function loop(
   for (iteration = 1; ; iteration += 1) {
     if (iteration > budget) {
       message = `Reached the ${budget} iteration budget with work outstanding`;
-      if (pause.aborted || !tasks.reload().next) break;
+      if (pause.aborted || !tasks.reload().next || args.askForMore === false) break;
       const answer = await ask({ kind: 'budget', taskId: null, message });
       if (answer?.action !== 'continue') break;
       budget += answer.iterations ?? config.maxIterations;

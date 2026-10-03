@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
+import { DaemonRequestError, requestRun } from '../daemon/control.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
 import { LOG_TAIL_BYTES, MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
@@ -27,6 +28,7 @@ const HARD_LIMIT_FACTOR = 4;
 const MAX_BODY_BYTES = 64 * 1024;
 
 const StopSchema = z.object({ mode: z.enum(STOP_MODES) });
+const RunSchema = z.object({ iterations: z.number().int().min(1).max(10_000).optional() });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -186,9 +188,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     return sendJson(res, 404, { error: 'Not found' });
   };
 
-  /** Take an action: answer what the loop asked a person, or ask it to stop. */
+  /** Take an action: answer what the loop asked a person, ask it to stop, or have the daemon run a batch. */
   const act = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
-    if (path !== '/api/actions/respond' && path !== '/api/actions/stop') {
+    if (path !== '/api/actions/respond' && path !== '/api/actions/stop' && path !== '/api/actions/run') {
       throw new RequestError(405, 'Read-only', { Allow: 'GET, HEAD' });
     }
     if (!actions.enabled) throw new RequestError(403, actions.reason ?? 'Actions are off');
@@ -210,6 +212,21 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     } catch (cause) {
       if (cause instanceof RequestError) throw cause;
       throw new RequestError(400, 'The body is not JSON');
+    }
+
+    if (path === '/api/actions/run') {
+      const parsed = RunSchema.safeParse(body);
+      if (!parsed.success) throw new RequestError(400, 'iterations must be a whole number from 1 to 10000');
+      const { iterations } = parsed.data;
+      try {
+        const daemon = requestRun(project.ralphRoot, iterations, 'ui');
+        const count = iterations ?? daemon.defaultIterations;
+        options.logger.info('web UI action', { action: 'run', iterations: count, daemon: daemon.pid });
+        return sendJson(res, 200, { message: `Ralph runs ${count} iteration${count === 1 ? '' : 's'}.` });
+      } catch (cause) {
+        if (cause instanceof DaemonRequestError) throw new RequestError(409, cause.message);
+        throw cause;
+      }
     }
 
     if (path === '/api/actions/stop') {

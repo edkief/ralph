@@ -59,7 +59,8 @@ export function Pending({ status }: { status: StatusView }) {
   const askToken = Boolean(actions?.token) && (needsToken || !hasToken());
 
   const act = async (action: Action) => {
-    if (action === 'stop' && !window.confirm('Stop the run? Ralph exits as it would have without waiting.')) return;
+    const ending = status.daemon?.live ? 'The run ends as it would have without waiting, and the daemon goes idle.' : 'Ralph exits as it would have without waiting.';
+    if (action === 'stop' && !window.confirm(`Stop the run? ${ending}`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -89,7 +90,11 @@ export function Pending({ status }: { status: StatusView }) {
         <span className="badge tone-warn">Needs you</span>
         {pendingTitle(pending)}
         <span className="panel-subtitle">
-          {pending.waiting ? 'Ralph is waiting for your answer' : 'The run has ended: settle this, then run ralph again'}
+          {pending.waiting
+            ? 'Ralph is waiting for your answer'
+            : status.daemon?.live
+              ? 'The run has ended: settle this, then run another batch'
+              : 'The run has ended: settle this, then run ralph again'}
         </span>
       </h2>
 
@@ -183,14 +188,15 @@ export function Pending({ status }: { status: StatusView }) {
   );
 }
 
-/** Ask a run in progress to stop: after its iteration, or at once. */
+/** Ask a run in progress to stop: after its iteration, or at once. Under a daemon, that pauses it. */
 export function StopButtons({ status }: { status: StatusView }) {
   const [state, setState] = useState<{ message: string; bad: boolean } | null>(null);
   const run = status.run;
   if (!run?.live || run.status === 'waiting' || !status.actions?.enabled) return null;
+  const daemon = status.daemon?.live === true;
 
   const stop = async (mode: 'after-iteration' | 'now') => {
-    if (mode === 'now' && !window.confirm('Stop now? The iteration in progress is interrupted and its uncommitted work is left as it is.')) return;
+    if (mode === 'now' && !window.confirm(`${daemon ? 'Pause' : 'Stop'} now? The iteration in progress is interrupted and its uncommitted work is left as it is.`)) return;
     try {
       const result = await postJson<{ message: string }>('/api/actions/stop', { mode });
       setState({ message: result.message, bad: false });
@@ -202,10 +208,74 @@ export function StopButtons({ status }: { status: StatusView }) {
   return (
     <div className="stop-buttons">
       <button type="button" className="button small" onClick={() => void stop('after-iteration')}>
-        Stop after this iteration
+        {daemon ? 'Pause after this iteration' : 'Stop after this iteration'}
       </button>
       <button type="button" className="button small danger" onClick={() => void stop('now')}>
-        Stop now
+        {daemon ? 'Pause now' : 'Stop now'}
+      </button>
+      {state ? (
+        <span className={state.bad ? 'stop-note bad' : 'stop-note'} role="status">
+          {state.message}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Have an idle daemon run a batch of iterations. */
+export function RunButtons({ status }: { status: StatusView }) {
+  const daemon = status.daemon;
+  const [iterations, setIterations] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState<{ message: string; bad: boolean } | null>(null);
+  const [needsToken, setNeedsToken] = useState(false);
+  if (!daemon?.live || daemon.status !== 'idle' || status.run?.live || !status.actions?.enabled) return null;
+  const count = iterations ?? daemon.defaultIterations;
+  const askToken = status.actions.token && (needsToken || !hasToken());
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const result = await postJson<{ message: string }>('/api/actions/run', { iterations: count });
+      setState({ message: result.message, bad: false });
+    } catch (cause) {
+      const failure = cause as Error & { status?: number };
+      if (failure.status === 401) {
+        forgetToken();
+        setNeedsToken(true);
+      }
+      setState({ message: failure.message, bad: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="stop-buttons">
+      {askToken ? (
+        <input
+          className="run-token"
+          type="password"
+          autoComplete="off"
+          placeholder="ui.token"
+          aria-label="Web UI token (ui.token)"
+          onChange={(event) => {
+            rememberToken(event.target.value);
+            setNeedsToken(event.target.value === '');
+          }}
+        />
+      ) : null}
+      <input
+        className="run-iterations"
+        type="number"
+        min={1}
+        max={10000}
+        value={count}
+        aria-label="Iterations to run"
+        onChange={(event) => setIterations(Math.max(1, Math.min(10000, Number(event.target.value) || 1)))}
+      />
+      <button type="button" className="button small primary" disabled={busy} onClick={() => void run()}>
+        Run {count} iteration{count === 1 ? '' : 's'}
       </button>
       {state ? (
         <span className={state.bad ? 'stop-note bad' : 'stop-note'} role="status">
