@@ -331,6 +331,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
     const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
     if (iteration === 0 && !split) return false;
+    // A run known only from its journal has no event stream to follow.
+    if (!split && !existsSync(project.eventsPath(runId, iteration))) return false;
     if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
       transcriptFeed = {
         runId,

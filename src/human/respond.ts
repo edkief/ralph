@@ -78,7 +78,12 @@ export async function respond(args: {
   clearPending(ralphRoot);
   if (args.records !== 'never') {
     // No loop is waiting, so no iteration can take this commit for progress.
-    const committed = await commitRecords({ projectRoot, ralphDir, subject: `chore(ralph): record ${answer.action} on ${pending.kind}` });
+    const committed = await commitRecords({
+      projectRoot,
+      ralphDir,
+      subject: `chore(ralph): record ${answer.action} on ${pending.kind}`,
+      runId: pending.runId,
+    });
     if (committed.error) message += ` Could not commit it (${committed.error}); commit ${ralphDir}/ yourself.`;
   }
   return { delivered: 'applied', message };

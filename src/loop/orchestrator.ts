@@ -530,7 +530,7 @@ async function commitRunRecords(
     context.iteration !== undefined
       ? `chore(ralph): record run ${runId}, iteration ${context.iteration}`
       : `chore(ralph): record run ${runId}`;
-  const result = await commitRecords({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, subject });
+  const result = await commitRecords({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, subject, runId });
   if (result.error) {
     logger.warn('could not commit Ralph\'s records', { ...context, error: result.error });
   } else if (result.committed) {

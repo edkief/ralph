@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { writeJournal } from '../report/journal.js';
 
 const run = promisify(execFile);
 
@@ -36,15 +37,19 @@ export interface RecordsCommit {
  * Commit Ralph's records, and nothing else, as a commit of their own. Does
  * nothing outside a git repository or when the records are unchanged. The
  * caller picks a moment outside an iteration's before/after snapshots, so the
- * commit is never taken for the agent's progress.
+ * commit is never taken for the agent's progress. With `runId`, that run's
+ * journal is written first and goes in the same commit.
  */
 export async function commitRecords(args: {
   projectRoot: string;
   ralphDir: string;
   subject: string;
+  /** A run whose journal to bring up to date first. */
+  runId?: string;
 }): Promise<RecordsCommit> {
   const { projectRoot } = args;
   if (!(await isRepository(projectRoot))) return { committed: false, files: [] };
+  if (args.runId) writeJournal(resolve(projectRoot, args.ralphDir), args.runId);
   const paths = recordPaths(args.ralphDir);
   const files = await changedFiles(projectRoot, paths);
   if (files.length === 0) return { committed: false, files };

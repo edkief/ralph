@@ -1225,7 +1225,14 @@ describe("Ralph's records", () => {
     expect(git(root, 'log', '-1', '--format=%s')).toBe(`chore(ralph): record run ${result.runId}`);
     const files = git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n');
     expect(files).toContain('.ralph/decisions.jsonl');
-    expect(files.some((file) => file.startsWith('.ralph/history/'))).toBe(false);
+    expect(files).toEqual(expect.arrayContaining([
+      `.ralph/journal/${result.runId}/run.json`,
+      `.ralph/journal/${result.runId}/state.json`,
+      `.ralph/journal/${result.runId}/iteration-001.transcript.jsonl`,
+    ]));
+    expect(files.some((file) => file.startsWith('.ralph/history/') || file.endsWith('.events.jsonl'))).toBe(false);
+    const state = JSON.parse(git(root, 'show', `HEAD:.ralph/journal/${result.runId}/state.json`));
+    expect(state).toMatchObject({ status: 'max-iterations' });
     expect(files).not.toContain('scratch.txt');
     expect(git(root, 'status', '--porcelain', '--', 'scratch.txt')).toBe('?? scratch.txt');
   });
@@ -1237,6 +1244,7 @@ describe("Ralph's records", () => {
     await loop(root, config(root, { maxIterations: 1, git: { records: 'never' } }), { script: say('hi') });
 
     expect(git(root, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(existsSync(resolve(root, '.ralph', 'journal'))).toBe(false);
   });
 
   it('commits after each iteration without taking the commit for progress', async () => {
@@ -1247,7 +1255,12 @@ describe("Ralph's records", () => {
       script: say('hi'),
     });
 
-    expect(git(root, 'log', '--format=%s', '-2').split('\n')).toContain(`chore(ralph): record run ${result.runId}, iteration 1`);
+    expect(git(root, 'log', '--format=%s').split('\n')).toEqual([
+      `chore(ralph): record run ${result.runId}`,
+      `chore(ralph): record run ${result.runId}, iteration 2`,
+      `chore(ralph): record run ${result.runId}, iteration 1`,
+      'init',
+    ]);
     const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8')
       .trim()
       .split('\n')
