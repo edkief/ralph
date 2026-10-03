@@ -72,6 +72,7 @@ export async function runRespond(args: {
         ...(args.iterations !== undefined ? { iterations: args.iterations } : {}),
       },
       by: 'cli',
+      records: config.git.records,
     });
     reporter.summary(result.message, [], 'good');
     return ExitCode.Complete;

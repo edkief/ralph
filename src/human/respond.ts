@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { applySplit, describeIds, SplitError } from '../loop/split.js';
+import { commitRecords, type RecordsMode } from '../loop/records.js';
 import { RalphProject } from '../ui/project.js';
 import { recordDecision } from './decisions.js';
 import {
@@ -30,12 +31,16 @@ export function pendingState(projectRoot: string, ralphDir: string): PendingStat
  * Answer the pending request. A waiting loop gets the answer and acts on it;
  * with no loop waiting, what can be done without one is done here (applying a
  * split, recording an answer for the next run) and the request is closed.
+ * Then, unless `records` is `never`, what was recorded is committed, so the
+ * next run finds it wherever it runs.
  */
 export async function respond(args: {
   projectRoot: string;
   ralphDir: string;
   input: AnswerInput;
   by: 'ui' | 'cli';
+  /** `git.records`: whether to commit what an answer with no loop waiting recorded. */
+  records?: RecordsMode;
 }): Promise<RespondResult> {
   const { projectRoot, ralphDir, input, by } = args;
   const ralphRoot = resolve(projectRoot, ralphDir);
@@ -71,6 +76,11 @@ export async function respond(args: {
   }
   recordAnswer(ralphRoot, pending, answer);
   clearPending(ralphRoot);
+  if (args.records !== 'never') {
+    // No loop is waiting, so no iteration can take this commit for progress.
+    const committed = await commitRecords({ projectRoot, ralphDir, subject: `chore(ralph): record ${answer.action} on ${pending.kind}` });
+    if (committed.error) message += ` Could not commit it (${committed.error}); commit ${ralphDir}/ yourself.`;
+  }
   return { delivered: 'applied', message };
 }
 

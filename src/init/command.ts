@@ -88,7 +88,7 @@ function describeScaffold(result: Extract<ScaffoldResult, { status: 'scaffolded'
     ...result.created.map((path) => `  created  ${path}`),
     ...result.updated.map((path) => `  updated  ${path}`),
     ...result.skipped.map(
-      (path) => `  skipped  ${path} (${path === '.gitignore' ? 'already ignores .ralph/history/' : 'exists'})`,
+      (path) => `  skipped  ${path} (${path.startsWith('.git') ? 'already has its entries' : 'exists'})`,
     ),
   ].join('\n');
 }

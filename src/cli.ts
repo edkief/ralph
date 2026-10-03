@@ -335,7 +335,8 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
         },
         pending: () => pendingState(config.projectRoot, config.ralphDir),
         answer: async (input) =>
-          (await respond({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, input, by: 'cli' })).message,
+          (await respond({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, input, by: 'cli', records: config.git.records }))
+            .message,
       });
       // Whatever ends the process, the terminal must not be left in raw mode.
       process.once('exit', closeMenu);

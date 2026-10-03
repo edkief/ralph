@@ -67,9 +67,15 @@ const AssessSchema = z.object({
  * Publishing commits. The loop pushes, never the agent, whose `git push` stays
  * denied. `iteration` pushes after every iteration that committed; `end`
  * pushes once when the run finishes.
+ *
+ * `records` is when Ralph commits its own records (decisions, handoffs,
+ * assessments, split proposals, the run journal, kept artifacts), so a run can
+ * resume from the repository on another machine: after each iteration, once
+ * when the run ends, or never.
  */
 const GitSchema = z.object({
   push: z.enum(['never', 'iteration', 'end']).default('never'),
+  records: z.enum(['iteration', 'end', 'never']).default('end'),
   remote: z.string().default('origin'),
   pushTimeoutMs: z.number().int().positive().default(120_000),
 });

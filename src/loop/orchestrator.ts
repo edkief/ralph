@@ -7,6 +7,7 @@ import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
+import { commitRecords, journalDir } from './records.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { buildPrompt } from '../prompt/build.js';
@@ -228,8 +229,13 @@ async function loop(
   const cutShortByTask = new Map<string, StallCause[]>();
   // Tasks attempted again on the split agent's advice, which each may be once.
   const retriedTasks = new Set<string>();
-  // Handoff notes are how a task resumes, not progress on it.
-  const notProgress = [handoffDir(config.ralphDir), assessDir(config.ralphDir)];
+  // Handoffs are how a task resumes, the journal what Ralph saw and decisions what people said: none is progress.
+  const notProgress = [
+    handoffDir(config.ralphDir),
+    assessDir(config.ralphDir),
+    journalDir(config.ralphDir),
+    `${config.ralphDir.replace(/\/+$/, '')}/decisions.jsonl`,
+  ];
 
   /**
    * Have a person settle a stall or a proposed split, any number of times: they
@@ -397,6 +403,10 @@ async function loop(
     }
 
     if (delta.committed) unpushed = true;
+    // After the snapshot, so Ralph's own commit is never taken for the agent's progress.
+    if (config.git.records === 'iteration' && (await commitRunRecords(config, logger, runId, { iteration }))) {
+      unpushed = true;
+    }
     if (config.git.push === 'iteration' && unpushed) {
       unpushed = !(await publish(config, logger, { iteration }));
     }
@@ -474,10 +484,6 @@ async function loop(
     }
   }
 
-  if (config.git.push !== 'never' && unpushed && !signal.aborted) {
-    await publish(config, logger, {});
-  }
-
   const finalSummary = tasks.reload();
 
   // The budget may run out on an iteration that finished the backlog; judge
@@ -497,7 +503,40 @@ async function loop(
     message,
   };
   recorder.recordSummary(runResult);
+  saveState({
+    status: runResult.status,
+    tasksPassed: runResult.tasksPassed,
+    tasksTotal: runResult.tasksTotal,
+    message: runResult.message,
+    pending: null,
+  });
+
+  // Whatever ended the run: the records are what the next one resumes from, wherever it runs.
+  if (config.git.records !== 'never' && (await commitRunRecords(config, logger, runId, {}))) unpushed = true;
+  if (config.git.push !== 'never' && unpushed && !signal.aborted) {
+    await publish(config, logger, {});
+  }
   return runResult;
+}
+
+/** Commit Ralph's records for the run, logging the outcome. Whether a commit was made. */
+async function commitRunRecords(
+  config: Config,
+  logger: Logger,
+  runId: string,
+  context: { iteration?: number },
+): Promise<boolean> {
+  const subject =
+    context.iteration !== undefined
+      ? `chore(ralph): record run ${runId}, iteration ${context.iteration}`
+      : `chore(ralph): record run ${runId}`;
+  const result = await commitRecords({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, subject });
+  if (result.error) {
+    logger.warn('could not commit Ralph\'s records', { ...context, error: result.error });
+  } else if (result.committed) {
+    logger.info('committed Ralph\'s records', { ...context, files: result.files.length });
+  }
+  return result.committed;
 }
 
 /** Decisions shown to the agent: the latest ones, as old ones are in the code by now. */

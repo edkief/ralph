@@ -60,6 +60,7 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     },
     git: {
       push: env['RALPH_GIT_PUSH'],
+      records: env['RALPH_GIT_RECORDS'],
       remote: env['RALPH_GIT_REMOTE'],
     },
     ui: {

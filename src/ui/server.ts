@@ -4,6 +4,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import type { RecordsMode } from '../loop/records.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
@@ -60,6 +61,8 @@ export interface UiServerOptions {
   /** Take actions from other hosts without a token: access to the UI is controlled in front of it. */
   openActions?: boolean;
   logger: Logger;
+  /** `git.records`: whether answers given with no loop waiting are committed. */
+  records?: RecordsMode;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
   /** How often live streams look for changes. */
@@ -249,6 +252,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         ralphDir: options.ralphDir,
         input: parsed.data,
         by: 'ui',
+        ...(options.records ? { records: options.records } : {}),
       });
       options.logger.info('web UI action', { action: parsed.data.action, request: parsed.data.id, delivered: result.delivered });
       return sendJson(res, 200, result);
