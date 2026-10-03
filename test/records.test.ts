@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { commitRecords, recordPaths } from '../src/loop/records.js';
 import { respond } from '../src/human/respond.js';
 import { writePending } from '../src/human/request.js';
-import { uncommittedCheck, upstreamCheck } from '../src/opencode/preflight.js';
+import { artifactsCheck, uncommittedCheck, upstreamCheck } from '../src/opencode/preflight.js';
 import { ConfigSchema } from '../src/config/schema.js';
 
 const git = (root: string, ...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -137,5 +137,16 @@ describe('doctor', () => {
     git(root, 'commit', '-q', '--allow-empty', '-m', 'more');
     expect(await upstreamCheck(config(root))).toMatchObject({ name: 'upstream', ok: false, fatal: false });
     expect((await upstreamCheck(config(root)))?.detail).toMatch(/^1 commit not pushed/);
+  });
+
+  it('warns when the kept artifacts grow large', () => {
+    const root = project();
+    expect(artifactsCheck(config(root), 10)).toBeUndefined();
+    mkdirSync(resolve(root, '.ralph', 'artifacts', 'TASK-1'), { recursive: true });
+    writeFileSync(resolve(root, '.ralph', 'artifacts', 'TASK-1', 'a.png'), '123456');
+    expect(artifactsCheck(config(root), 10)).toBeUndefined();
+    writeFileSync(resolve(root, '.ralph', 'artifacts', 'TASK-1', 'b.png'), '123456');
+    expect(artifactsCheck(config(root), 10)).toMatchObject({ name: 'artifacts', ok: false, fatal: false });
+    expect(artifactsCheck(config(root), 10)?.detail).toMatch(/Git LFS/);
   });
 });

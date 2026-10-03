@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import { handoffDir } from '../loop/handoff.js';
@@ -64,6 +64,8 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
   if (uncommitted) results.push(uncommitted);
   const upstream = await upstreamCheck(config);
   if (upstream) results.push(upstream);
+  const artifacts = artifactsCheck(config);
+  if (artifacts) results.push(artifacts);
 
   try {
     const location = await client.health();
@@ -169,6 +171,34 @@ export async function upstreamCheck(config: Config): Promise<CheckResult | undef
     name: 'upstream',
     ok: false,
     detail: `${ahead} commit${ahead === 1 ? '' : 's'} not pushed to ${upstream}, which another machine would not get`,
+    fatal: false,
+  };
+}
+
+/** Beyond this, the artifacts kept in git weigh on every clone. */
+export const ARTIFACTS_WARN_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The evidence agents keep in `artifacts/` is committed, so every clone
+ * carries it for good. Returns nothing while it stays small.
+ */
+export function artifactsCheck(config: Config, limit = ARTIFACTS_WARN_BYTES): CheckResult | undefined {
+  const root = resolve(config.projectRoot, config.ralphDir, 'artifacts');
+  let bytes = 0;
+  const visit = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) bytes += statSync(path).size;
+    }
+  };
+  if (existsSync(root)) visit(root);
+  if (bytes <= limit) return undefined;
+  const mb = (value: number) => `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return {
+    name: 'artifacts',
+    ok: false,
+    detail: `${config.ralphDir.replace(/\/+$/, '')}/artifacts/ holds ${mb(bytes)} (over ${mb(limit)}), which every clone carries: prune it, or track it with Git LFS`,
     fatal: false,
   };
 }

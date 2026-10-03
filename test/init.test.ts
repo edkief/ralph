@@ -50,7 +50,7 @@ describe('scaffold', () => {
     for (const path of EXPECTED) {
       expect(readFileSync(resolve(root, path), 'utf8')).not.toBe('');
     }
-    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('.ralph/history/\n');
+    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('.ralph/history/\n.playwright-mcp/\n');
     expect(readFileSync(resolve(root, '.gitattributes'), 'utf8')).toBe('.ralph/**/*.jsonl merge=union\n');
   });
 
@@ -106,7 +106,7 @@ describe('scaffold', () => {
     expect(existsSync(resolve(root, '.ralph/tasks.json'))).toBe(true);
   });
 
-  it('adds the history line to an existing .gitignore exactly once', () => {
+  it('adds the missing lines to an existing .gitignore exactly once', () => {
     const root = project();
     writeFileSync(resolve(root, '.gitignore'), 'node_modules/\ndist/');
 
@@ -115,18 +115,18 @@ describe('scaffold', () => {
 
     expect(first.status === 'scaffolded' && first.updated).toEqual(['.gitignore']);
     expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe(
-      'node_modules/\ndist/\n.ralph/history/\n',
+      'node_modules/\ndist/\n.ralph/history/\n.playwright-mcp/\n',
     );
   });
 
-  it('recognises an equivalent .gitignore entry already present', () => {
+  it('recognises equivalent .gitignore entries already present', () => {
     const root = project();
-    writeFileSync(resolve(root, '.gitignore'), '/.ralph/history\n');
+    writeFileSync(resolve(root, '.gitignore'), '/.ralph/history\n.playwright-mcp\n');
 
     const result = scaffold(root);
 
     expect(result.status === 'scaffolded' && result.skipped).toContain('.gitignore');
-    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('/.ralph/history\n');
+    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('/.ralph/history\n.playwright-mcp\n');
   });
 
   it('adds the merge attribute to an existing .gitattributes, unless the pattern has attributes already', () => {

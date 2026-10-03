@@ -20,8 +20,11 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['ralph.config.json', 'ralph.config.json'],
 ];
 
-/** Ralph's run history: raw event streams and files that steer a live process. */
-const GITIGNORE_ENTRIES = [`${RALPH_DIR}/history/`];
+/**
+ * Ralph's run history (raw event streams and files that steer a live
+ * process), and the scratch output of browser tools agents test with.
+ */
+const GITIGNORE_ENTRIES = [`${RALPH_DIR}/history/`, '.playwright-mcp/'];
 /** Two machines appending to the same record merge by keeping both sides' lines. */
 const GITATTRIBUTES_ENTRIES = [`${RALPH_DIR}/**/*.jsonl merge=union`];
 
