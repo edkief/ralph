@@ -1226,6 +1226,152 @@ article.markdown h2 {
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Metrics ────────────────────────────────────────────────────────── */
+
+.subtabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.subtab {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.subtab:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+.subtab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chart-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 16px 8px;
+}
+
+.button.selected {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
+}
+
+.chart {
+  position: relative;
+  padding: 0 12px 4px;
+}
+
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart-axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-bar {
+  fill: var(--accent);
+}
+
+.chart-bar.active {
+  fill: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+
+.chart-hit {
+  fill: transparent;
+  outline: none;
+}
+
+.chart-hit:focus-visible {
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: -4px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.metrics-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.metrics-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metrics-split td {
+  background: var(--surface-2);
+}
+
+.metrics-models {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.metrics-card-title {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  line-height: 34px;
+}
+
+.disclosure {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 16px;
+  padding: 0;
+  font: inherit;
+}
+
+.disclosure-space {
+  display: inline-block;
+  width: 16px;
+}
+
+.metrics-approx {
+  margin-left: 6px;
+}
+
 /* ── Small screens ──────────────────────────────────────────────────── */
 
 @media (max-width: 1000px) {
