@@ -1,15 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
-import { parseEscalation, runEscalation } from '../src/loop/escalate.js';
+import { parseEscalation, projectGuidance, runEscalation } from '../src/loop/escalate.js';
 import { buildEscalationPrompt } from '../src/prompt/escalate.js';
 import { agentActionsFor } from '../src/human/request.js';
 import { OpencodeClient } from '../src/opencode/client.js';
 import { ConfigSchema } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
+import { TEMPLATES_DIR } from '../src/init/scaffold.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as unknown as NodeJS.WriteStream });
 
@@ -69,6 +70,19 @@ describe('parseEscalation', () => {
     expect(
       parseEscalation('<promise>RESOLVE:resume:go</promise> <promise>ESCALATE:or not</promise>', ['resume'], 10),
     ).toMatchObject({ status: 'invalid' });
+  });
+});
+
+describe('projectGuidance', () => {
+  it('keeps what the project wrote, without comments', () => {
+    expect(projectGuidance('# Escalation\n\n<!-- how to use this -->\n- Prefer the standard library.\n')).toBe(
+      '# Escalation\n\n\n- Prefer the standard library.',
+    );
+  });
+
+  it('finds nothing in the template as ralph init writes it', () => {
+    const template = readFileSync(resolve(TEMPLATES_DIR, 'ESCALATION.md'), 'utf8');
+    expect(projectGuidance(template)).toBe('');
   });
 });
 

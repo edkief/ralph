@@ -74,6 +74,16 @@ export function parseEscalation(text: string, allowed: Action[], maxIterations: 
   return { status: 'resolved', action, ...(note ? { text: note } : {}) };
 }
 
+/**
+ * What ESCALATION.md says to the agent: the file without its comments, and
+ * nothing when only headings are left, as in the template `ralph init` writes.
+ */
+export function projectGuidance(text: string): string {
+  const body = text.replace(/<!--[\s\S]*?-->/g, '').trim();
+  const said = body.split('\n').some((line) => line.trim() !== '' && !line.trim().startsWith('#'));
+  return said ? body : '';
+}
+
 /** Where the escalation agent may write: a folder of the run's history, out of git. */
 export function escalationDir(ralphDir: string, runId: string): string {
   return `${ralphDir.replace(/\/+$/, '')}/history/${runId}/escalation`;
@@ -112,7 +122,7 @@ export async function runEscalation(args: {
   const handoffFile = request.taskId ? handoffPath(projectRoot, ralphDir, request.taskId) : undefined;
   const handoffText = handoffFile ? readHandoff(handoffFile) : undefined;
   const guidanceFile = resolve(projectRoot, ralphDir, GUIDANCE_FILE);
-  const guidance = existsSync(guidanceFile) ? readFileSync(guidanceFile, 'utf8') : '';
+  const guidance = existsSync(guidanceFile) ? projectGuidance(readFileSync(guidanceFile, 'utf8')) : '';
   const commits = request.taskId ? await taskCommits(projectRoot, request.taskId) : '';
   const model = config.escalation.model ?? config.plan.model ?? config.model;
 
