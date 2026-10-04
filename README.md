@@ -109,7 +109,9 @@ upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
 | 130 | Interrupted, or stopped on request |
 
 Codes 1, 2, 3 and 6 mean a person is needed. A run that [waits for one](#when-ralph-needs-a-person)
-carries on once they answer, and exits with one of these only when told to stop.
+carries on once they answer, and exits with one of these only when told to stop. With the
+[escalation agent](#the-escalation-agent) on, the run exits with one only when the agent
+passes the request on.
 
 ### Web UI
 
@@ -119,19 +121,20 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
   buttons to answer; buttons to stop the run (to pause it, under a [daemon](#daemon-mode)),
   and to have an idle daemon run a batch; the run's status, then each iteration's outcome,
-  duration, tool calls, tokens and changes, with a row for every split turn or assessment and
-  its outcome,
+  duration, tool calls, tokens and changes, with a row for every split turn, assessment or
+  [escalation](#the-escalation-agent) and its outcome,
   then the task in progress and the few that come next
 - **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
   split one came from
-- **Metrics**: what the project's model work came to over every run: iterations and planning
-  turns, inference time, tokens (input, output, reasoning, cached), the models used, and an
+- **Metrics**: what the project's model work came to over every run: iterations, planning
+  turns and escalations, inference time, tokens (input, output, reasoning, cached), the models used, and an
   [estimated cost](#estimating-cost). Then the same by day (in the browser's time zone), by
   task, and by run. A task that was split counts the tasks it was split into; open a task for
   every turn spent on it, each with its transcript
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
-  is an iteration, or the turn in which the agent assessed a task or proposed splitting it.
+  is an iteration, the turn in which the agent assessed a task or proposed splitting it, or an
+  escalation turn.
   Long tool input, output and text are cut; the event file in `.ralph/history/` keeps them
   whole
 - **Logs**: Ralph's own log for each run, filterable by level
@@ -219,6 +222,54 @@ Whatever you write (an answer, a note) is appended to `.ralph/decisions.jsonl` a
 as decided. Ralph commits the file with its other [records](#carrying-on-from-another-machine),
 and an answer given with no run waiting is committed straight away.
 
+#### The escalation agent
+
+To run end to end without a person, put a second agent between the coding agent and you. With
+`escalation.enabled` (or `RALPH_ESCALATION=1`), a request goes to the escalation agent before
+it reaches you. The agent runs one turn, in a session of its own, and gets:
+
+- the request
+- the task's spec and handoff
+- the commits that mention the task
+- the end of what the coding agent last wrote
+- the decisions made so far
+- the project's own guidance in `.ralph/ESCALATION.md`, which `ralph init` scaffolds
+
+It then does one of two things:
+
+- **Settles it.** It answers as a person could: `resume` or `answer` with a note, `approve`,
+  `retry` or `repropose` a split, `continue` the budget (by at most `maxIterations` at a time).
+  The run carries on. The note goes to `decisions.jsonl` marked as the escalation agent's, and
+  the coding agent follows it like yours.
+- **Passes it on.** The request reaches you as above, with what the agent found. The web UI and
+  `ralph respond` show it. A turn that fails or times out passes the request on too.
+
+Its prompt asks it to check the coding agent's claim, fix what it can and settle the request.
+It passes on only what needs a person: credentials or access it lacks, spending money, legal or
+security calls, or a product choice with nothing to go on.
+
+It may run commands, and so fix the environment (install a dependency, start a service), but it
+writes files only in the run's history and never touches the project's code. What the code
+needs, it tells the coding agent in its note. It cannot `stop` the run; you can.
+
+It runs whether or not the run waits for people, so a run without `--wait` carries on where it
+would have exited. To keep it from sending the coding agent back into the same wall, it settles
+at most `escalation.maxPerTask` requests per task in a run (the budget counts as one task).
+After that, a request on the task comes straight to you.
+
+```jsonc
+"escalation": {
+  "enabled": true,
+  "kinds": ["blocked", "decide", "stalled", "split", "budget"], // which requests it gets first; all by default
+  "model": "anthropic/claude-x", // defaults to plan.model, then model
+  "timeoutMs": 600000,           // working time of one escalation turn
+  "maxPerTask": 2                // requests it may settle per task in a run
+}
+```
+
+Write in `.ralph/ESCALATION.md` what it may settle on its own and what must always come to you.
+Comments in the file are left out of the prompt.
+
 ### Stopping a run
 
 At a terminal, press Enter for a menu:
@@ -304,11 +355,12 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   tasks/           # optional — per-task specs referenced by specFilePath
   prd/PRD.md       # optional — what the project is for
   STEERING.md      # optional — work to do before feature tasks
+  ESCALATION.md    # optional — guidance for the escalation agent
   logs/LOG.md      # optional — the agent's own running log
   handoff/         # written when a task runs out of time or is parked
   split/           # proposed and applied splits of tasks that were too big
   assess/          # the estimate of each task assessed before its first attempt
-  decisions.jsonl  # what a person answered or noted; shown to the agent in later prompts
+  decisions.jsonl  # what a person (or the escalation agent) answered or noted; shown to the agent in later prompts
   artifacts/       # evidence the agent keeps, by task: screenshots, short reports
   journal/         # what each run did, committed by ralph
   history/         # written by ralph for this machine; ignore it in git
@@ -389,6 +441,13 @@ See `templates/ralph.config.json` for a complete file.
     "thresholdMs": 1800000,        // an estimate over this is too big; defaults to timeouts.iterationMs
     "timeoutMs": 300000            // working time of the triage turn that estimates the task
   },
+  "escalation": {
+    "enabled": false,              // an agent settles requests before they reach a person
+    "kinds": ["blocked", "decide", "stalled", "split", "budget"],
+    "model": "anthropic/claude-x", // defaults to plan.model, then model
+    "timeoutMs": 600000,
+    "maxPerTask": 2                // requests it may settle per task in a run
+  },
   "permissions": {
     "fallback": "allow",           // unattended runs need to proceed without a human
     "deny": ["git push", "git remote"]
@@ -419,7 +478,7 @@ See `templates/ralph.config.json` for a complete file.
 The template leaves `model` unset, so both the loop and the interview use the opencode
 server's default until you choose one.
 
-The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
+The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_ESCALATION`, `RALPH_ESCALATION_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
 `RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`,
@@ -688,8 +747,8 @@ summary says why; commit them yourself.
 `history/` cannot travel: its event streams grow with every iteration, and its control files
 (`stop.json`, `pending.json`, `daemon.json`, a `state.json` with a pid) would act on another
 machine. The journal mirrors a run without them: `run.json`, `iterations.jsonl`, `splits.jsonl`,
-`actions.jsonl`, the log from `info` up, `state.json` without pid and host, and a condensed
-transcript per iteration and split turn, with long text and tool output cut and each file kept
+`escalations.jsonl`, `actions.jsonl`, the log from `info` up, `state.json` without pid and host,
+and a condensed transcript per iteration, split turn and escalation turn, with long text and tool output cut and each file kept
 under 256 KB. The UI lists runs from both places, prefers the history where it has one, and
 never shows a journal-only run as live.
 
@@ -733,9 +792,14 @@ Each run writes to the project's `.ralph/history/<runId>/`:
   and one per assessment (`trigger: "assessment"`), with the estimate; each with its usage
   by model in `models`
 - `split-TASK-x.events.jsonl` — every event of that split turn, or of the task's assessment
-- `state.json` — where the run stands (status, iteration, task, the split turn in progress,
-  what it is waiting on a person for, pid), rewritten as it goes
-- `actions.jsonl` — what a person answered, from the web UI or `ralph respond`
+- `escalations.jsonl` — one record per escalation turn: the request's kind and task, whether
+  it was settled (with the answer and note), passed on (with the analysis) or failed, and its
+  usage by model in `models`
+- `escalation-N.events.jsonl` — every event of escalation turn N
+- `state.json` — where the run stands (status, iteration, task, the split or escalation turn in
+  progress, what it is waiting on a person for, pid), rewritten as it goes
+- `actions.jsonl` — what a person answered, from the web UI or `ralph respond`, or the
+  escalation agent in their place (`by: "agent"`)
 - `run.json` — the run summary, once the run ends
 
 The web UI reads all of these, so it needs nothing else from the loop. What of them travels
