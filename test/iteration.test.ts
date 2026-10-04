@@ -21,7 +21,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -485,6 +485,119 @@ describe('runIteration', () => {
       expect(result.wrapUp).toMatchObject({ delivery: 'interrupt', completed: true });
       expect(server?.interrupts).toBe(1);
       expect(server?.prompts[1]).not.toHaveProperty('delivery');
+    });
+
+    it('ignores a BLOCKED raised in a time wrap-up: running out of time is not being blocked', async () => {
+      const result = await iterate(
+        {
+          steer: true,
+          script: (count) =>
+            count === 1 ? endless : say('handoff written <promise>BLOCKED:not applicable — handoff written</promise>'),
+        },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.blockedReason).toBeUndefined();
+    });
+
+    it('ignores a DECIDE raised in a time wrap-up', async () => {
+      const result = await iterate(
+        { steer: true, script: (count) => (count === 1 ? endless : say('<promise>DECIDE:A or B?</promise>')) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.decideQuestion).toBeUndefined();
+    });
+
+    it('keeps a BLOCKED raised after an inactivity wrap-up, since a hung command may be the environment', async () => {
+      const result = await iterate(
+        { script: (count) => (count === 1 ? endless : say('<promise>BLOCKED:the database is down</promise>')) },
+        config({ timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('blocked');
+      expect(result.tags.blockedReason).toBe('the database is down');
+    });
+
+    it('ignores a BLOCKED raised in a time wrap-up that interrupted the agent first', async () => {
+      const result = await iterate(
+        { script: (count) => (count === 1 ? endless : say('<promise>BLOCKED:out of time</promise>')) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.wrapUp).toMatchObject({ trigger: 'iteration-timeout', delivery: 'interrupt' });
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.blockedReason).toBeUndefined();
+    });
+
+    it('ignores a BLOCKED or DECIDE raised in a park wrap-up', async () => {
+      const park = new AbortController();
+      setTimeout(() => park.abort(), 50);
+      const result = await iterate(
+        {
+          steer: true,
+          script: (count) =>
+            count === 1 ? endless : say('<promise>BLOCKED:parked</promise> <promise>DECIDE:A or B?</promise>'),
+        },
+        config({ timeouts: { iterationMs: 60_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp, park: park.signal },
+      );
+
+      expect(result.wrapUp).toMatchObject({ trigger: 'park' });
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.blockedReason).toBeUndefined();
+      expect(result.tags.decideQuestion).toBeUndefined();
+    });
+
+    it('ignores a DECIDE raised after an inactivity wrap-up', async () => {
+      const result = await iterate(
+        { script: (count) => (count === 1 ? endless : say('<promise>DECIDE:A or B?</promise>')) },
+        config({ timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.decideQuestion).toBeUndefined();
+    });
+
+    it('keeps a BLOCKED raised before the wrap-up was sent', async () => {
+      const result = await iterate(
+        {
+          steer: true,
+          script: (count) =>
+            count === 1
+              ? [{ type: 'session.text.ended', data: { text: '<promise>BLOCKED:no API key</promise>' } }, ...endless]
+              : say('handoff written'),
+        },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.wrapUp).toMatchObject({ trigger: 'iteration-timeout' });
+      expect(result.status).toBe('blocked');
+      expect(result.tags.blockedReason).toBe('no API key');
+    });
+
+    it('keeps the task claims and the rest of the tags in a wrap-up', async () => {
+      const result = await iterate(
+        {
+          steer: true,
+          script: (count) =>
+            count === 1 ? endless : say('<promise>TASK-1:DONE</promise> <promise>BLOCKED:out of time</promise>'),
+        },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.completedTaskIds).toEqual(['TASK-1']);
+      expect(result.tags.blockedReason).toBeUndefined();
     });
 
     it('interrupts a quiet agent, which is stuck in a tool, even when steering is available', async () => {

@@ -157,7 +157,9 @@ export async function runIteration(args: {
   // The wrap-up is sent once, from the timer; `sent` flips before the prompt
   // goes out so the event loop knows which execution end is the wrap-up's.
   const wrapUp = {
-    state: null as (Omit<WrapUpRecord, 'durationMs'> & { startedAt: number; sent: boolean }) | null,
+    state: null as
+      | (Omit<WrapUpRecord, 'durationMs'> & { startedAt: number; sent: boolean; textIndex: number })
+      | null,
     onInterruptedEnd: null as (() => void) | null,
   };
 
@@ -168,6 +170,7 @@ export async function runIteration(args: {
       completed: false,
       startedAt: Date.now(),
       sent: false,
+      textIndex: Number.POSITIVE_INFINITY,
     };
     wrapUp.state = state;
     // The time budget and a park can steer a working agent; a quiet one is
@@ -184,6 +187,7 @@ export async function runIteration(args: {
       if (streamAbort.signal.aborted) return;
     }
     state.sent = true;
+    state.textIndex = texts.length;
     await client.prompt(sessionId, args.wrapUp!.prompt(trigger), {
       ...promptOptions,
       ...(state.delivery === 'steer' ? { delivery: 'steer' as const } : {}),
@@ -366,8 +370,8 @@ export async function runIteration(args: {
   }
 
   const text = texts.join('\n');
-  const tags = parsePromiseTags(text);
   const wrapped = wrapUp.state;
+  const tags = promiseTags(texts, wrapped, logger);
   const reasons = [wrapped?.trigger, trip].flatMap((reason) =>
     reason === 'park' ? ['Parked on request'] : reason ? [describeTrip(reason, watchdogOptions)] : [],
   );
@@ -398,6 +402,34 @@ export async function runIteration(args: {
       : {}),
     durationMs: Date.now() - startedAt,
   };
+}
+
+/**
+ * The promise tags that stand. Running out of time is not being blocked, so a
+ * BLOCKED or DECIDE raised in answer to the wrap-up is dropped: the next
+ * iteration resumes from the handoff. A BLOCKED after an inactivity wrap-up
+ * stands, since a command that hung is often the environment problem it is for.
+ */
+function promiseTags(
+  texts: string[],
+  wrapped: { trigger: WrapUpTrigger; textIndex: number } | null,
+  logger: Logger,
+): PromiseTags {
+  const tags = parsePromiseTags(texts.join('\n'));
+  if (!wrapped || wrapped.textIndex >= texts.length) return tags;
+
+  const before = parsePromiseTags(texts.slice(0, wrapped.textIndex).join('\n'));
+  const blocked = before.blockedReason ?? (wrapped.trigger === 'inactivity' ? tags.blockedReason : undefined);
+  const decide = before.decideQuestion;
+  const { blockedReason: _blocked, decideQuestion: _decide, ...rest } = tags;
+  if (tags.blockedReason !== blocked || tags.decideQuestion !== decide) {
+    logger.warn('ignoring a promise tag raised in the wrap-up', {
+      reason: wrapped.trigger,
+      ...(tags.blockedReason !== blocked ? { blocked: tags.blockedReason } : {}),
+      ...(tags.decideQuestion !== decide ? { decide: tags.decideQuestion } : {}),
+    });
+  }
+  return { ...rest, ...(blocked ? { blockedReason: blocked } : {}), ...(decide ? { decideQuestion: decide } : {}) };
 }
 
 /**

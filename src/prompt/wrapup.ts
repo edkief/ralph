@@ -40,6 +40,14 @@ export function buildWrapUpPrompt(args: {
     `   what is not, and whether it builds. Dead ends lists what you tried that did not work.`,
     `4. Commit your changes and the handoff as \`wip(${args.taskId}): <state of the work>\`, even if tests fail.`,
     `5. Do not set \`passes: true\` and do not output \`<promise>${args.taskId}:DONE</promise>\` — the task is not done.`,
+    `6. End without any promise tag: no \`BLOCKED\`, no \`DECIDE\`. Running out of time is not being blocked;`,
+    `   the next iteration resumes from your handoff. Put any question for a person under Next steps.`,
+    ...(args.trigger === 'inactivity'
+      ? [
+          `   The one exception: if the step hung because of an environment problem you cannot fix from here`,
+          `   (a service that is down, no network, missing credentials), end with \`<promise>BLOCKED:reason</promise>\`.`,
+        ]
+      : []),
     ``,
     `Then stop.`,
   ].join('\n');
