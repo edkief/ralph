@@ -169,7 +169,7 @@ export async function proposeSplit(args: {
       ? { specPath: task.specFilePath!, specText: readFileSync(specFile, 'utf8') }
       : {}),
     ...(handoffText ? { handoffPath: display(projectRoot, handoffFile), handoffText } : {}),
-    commits: await git(projectRoot, ['log', '--oneline', '-n', '30', '--fixed-strings', `--grep=${taskId}`]),
+    commits: await taskCommits(projectRoot, taskId),
     cutShort: args.cutShort,
     ...(args.estimate ? { estimate: args.estimate } : {}),
     iterationMs: config.timeouts.iterationMs,
@@ -302,6 +302,11 @@ export async function applySplit(args: {
 export function describeIds(ids: string[]): string {
   if (ids.length <= 2) return ids.join(' and ');
   return `${ids[0]}–${ids[ids.length - 1]}`;
+}
+
+/** `git log --oneline` of the latest commits that mention `taskId`; empty outside a repository. */
+export function taskCommits(projectRoot: string, taskId: string): Promise<string> {
+  return git(projectRoot, ['log', '--oneline', '-n', '30', '--fixed-strings', `--grep=${taskId}`]);
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {

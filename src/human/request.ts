@@ -109,6 +109,15 @@ export function actionsFor(kind: RequestKind, waiting: boolean): Action[] {
   return ['dismiss'];
 }
 
+/**
+ * What the escalation agent may answer: what a person could tell a waiting
+ * loop, bar `stop`. An agent that would end the run passes the request on,
+ * and a person decides.
+ */
+export function agentActionsFor(kind: RequestKind): Action[] {
+  return actionsFor(kind, true).filter((action) => action !== 'stop');
+}
+
 /** Problems with an answer to `pending`, given whether its loop is waiting; none when it fits. */
 export function checkAnswer(pending: PendingRequest, input: AnswerInput, waiting: boolean): string | undefined {
   if (input.id !== pending.id) return 'That request is no longer pending';
