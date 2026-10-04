@@ -304,11 +304,63 @@ describe('web UI server', () => {
     ]);
   });
 
+  it('lists escalation turns, serves their transcripts and counts them in the metrics', async () => {
+    const root = project();
+    const history = resolve(root, '.ralph', 'history', LIVE_RUN);
+    writeFileSync(
+      resolve(history, 'escalations.jsonl'),
+      line({
+        n: 1,
+        iteration: 1,
+        kind: 'blocked',
+        taskId: 'TASK-0',
+        status: 'resolved',
+        action: 'resume',
+        reason: 'The network is up.',
+        models: { 'ollama/qwen': { steps: 1, input: 100, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, inferenceMs: 1_000 } },
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:02:00.000Z',
+      }),
+    );
+    writeFileSync(resolve(history, 'escalation-1.events.jsonl'), line(say('checking the network')));
+    // A second escalation is running: named by the state, not yet recorded.
+    writeFileSync(resolve(history, 'escalation-2.events.jsonl'), line(say('reading the question')));
+    patchState(root, { escalation: { n: 2, kind: 'decide', taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' } });
+    await start(root);
+
+    const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
+    expect(body.run.escalation).toEqual({ n: 2, kind: 'decide', taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' });
+    expect(body.escalations).toEqual([
+      {
+        n: 1,
+        iteration: 1,
+        kind: 'blocked',
+        taskId: 'TASK-0',
+        status: 'resolved',
+        action: 'resume',
+        reason: 'The network is up.',
+        startedAt: '2026-09-30T12:01:00.000Z',
+        endedAt: '2026-09-30T12:02:00.000Z',
+        durationMs: 60_000,
+      },
+      { n: 2, iteration: 2, kind: 'decide', taskId: 'TASK-2', status: 'running', startedAt: '2026-09-30T12:20:00.000Z', endedAt: null, durationMs: null },
+    ]);
+
+    expect((await get(`/api/runs/${LIVE_RUN}/escalations/1/transcript`)).body).toMatchObject([{ kind: 'text', text: 'checking the network' }]);
+    expect((await get(`/api/runs/${LIVE_RUN}/escalations/9/transcript`)).status).toBe(404);
+    expect((await get(`/api/runs/${LIVE_RUN}/escalations/0/transcript`)).status).toBe(404);
+
+    const metrics = (await get<MetricsView>('/api/metrics')).body;
+    expect(metrics.turns).toContainEqual(expect.objectContaining({ kind: 'escalation', escalation: 1, taskId: 'TASK-0', tokens: 120 }));
+  });
+
   it('reports no split turns for a run without any', async () => {
     await start(project());
     const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
     expect(body.run.split).toBeNull();
     expect(body.splits).toEqual([]);
+    expect(body.run.escalation).toBeNull();
+    expect(body.escalations).toEqual([]);
   });
 
   it('shows the Ralph folder and config, but not history or anything outside', async () => {
@@ -607,6 +659,26 @@ describe('web UI server', () => {
       live.close();
     }
   });
+
+  it('follows an escalation turn while it runs, over the split turn before it', async () => {
+    const root = project();
+    const history = resolve(root, '.ralph', 'history', LIVE_RUN);
+    writeFileSync(resolve(history, 'split-TASK-2.events.jsonl'), line(say('splitting')));
+    writeFileSync(resolve(history, 'escalation-1.events.jsonl'), line(say('reviewing the split')));
+    patchState(root, {
+      split: { taskId: 'TASK-2', startedAt: '2026-09-30T12:20:00.000Z' },
+      escalation: { n: 1, kind: 'split', taskId: 'TASK-2', startedAt: '2026-09-30T12:25:00.000Z' },
+    });
+    await start(root);
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('transcript').some((message) => message.escalation === 1));
+      expect(live.of('transcript').at(-1)).toMatchObject({ escalation: 1, reset: true, entries: [{ text: 'reviewing the split' }] });
+      expect(live.of('transcript').at(-1)).not.toHaveProperty('split');
+    } finally {
+      live.close();
+    }
+  });
 });
 
 type LiveEvent = { [K in keyof LiveEvents]: { name: K; data: LiveEvents[K] } }[keyof LiveEvents];
@@ -696,6 +768,14 @@ describe('web UI actions', () => {
     expect(body.run).toMatchObject({ status: 'waiting', live: true });
     expect(body.pending).toMatchObject({ kind: 'decide', taskId: 'TASK-2', question: 'REST or GraphQL?', waiting: true, answered: false, actions: ['answer', 'stop'] });
     expect(body.actions).toEqual({ enabled: true, token: false });
+  });
+
+  it('shows what the escalation agent found when it passed the request on', async () => {
+    const root = project();
+    ask(root, { analysis: 'A billing provider needs an account only you can open.' });
+    await start(root);
+    const { body } = await get<StatusView>('/api/status');
+    expect(body.pending).toMatchObject({ analysis: 'A billing provider needs an account only you can open.' });
   });
 
   it('hands an answer to the waiting loop, once', async () => {

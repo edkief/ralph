@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import {
   useJson,
   useStickToBottom,
+  type EscalationView,
   type IterationView,
   type LiveState,
   type RunDetail,
@@ -17,12 +18,15 @@ import { href } from '../route';
 
 /** How a split turn is named in the URL, next to iteration numbers. */
 const SPLIT_PREFIX = 'split-';
+/** How an escalation turn is named in the URL. */
+const ESCALATION_PREFIX = 'escalation-';
 
 /**
- * The transcript of one session: an iteration, or the turn that proposed
- * splitting a task. With nothing picked it follows the latest run's session
- * in progress and moves on to the next one as it starts; `selected`
- * (`<runId>/<iteration>` or `<runId>/split-<taskId>`) pins another.
+ * The transcript of one session: an iteration, the turn that proposed
+ * splitting a task, or an escalation turn. With nothing picked it follows the
+ * latest run's session in progress and moves on to the next one as it starts;
+ * `selected` (`<runId>/<iteration>`, `<runId>/split-<taskId>` or
+ * `<runId>/escalation-<n>`) pins another.
  */
 export function Transcript({
   status,
@@ -44,29 +48,50 @@ export function Transcript({
   );
   const iterations = detail.data?.iterations ?? [];
   const splits = detail.data?.splits ?? [];
+  const escalations = detail.data?.escalations ?? [];
   const lastIteration = iterations.at(-1)?.iteration ?? (live?.runId === runId ? live?.iteration : undefined);
   const followsLive = following && live?.runId === runId;
-  const split = pickedSession?.startsWith(SPLIT_PREFIX)
-    ? pickedSession.slice(SPLIT_PREFIX.length)
+  const escalation = pickedSession?.startsWith(ESCALATION_PREFIX)
+    ? Number(pickedSession.slice(ESCALATION_PREFIX.length))
     : !pickedSession && followsLive
-      ? live.split
+      ? live.escalation
       : undefined;
-  const iteration = split ? undefined : pickedSession ? Number(pickedSession) : followsLive ? live.iteration : lastIteration;
-  const session = split ? `${SPLIT_PREFIX}${split}` : iteration ? String(iteration) : '';
+  const split = escalation
+    ? undefined
+    : pickedSession?.startsWith(SPLIT_PREFIX)
+      ? pickedSession.slice(SPLIT_PREFIX.length)
+      : !pickedSession && followsLive
+        ? live.split
+        : undefined;
+  const iteration = split || escalation ? undefined : pickedSession ? Number(pickedSession) : followsLive ? live.iteration : lastIteration;
+  const session = escalation ? `${ESCALATION_PREFIX}${escalation}` : split ? `${SPLIT_PREFIX}${split}` : iteration ? String(iteration) : '';
 
-  const isLive = live !== null && live.runId === runId && (split ? live.split === split : !live.split && live.iteration === iteration);
+  const isLive =
+    live !== null &&
+    live.runId === runId &&
+    (escalation
+      ? live.escalation === escalation
+      : split
+        ? live.split === split
+        : !live.split && !live.escalation && live.iteration === iteration);
   const fetched = useJson<TranscriptEntry[]>(
     isLive || !runId || !session
       ? null
-      : split
-        ? `/api/runs/${encodeURIComponent(runId)}/splits/${encodeURIComponent(split)}/transcript`
-        : `/api/runs/${encodeURIComponent(runId)}/iterations/${iteration}/transcript`,
+      : escalation
+        ? `/api/runs/${encodeURIComponent(runId)}/escalations/${escalation}/transcript`
+        : split
+          ? `/api/runs/${encodeURIComponent(runId)}/splits/${encodeURIComponent(split)}/transcript`
+          : `/api/runs/${encodeURIComponent(runId)}/iterations/${iteration}/transcript`,
   );
   const entries = isLive ? live.entries : (fetched.data ?? []);
   const inProgress = isLive && status.run?.live === true && status.run.runId === runId;
 
   const { ref, stuck, onScroll, jump } = useStickToBottom<HTMLDivElement>(entries);
-  const info = split ? splits.find((entry) => entry.taskId === split) : iterations.find((entry) => entry.iteration === iteration);
+  const info = escalation
+    ? escalations.find((entry) => entry.n === escalation)
+    : split
+      ? splits.find((entry) => entry.taskId === split)
+      : iterations.find((entry) => entry.iteration === iteration);
 
   return (
     <div className="transcript-view">
@@ -87,14 +112,19 @@ export function Transcript({
         <label className="field">
           <span>Session</span>
           <select value={session} onChange={(event) => (window.location.hash = href('transcript', `${runId}/${event.target.value}`))}>
-            {session && !split && !iterations.some((entry) => entry.iteration === iteration) ? (
+            {session && !split && !escalation && !iterations.some((entry) => entry.iteration === iteration) ? (
               <option value={session}>{session}</option>
             ) : null}
             {split && !splits.some((entry) => entry.taskId === split) ? <option value={session}>split · {split}</option> : null}
-            {sessions(iterations, splits).map((entry) =>
+            {escalation && !escalations.some((entry) => entry.n === escalation) ? <option value={session}>escalation {escalation}</option> : null}
+            {sessions(iterations, splits, escalations).map((entry) =>
               'tokens' in entry ? (
                 <option key={entry.iteration} value={entry.iteration}>
                   {entry.iteration} · {entry.taskId ?? '–'} · {statusLabel(entry.status)}
+                </option>
+              ) : 'n' in entry ? (
+                <option key={`${ESCALATION_PREFIX}${entry.n}`} value={`${ESCALATION_PREFIX}${entry.n}`}>
+                  escalation {entry.n} · {entry.kind}{entry.taskId ? ` · ${entry.taskId}` : ''} · {statusLabel(entry.status)}
                 </option>
               ) : (
                 <option key={`${SPLIT_PREFIX}${entry.taskId}`} value={`${SPLIT_PREFIX}${entry.taskId}`}>
@@ -125,7 +155,7 @@ export function Transcript({
         {!session ? (
           <div className="empty">No iterations yet. The transcript appears here as soon as one starts.</div>
         ) : entries.length === 0 ? (
-          <div className="empty">{inProgress ? 'Waiting for the agent…' : `Nothing recorded for this ${split ? 'split' : 'iteration'}.`}</div>
+          <div className="empty">{inProgress ? 'Waiting for the agent…' : `Nothing recorded for this ${escalation ? 'escalation' : split ? 'split' : 'iteration'}.`}</div>
         ) : (
           <ol className="entries">
             {entries.map((entry) => (
@@ -152,15 +182,23 @@ export function Transcript({
   );
 }
 
-/** Iterations in order, each after the assessment that came before it and followed by the split turn that came after. */
-function sessions(iterations: IterationView[], splits: SplitView[]): Array<IterationView | SplitView> {
+/**
+ * Iterations in order, each after the assessment that came before it and
+ * followed by the split and escalation turns that came after it.
+ */
+function sessions(
+  iterations: IterationView[],
+  splits: SplitView[],
+  escalations: EscalationView[],
+): Array<IterationView | SplitView | EscalationView> {
   const known = new Set(iterations.map((entry) => entry.iteration));
-  const around = (entry: IterationView, assessed: boolean) =>
-    splits.filter((split) => split.iteration === entry.iteration && (split.trigger === 'assessment') === assessed);
-  return [
-    ...iterations.flatMap((entry) => [...around(entry, true), entry, ...around(entry, false)]),
-    ...splits.filter((split) => !known.has(split.iteration)),
-  ];
+  const before = (entry: IterationView) => splits.filter((split) => split.iteration === entry.iteration && split.trigger === 'assessment');
+  const after = (iteration: number | undefined): Array<SplitView | EscalationView> =>
+    [
+      ...splits.filter((split) => (iteration === undefined ? !known.has(split.iteration) : split.iteration === iteration && !split.trigger)),
+      ...escalations.filter((turn) => (iteration === undefined ? !known.has(turn.iteration) : turn.iteration === iteration)),
+    ].sort((a, b) => ((a.startedAt ?? '') < (b.startedAt ?? '') ? -1 : (a.startedAt ?? '') > (b.startedAt ?? '') ? 1 : 0));
+  return [...iterations.flatMap((entry) => [...before(entry), entry, ...after(entry.iteration)]), ...after(undefined)];
 }
 
 const Entry = memo(function Entry({ entry }: { entry: TranscriptEntry }) {

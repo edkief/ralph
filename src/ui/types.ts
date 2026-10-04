@@ -45,6 +45,8 @@ export interface RunView {
    * an iteration has started after it.
    */
   split: { taskId: string; startedAt: string; phase?: 'assess' | 'split' } | null;
+  /** The escalation turn in progress, or the last one, until the next iteration starts. */
+  escalation: { n: number; kind: string; taskId: string | null; startedAt: string } | null;
   message?: string;
 }
 
@@ -60,6 +62,8 @@ export interface PendingView {
   question?: string;
   /** The proposal to review, for `split`. Paths are relative to the project root. */
   split?: { dir: string; reason: string; tasks: Array<{ id: string; title: string; specPath: string }> };
+  /** What the escalation agent found when it passed the request on, or why it could not settle it. */
+  analysis?: string;
   /** The loop is waiting for the answer; otherwise it has exited and is rerun by hand. */
   waiting: boolean;
   /** Answered, and the loop has not picked the answer up yet. */
@@ -164,11 +168,33 @@ export interface SplitView {
   durationMs: number | null;
 }
 
+/** A turn of the escalation agent, which got a request before a person did. */
+export interface EscalationView {
+  /** The run's escalation turns are numbered from 1. */
+  n: number;
+  /** The iteration the request came after. */
+  iteration: number;
+  /** The kind of request: `blocked`, `decide`, `stalled`, `split` or `budget`. */
+  kind: string;
+  taskId: string | null;
+  /** `resolved`, `escalated` or `failed`; `running` or `ended` while it has no record. */
+  status: string;
+  /** The answer it gave, when it settled the request. */
+  action?: string;
+  /** Its note to the coding agent, its analysis for a person, or why the turn failed. */
+  reason?: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
 export interface RunDetail {
   run: RunView;
   iterations: IterationView[];
   /** Split turns, in the order they ran. */
   splits: SplitView[];
+  /** Escalation turns, in the order they ran. */
+  escalations: EscalationView[];
 }
 
 export interface LogLine {
@@ -213,6 +239,8 @@ export interface LiveTranscript {
   iteration: number;
   /** The task being split, when the session is a split turn. */
   split?: string;
+  /** The escalation turn's number, when the session is one. */
+  escalation?: number;
   /** Replace what is shown: a new session began, or this is the first message. */
   reset: boolean;
   /** Entries added or changed since the last message. */
@@ -308,11 +336,13 @@ export interface MetricsUsage {
   estimatedCost: number | null;
 }
 
-/** One turn of a run: an iteration, or a planning turn (an assessment or a split proposal). */
+/** One turn of a run: an iteration, a planning turn (an assessment or a split proposal), or an escalation. */
 export interface MetricsTurn extends MetricsUsage {
   runId: string;
-  kind: 'iteration' | 'assessment' | 'split';
+  kind: 'iteration' | 'assessment' | 'split' | 'escalation';
   iteration: number;
+  /** The escalation turn's number in its run, for an escalation. */
+  escalation?: number;
   taskId: string | null;
   startedAt: string | null;
   /** Wall-clock time, tool runs included. */

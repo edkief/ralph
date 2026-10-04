@@ -8,7 +8,7 @@ import { daemonLive, readDaemonState } from '../daemon/control.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { readJournalTranscript } from '../report/journal.js';
 import { TranscriptBuilder } from './transcript.js';
-import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
+import type { EscalationRecord, IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
 import { aggregateMetrics, type TaskInput, type TurnInput } from '../metrics/aggregate.js';
 import { UNKNOWN_MODEL, usageOfEventsFile, type TurnUsage } from '../metrics/usage.js';
@@ -24,6 +24,7 @@ import type {
   RunDetail,
   RunView,
   SplitView,
+  EscalationView,
   StatusView,
   TasksView,
   TranscriptEntry,
@@ -153,6 +154,7 @@ export class RalphProject {
       message: pending.message,
       ...(pending.question ? { question: pending.question } : {}),
       ...(pending.split ? { split: pending.split } : {}),
+      ...(pending.analysis ? { analysis: pending.analysis } : {}),
       waiting: state.waiting,
       answered: state.answered,
       actions: state.actions,
@@ -249,6 +251,7 @@ export class RalphProject {
         tasksPassed: state.tasksPassed,
         tasksTotal: state.tasksTotal,
         split: state.split ?? null,
+        escalation: state.escalation ?? null,
         ...(state.message ? { message: state.message } : {}),
       };
     }
@@ -268,6 +271,7 @@ export class RalphProject {
       tasksPassed: summary?.tasksPassed ?? null,
       tasksTotal: summary?.tasksTotal ?? null,
       split: null,
+      escalation: null,
       ...(summary?.message ? { message: summary.message } : {}),
     };
   }
@@ -299,7 +303,28 @@ export class RalphProject {
       run,
       iterations: [...byIteration.values()].sort((a, b) => a.iteration - b.iteration),
       splits: this.splits(run),
+      escalations: this.escalations(run),
     };
+  }
+
+  /** The run's escalation turns: those recorded, and the one still running or cut off before its record. */
+  private escalations(run: RunView): EscalationView[] {
+    const dir = this.runDir(run.runId);
+    const turns = parseJsonLines<EscalationRecord>(readLines(resolve(dir, 'escalations.jsonl'))).map(escalationView);
+    const open = run.escalation;
+    if (open && !turns.some((turn) => turn.n === open.n) && existsSync(this.escalationEventsPath(run.runId, open.n))) {
+      turns.push({
+        n: open.n,
+        iteration: run.iteration,
+        kind: open.kind,
+        taskId: open.taskId,
+        status: run.live ? 'running' : 'ended',
+        startedAt: open.startedAt,
+        endedAt: null,
+        durationMs: null,
+      });
+    }
+    return turns;
   }
 
   /** The run's split turns: those recorded, and the one still running or cut off before its record. */
@@ -375,6 +400,21 @@ export class RalphProject {
           ...usage,
         });
       });
+
+      for (const record of parseJsonLines<EscalationRecord>(readLines(resolve(dir, 'escalations.jsonl')))) {
+        const backfilled = record.models ? undefined : this.backfill(resolve(history, `escalation-${record.n}.events.jsonl`));
+        const wallMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
+        turns.push({
+          runId: run.runId,
+          kind: 'escalation',
+          iteration: record.iteration,
+          escalation: record.n,
+          taskId: record.taskId,
+          startedAt: record.startedAt ?? null,
+          wallMs: Number.isFinite(wallMs) ? wallMs : null,
+          ...(record.models ? { usage: record.models, source: 'recorded' as const } : (backfilled ?? { usage: {}, source: 'none' as const })),
+        });
+      }
     }
 
     let tasks: TaskInput[] = [];
@@ -428,6 +468,15 @@ export class RalphProject {
     return readJournalTranscript(journal);
   }
 
+  /** The transcript of escalation turn `n`. */
+  escalationTranscript(runId: string, n: number): TranscriptEntry[] {
+    const path = this.escalationEventsPath(runId, n);
+    if (existsSync(path)) return transcriptOf(path);
+    const journal = journalTranscriptPath(path);
+    if (!existsSync(journal)) throw new NotFoundError(`No escalation ${n} in run ${runId}`);
+    return readJournalTranscript(journal);
+  }
+
   /** The highest iteration with an event file (or a journal transcript), 0 before the first. */
   latestIteration(runId: string): number {
     let latest = 0;
@@ -459,6 +508,11 @@ export class RalphProject {
   splitEventsPath(runId: string, taskId: string): string {
     if (!TASK_ID.test(taskId)) throw new NotFoundError(`No task ${taskId}`);
     return resolve(this.runDir(runId), `split-${taskId}.events.jsonl`);
+  }
+
+  escalationEventsPath(runId: string, n: number): string {
+    if (!Number.isInteger(n) || n < 1) throw new NotFoundError(`No escalation ${n}`);
+    return resolve(this.runDir(runId), `escalation-${n}.events.jsonl`);
   }
 
   /**
@@ -597,6 +651,22 @@ function splitView(record: SplitRecord): SplitView {
     ...(record.estimateMinutes !== undefined ? { estimateMinutes: record.estimateMinutes } : {}),
     status: record.status,
     ...(record.children ? { children: record.children } : {}),
+    ...(record.reason ? { reason: record.reason } : {}),
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    durationMs: Number.isFinite(durationMs) ? durationMs : null,
+  };
+}
+
+function escalationView(record: EscalationRecord): EscalationView {
+  const durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
+  return {
+    n: record.n,
+    iteration: record.iteration,
+    kind: record.kind,
+    taskId: record.taskId,
+    status: record.status,
+    ...(record.action ? { action: record.action } : {}),
     ...(record.reason ? { reason: record.reason } : {}),
     startedAt: record.startedAt,
     endedAt: record.endedAt,

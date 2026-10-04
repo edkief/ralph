@@ -186,12 +186,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return gitCommit(options.projectRoot, hash).then((detail) => sendJson(res, 200, detail));
     }
 
-    const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript|\/splits\/([^/]+)\/transcript)?$/.exec(path);
+    const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript|\/splits\/([^/]+)\/transcript|\/escalations\/(\d+)\/transcript)?$/.exec(path);
     if (run) {
       const runId = decodeURIComponent(run[1]!);
       if (run[2] === '/log') return sendJson(res, 200, project.log(runId));
       if (run[3]) return sendJson(res, 200, project.transcript(runId, Number(run[3])));
       if (run[4]) return sendJson(res, 200, project.splitTranscript(runId, decodeURIComponent(run[4])));
+      if (run[5]) return sendJson(res, 200, project.escalationTranscript(runId, Number(run[5])));
       return sendJson(res, 200, project.runDetail(runId));
     }
     return sendJson(res, 404, { error: 'Not found' });
@@ -283,6 +284,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     runId: string;
     iteration: number;
     split: string | undefined;
+    escalation: number | undefined;
     tailer: LineTailer;
     builder: TranscriptBuilder;
     /**
@@ -302,6 +304,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     runId: feed.runId,
     iteration: feed.iteration,
     ...(feed.split ? { split: feed.split } : {}),
+    ...(feed.escalation ? { escalation: feed.escalation } : {}),
     reset,
     entries,
   });
@@ -330,19 +333,31 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     }
 
     const iteration = project.latestIteration(runId);
-    // The run's state names a split turn until the next iteration starts.
+    // The run's state names a split or escalation turn until the next iteration
+    // starts; of the two, the one that started last is followed.
     const splitTask = view.run?.split?.taskId;
     const splitPath = splitTask ? project.splitEventsPath(runId, splitTask) : undefined;
-    const split = splitPath && existsSync(splitPath) ? splitTask : undefined;
-    if (iteration === 0 && !split) return false;
+    const openEscalation = view.run?.escalation;
+    const escalationPath = openEscalation ? project.escalationEventsPath(runId, openEscalation.n) : undefined;
+    const escalationLatest =
+      escalationPath !== undefined && existsSync(escalationPath) && (!view.run?.split || openEscalation!.startedAt >= view.run.split.startedAt);
+    const escalation = escalationLatest ? openEscalation!.n : undefined;
+    const split = !escalation && splitPath && existsSync(splitPath) ? splitTask : undefined;
+    if (iteration === 0 && !split && !escalation) return false;
     // A run known only from its journal has no event stream to follow.
-    if (!split && !existsSync(project.eventsPath(runId, iteration))) return false;
-    if (transcriptFeed?.runId !== runId || transcriptFeed.iteration !== iteration || transcriptFeed.split !== split) {
+    if (!split && !escalation && !existsSync(project.eventsPath(runId, iteration))) return false;
+    if (
+      transcriptFeed?.runId !== runId ||
+      transcriptFeed.iteration !== iteration ||
+      transcriptFeed.split !== split ||
+      transcriptFeed.escalation !== escalation
+    ) {
       transcriptFeed = {
         runId,
         iteration,
         split,
-        tailer: new LineTailer(split ? splitPath! : project.eventsPath(runId, iteration)),
+        escalation,
+        tailer: new LineTailer(escalation ? escalationPath! : split ? splitPath! : project.eventsPath(runId, iteration)),
         builder: new TranscriptBuilder(),
         announced: false,
       };

@@ -81,6 +81,7 @@ export function startMenu(options: MenuOptions): () => void {
     if (pending?.waiting) {
       lines.push('', `  Waiting for you: ${pending.pending.question ?? pending.pending.message}`);
       for (const task of pending.pending.split?.tasks ?? []) lines.push(`    ${task.id}  ${task.title}`);
+      if (pending.pending.analysis) lines.push(`  The escalation agent passed this on: ${pending.pending.analysis}`);
       for (const action of pending.actions) {
         const entry = ACTION_KEYS[action];
         if (!entry) continue;
