@@ -389,6 +389,50 @@ describe('runLoop', () => {
       expect(records[0]).toMatchObject({ handoff: 'agent', result: { status: 'wrapped-up', wrapUp: { delivery: 'steer' } } });
     });
 
+    it('carries on to the next iteration when the agent raises BLOCKED or DECIDE in the wrap-up', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 3, timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        {
+          steer: true,
+          onPrompt: (count) => {
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) =>
+            count === 1
+              ? endless
+              : say(
+                  count === 2
+                    ? 'handed off <promise>BLOCKED:not applicable — task not complete, handoff written per time limit</promise> <promise>DECIDE:keep going?</promise>'
+                    : '<promise>TASK-1:DONE</promise>',
+                ),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      expect(String(server?.prompts[2]?.['text'])).toContain('## Resuming TASK-1');
+      const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(records[0]).toMatchObject({ result: { status: 'wrapped-up' } });
+      expect(records[0].result.tags).toEqual({ complete: false, completedTaskIds: [] });
+    });
+
+    it('stops for a BLOCKED raised after an agent went quiet', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 3, timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 5_000 } }),
+        { script: (count) => (count === 1 ? endless : say('<promise>BLOCKED:the database is down</promise>')) },
+      );
+
+      expect(result.status).toBe('blocked');
+      expect(result.message).toBe('the database is down');
+      expect(result.iterations).toBe(1);
+    });
+
     it('writes the handoff itself when the agent does not, and stops a task that keeps running out of time', async () => {
       const root = project([{ id: 'TASK-1', passes: false }]);
 
