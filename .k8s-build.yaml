@@ -1,0 +1,10 @@
+version: 1
+
+# No container image for this repo: npm only. Without this file the pipeline would try to build
+# a ./Dockerfile, which ralph doesn't have.
+npm:
+  - name: ralph
+    # Releases come from master. Bump "version" in package.json to publish; a push whose
+    # version is already in the registry is skipped.
+    branches: [master]
+    # No 'build' needed: npm ci runs the package's "prepare" script (tsc + vite build).
