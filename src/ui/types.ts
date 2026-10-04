@@ -288,3 +288,93 @@ export interface GitCommitDetail extends GitCommitSummary {
   added: number;
   removed: number;
 }
+
+/** Model work over some stretch: calls, tokens by kind, time generating, and what it cost. */
+export interface MetricsUsage {
+  /** Model calls that ended. */
+  steps: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Every token above together. */
+  tokens: number;
+  /** Time the models spent generating; for approximate turns, their wall-clock time. */
+  inferenceMs: number;
+  /** What opencode reported, from the provider's prices; 0 for most self-hosted models. */
+  reportedCost: number;
+  /** The configured estimate, in `MetricsView.cost.currency`; null when none is configured. */
+  estimatedCost: number | null;
+}
+
+/** One turn of a run: an iteration, or a planning turn (an assessment or a split proposal). */
+export interface MetricsTurn extends MetricsUsage {
+  runId: string;
+  kind: 'iteration' | 'assessment' | 'split';
+  iteration: number;
+  taskId: string | null;
+  startedAt: string | null;
+  /** Wall-clock time, tool runs included. */
+  wallMs: number | null;
+  /** The models the turn ran. */
+  models: string[];
+  /**
+   * `recorded` with the turn; `events` worked out from its event file, for a turn
+   * recorded before usage was; `legacy` only its record's totals, under an unknown
+   * model and with wall-clock time; `none` when nothing says.
+   */
+  source: 'recorded' | 'events' | 'legacy' | 'none';
+}
+
+export interface MetricsModel extends MetricsUsage {
+  /** `provider/model`, or `unknown`. */
+  model: string;
+  turns: number;
+}
+
+export interface MetricsRun extends MetricsUsage {
+  runId: string;
+  status: string;
+  startedAt: string | null;
+  iterations: number;
+  planningTurns: number;
+  wallMs: number;
+}
+
+export interface MetricsTask extends MetricsUsage {
+  id: string;
+  /** Null for a task no longer in tasks.json, such as one that was split. */
+  title: string | null;
+  /** Null for a task no longer in tasks.json. */
+  passes: boolean | null;
+  /** The task it was split from. */
+  parent: string | null;
+  /** The tasks it was split into, in order. */
+  children: string[];
+  iterations: number;
+  planningTurns: number;
+  /** The task's own figures plus those of every task split from it, at any depth. */
+  total: MetricsUsage & { iterations: number; planningTurns: number };
+}
+
+export interface MetricsView {
+  totals: MetricsUsage & { runs: number; iterations: number; planningTurns: number; wallMs: number };
+  /** Most tokens first. */
+  models: MetricsModel[];
+  /** Newest first. */
+  runs: MetricsRun[];
+  /** In backlog order, a split task before the tasks it was split into. */
+  tasks: MetricsTask[];
+  /** Oldest first; the browser groups them by day in its own time zone. */
+  turns: MetricsTurn[];
+  cost: {
+    /** The estimator in use; null until one is configured. */
+    estimator: string | null;
+    currency: string;
+    /** How estimates are made, in a line. */
+    basis: string | null;
+  };
+  /** How many turns had their usage from each source. */
+  coverage: Record<MetricsTurn['source'], number>;
+}

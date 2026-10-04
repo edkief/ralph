@@ -9,7 +9,7 @@ import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
 import { readDaemonRequest, writeDaemonState, type DaemonState } from '../src/daemon/control.js';
-import type { FileContent, GitCommitDetail, GitView, LiveEvents, RunDetail, RunView, StatusView } from '../src/ui/types.js';
+import type { FileContent, GitCommitDetail, GitView, LiveEvents, MetricsView, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const LIVE_RUN = '20260930-120000';
@@ -172,6 +172,15 @@ describe('web UI server', () => {
     const { body } = await get<RunView[]>('/api/runs');
     expect(body.map((run) => run.runId)).toEqual([LIVE_RUN, OLD_RUN]);
     expect(body[1]).toMatchObject({ status: 'stalled', live: false, iteration: 3 });
+  });
+
+  it('serves the project metrics, with no cost estimated until one is configured', async () => {
+    await start(project());
+    const { status, body } = await get<MetricsView>('/api/metrics');
+    expect(status).toBe(200);
+    expect(body.totals).toMatchObject({ runs: 2, iterations: 1, estimatedCost: null });
+    expect(body.cost.estimator).toBeNull();
+    expect(body.tasks.map((task) => task.id)).toEqual(['TASK-1', 'TASK-0', 'TASK-2']);
   });
 
   it('orders runs by when they started, not by their local-time ids', async () => {

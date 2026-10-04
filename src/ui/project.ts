@@ -10,12 +10,16 @@ import { readJournalTranscript } from '../report/journal.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
 import type { OpencodeEvent } from '../opencode/events.js';
+import { aggregateMetrics, type TaskInput, type TurnInput } from '../metrics/aggregate.js';
+import { UNKNOWN_MODEL, usageOfEventsFile, type TurnUsage } from '../metrics/usage.js';
+import type { CostEstimator } from '../metrics/cost.js';
 import type {
   DaemonView,
   FileContent,
   FileEntry,
   IterationView,
   LogLine,
+  MetricsView,
   PendingView,
   RunDetail,
   RunView,
@@ -75,6 +79,8 @@ export class RalphProject {
   readonly journalRoot: string;
   /** When each run started, once its state says so: that never changes. */
   private readonly startTimes = new Map<string, number>();
+  /** Usage worked out from the event file of a turn recorded before usage was, by path. */
+  private readonly backfills = new Map<string, { mtimeMs: number; size: number; usage: TurnUsage }>();
 
   constructor(
     readonly projectRoot: string,
@@ -315,6 +321,91 @@ export class RalphProject {
     return splits;
   }
 
+  /**
+   * The project's metrics, over every finished turn of every run. A turn
+   * recorded before usage was has it worked out from its event file, where
+   * this machine still has one; else only its record's totals count, under an
+   * unknown model, with its wall-clock time standing in for inference time.
+   */
+  metrics(cost: { estimator: CostEstimator | undefined; currency: string }): MetricsView {
+    const runs = this.runIds().map((runId) => this.run(runId));
+    const turns: TurnInput[] = [];
+    const splits: Array<{ taskId: string; children: string[] }> = [];
+
+    for (const run of runs) {
+      const dir = this.runDir(run.runId);
+      const history = resolve(this.historyRoot, run.runId);
+      const byIteration = new Map<number, IterationRecord>();
+      for (const record of parseJsonLines<IterationRecord>(readLines(resolve(dir, 'iterations.jsonl')))) {
+        byIteration.set(record.iteration, record);
+      }
+      for (const record of byIteration.values()) {
+        const events = resolve(history, `iteration-${String(record.iteration).padStart(3, '0')}.events.jsonl`);
+        const usage = record.models
+          ? { usage: record.models, source: 'recorded' as const }
+          : this.backfill(events) ?? { usage: legacyUsage(record), source: 'legacy' as const };
+        turns.push({
+          runId: run.runId,
+          kind: 'iteration',
+          iteration: record.iteration,
+          taskId: record.taskId,
+          startedAt: record.startedAt ?? null,
+          wallMs: record.result?.durationMs ?? null,
+          ...usage,
+        });
+      }
+
+      const records = parseJsonLines<SplitRecord>(readLines(resolve(dir, 'splits.jsonl')));
+      records.forEach((record, index) => {
+        if (record.status === 'applied' && record.children) splits.push({ taskId: record.taskId, children: record.children });
+        // A task's event file holds only its last turn in the run: each one starts it over.
+        const last = !records.slice(index + 1).some((later) => later.taskId === record.taskId);
+        const backfilled = !record.models && last ? this.backfill(resolve(history, `split-${record.taskId}.events.jsonl`)) : undefined;
+        const usage = record.models
+          ? { usage: record.models, source: 'recorded' as const }
+          : backfilled ?? { usage: {}, source: 'none' as const };
+        const wallMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
+        turns.push({
+          runId: run.runId,
+          kind: record.trigger === 'assessment' && (record.status === 'fits' || record.estimateMinutes === undefined) ? 'assessment' : 'split',
+          iteration: record.iteration,
+          taskId: record.taskId,
+          startedAt: record.startedAt ?? null,
+          wallMs: Number.isFinite(wallMs) ? wallMs : null,
+          ...usage,
+        });
+      });
+    }
+
+    let tasks: TaskInput[] = [];
+    try {
+      tasks = TaskStore.forProject(this.projectRoot, this.ralphDir)
+        .readTasks()
+        .map((task) => ({ id: task.id, title: task.title, passes: task.passes, ...(task.splitFrom ? { splitFrom: task.splitFrom } : {}) }));
+    } catch {
+      // No backlog to read: tasks show by id only.
+    }
+    return aggregateMetrics({
+      runs: runs.map((run) => ({ runId: run.runId, status: run.status, startedAt: run.startedAt })),
+      turns,
+      tasks,
+      splits,
+      estimator: cost.estimator,
+      currency: cost.currency,
+    });
+  }
+
+  /** The usage in a turn's event file, worked out once for as long as the file stays as it is. */
+  private backfill(path: string): { usage: TurnUsage; source: 'events' } | undefined {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    if (!stat) return undefined;
+    const known = this.backfills.get(path);
+    if (known && known.mtimeMs === stat.mtimeMs && known.size === stat.size) return { usage: known.usage, source: 'events' };
+    const usage = usageOfEventsFile(path);
+    this.backfills.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, usage });
+    return { usage, source: 'events' };
+  }
+
   log(runId: string): LogLine[] {
     const tailer = new LineTailer(this.logPath(runId), { fromEnd: LOG_TAIL_BYTES });
     return parseJsonLines<LogLine>(tailer.read(LOG_TAIL_BYTES).lines).slice(-MAX_LOG_LINES);
@@ -476,6 +567,24 @@ function iterationView(record: IterationRecord): IterationView {
     compactions: result.compactions ?? 0,
     ...(record.handoff ? { handoff: record.handoff } : {}),
     ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+/** What a record from before usage was metered says: its totals, under an unknown model. */
+function legacyUsage(record: IterationRecord): TurnUsage {
+  const usage = record.result?.usage;
+  if (!usage) return {};
+  return {
+    [UNKNOWN_MODEL]: {
+      steps: 0,
+      input: usage.input ?? 0,
+      output: usage.output ?? 0,
+      reasoning: usage.reasoning ?? 0,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+      cost: usage.cost ?? 0,
+      inferenceMs: record.result.durationMs ?? 0,
+    },
   };
 }
 

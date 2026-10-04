@@ -5,6 +5,8 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RecordsMode } from '../loop/records.js';
+import type { CostConfig } from '../config/schema.js';
+import { costEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
@@ -63,6 +65,8 @@ export interface UiServerOptions {
   logger: Logger;
   /** `git.records`: whether answers given with no loop waiting are committed. */
   records?: RecordsMode;
+  /** `metrics.cost`: how the Metrics tab estimates what the work cost. */
+  cost?: CostConfig;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
   /** How often live streams look for changes. */
@@ -110,6 +114,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const loopbackOnly = isLoopback(options.host);
   const basePath = (options.basePath ?? '').replace(/\/+$/, '');
   const token = options.token;
+  const cost = { estimator: options.cost ? costEstimator(options.cost) : undefined, currency: options.cost?.currency ?? 'USD' };
   const actions: ActionsView =
     loopbackOnly || token || options.openActions
       ? { enabled: true, token: Boolean(token) }
@@ -170,6 +175,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/file') return sendJson(res, 200, project.readFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/file/raw') return sendImage(res, project.imageFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
+    if (path === '/api/metrics') return sendJson(res, 200, project.metrics(cost));
     if (path === '/api/live') return live(req, res);
     if (path === '/api/git') return gitStatus(options.projectRoot).then((view) => sendJson(res, 200, view));
 
