@@ -487,6 +487,43 @@ describe('runIteration', () => {
       expect(server?.prompts[1]).not.toHaveProperty('delivery');
     });
 
+    it('ignores a BLOCKED raised in a time wrap-up: running out of time is not being blocked', async () => {
+      const result = await iterate(
+        {
+          steer: true,
+          script: (count) =>
+            count === 1 ? endless : say('handoff written <promise>BLOCKED:not applicable — handoff written</promise>'),
+        },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.blockedReason).toBeUndefined();
+    });
+
+    it('ignores a DECIDE raised in a time wrap-up', async () => {
+      const result = await iterate(
+        { steer: true, script: (count) => (count === 1 ? endless : say('<promise>DECIDE:A or B?</promise>')) },
+        config({ timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('wrapped-up');
+      expect(result.tags.decideQuestion).toBeUndefined();
+    });
+
+    it('keeps a BLOCKED raised after an inactivity wrap-up, since a hung command may be the environment', async () => {
+      const result = await iterate(
+        { script: (count) => (count === 1 ? endless : say('<promise>BLOCKED:the database is down</promise>')) },
+        config({ timeouts: { iterationMs: 60_000, inactivityMs: 1_000, wrapUpMs: 5_000 } }),
+        { wrapUp },
+      );
+
+      expect(result.status).toBe('blocked');
+      expect(result.tags.blockedReason).toBe('the database is down');
+    });
+
     it('interrupts a quiet agent, which is stuck in a tool, even when steering is available', async () => {
       const result = await iterate(
         { steer: true, script: (count) => (count === 1 ? endless : say('handoff written')) },
