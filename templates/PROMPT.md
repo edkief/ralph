@@ -44,6 +44,10 @@ for environment problems you cannot fix from here — missing credentials, no ne
 a service that is down, dependencies that will not install. These are not bugs and
 retrying will not help, so exit on the first failure.
 
+Unfinished work is **not** `BLOCKED`. If the task needs more time, if you ran out of time or wrote a
+handoff, or if only the close-out is left, end the turn without any promise tag. The next
+iteration picks up from your commits and handoff, and a `BLOCKED` would stop the run for a person.
+
 ```
 <promise>DECIDE:question (Option A vs B)</promise>
 ```

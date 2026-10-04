@@ -125,12 +125,26 @@ describe('buildWrapUpPrompt', () => {
     expect(prompt).toContain('Do not set `passes: true`');
   });
 
+  it('asks for no promise tag, since running out of time is not being blocked', () => {
+    for (const trigger of ['iteration-timeout', 'park'] as const) {
+      const prompt = buildWrapUpPrompt({
+        taskId: 'TASK-7', handoffPath: '.ralph/handoff/TASK-7.md', trigger, wrapUpMs: 600_000,
+      });
+      expect(prompt).toContain('End without any promise tag');
+      expect(prompt).toContain('Running out of time is not being blocked');
+      expect(prompt).not.toContain('<promise>BLOCKED');
+    }
+  });
+
   it('warns a quiet agent off the command that hung', () => {
     const prompt = buildWrapUpPrompt({
       taskId: 'TASK-7', handoffPath: '.ralph/handoff/TASK-7.md', trigger: 'inactivity', wrapUpMs: 60_000,
     });
     expect(prompt).toContain('Do not run that command again');
     expect(prompt).toContain('about 1 minute to');
+    // A hung command may be the environment problem BLOCKED is for.
+    expect(prompt).toContain('End without any promise tag');
+    expect(prompt).toContain('<promise>BLOCKED:reason</promise>');
   });
 });
 
