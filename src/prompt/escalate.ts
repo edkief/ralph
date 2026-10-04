@@ -9,6 +9,8 @@ import type { Decision } from '../human/decisions.js';
  */
 export function buildEscalationPrompt(args: {
   projectRoot: string;
+  /** Ralph's folder, relative to the project root. */
+  ralphDir: string;
   kind: RequestKind;
   /** What stopped the run, as a person would be told. */
   message: string;
@@ -68,7 +70,7 @@ export function buildEscalationPrompt(args: {
       ? args.task.specPath
         ? `The task's spec, \`${args.task.specPath}\`:\n\n${fence(args.task.specText ?? '')}`
         : `The task has no spec file; its title is all there is.`
-      : `The request is about the run, not one task: \`tasks.json\` in Ralph's folder has the backlog.`,
+      : `The request is about the run, not one task: \`${args.ralphDir}/tasks.json\` has the backlog.`,
     ``,
     ...(args.handoffPath ? [`The handoff the last attempt left, \`${args.handoffPath}\`:`, ``, args.handoffText ?? '', ``] : []),
     ...(args.commits ? [`Commits that mention ${args.task?.id ?? 'the task'} (read them with \`git show\`):`, ``, fence(args.commits), ``] : []),
@@ -83,8 +85,8 @@ export function buildEscalationPrompt(args: {
           ``,
         ]
       : []),
-    `The project's PRD, plan and steering notes are in Ralph's folder beside \`tasks.json\`; read what bears on`,
-    `the request.`,
+    `Ralph's folder, \`${args.ralphDir}/\`, holds the backlog (\`tasks.json\`), the PRD, steering notes and the`,
+    `agent's log; read what bears on the request.`,
     ``,
     ...(args.guidance?.text.trim()
       ? [`### Project guidance`, ``, `From \`${args.guidance.path}\`; it overrides the defaults below where they disagree:`, ``, args.guidance.text.trim(), ``]

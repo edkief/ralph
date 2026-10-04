@@ -89,6 +89,7 @@ describe('projectGuidance', () => {
 describe('buildEscalationPrompt', () => {
   const prompt = buildEscalationPrompt({
     projectRoot: '/work/app',
+    ralphDir: '.ralph',
     kind: 'decide',
     message: 'REST or GraphQL?',
     question: 'REST or GraphQL?',

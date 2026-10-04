@@ -128,6 +128,7 @@ export async function runEscalation(args: {
 
   let message = buildEscalationPrompt({
     projectRoot,
+    ralphDir: ralphDir.replace(/\/+$/, ''),
     kind: request.kind,
     message: request.message,
     ...(request.question ? { question: request.question } : {}),
