@@ -352,6 +352,11 @@ The agent signals back with promise tags in its replies:
 | `<promise>BLOCKED:reason</promise>` | Stops the run, exit 2 |
 | `<promise>DECIDE:question</promise>` | Stops the run, exit 3 |
 
+`BLOCKED` is for problems the agent cannot fix from here, not for unfinished work. An agent that
+runs out of time hands off and ends without a tag. A `BLOCKED` or `DECIDE` raised in answer to the
+wrap-up is ignored, and the next iteration resumes from the handoff (see
+[Running out of time](#running-out-of-time)).
+
 ## Configuration
 
 Resolution order is defaults < `ralph.config.json` < `RALPH_*` environment < CLI flags.
@@ -509,7 +514,10 @@ its work over instead of losing it:
    wrap-up prompt into the same session: stop, commit the work as `wip(TASK-x): …`, and write
    `.ralph/handoff/TASK-x.md` for whoever picks the task up next, under fixed headings
    (Status, Done, Working tree, Next steps, Dead ends, How to verify). The agent must not
-   mark the task as passing.
+   mark the task as passing, and ends without a promise tag: running out of time is not being
+   blocked. Ralph ignores a `BLOCKED` or `DECIDE` raised in the wrap-up, with one exception. After
+   an inactivity wrap-up, a `BLOCKED` still stops the run, since a command that hung is often the
+   environment problem `BLOCKED` is for.
    - A working agent is *steered*: the prompt reaches it at its next step and the tool it is
      running is left to finish. This needs a server whose prompt API offers
      `delivery: "steer"`; otherwise the agent is interrupted first.
