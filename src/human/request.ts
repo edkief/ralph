@@ -33,6 +33,8 @@ const PendingSchema = z.object({
       tasks: z.array(z.object({ id: z.string(), title: z.string(), specPath: z.string() })),
     })
     .optional(),
+  /** What the escalation agent found, when it passed the request on (or why it could not settle it). */
+  analysis: z.string().optional(),
   /** Whether the loop that asked is waiting for the answer, rather than having exited. */
   waiting: z.boolean(),
   createdAt: z.string(),
@@ -59,7 +61,8 @@ export const AnswerInputSchema = z.object({
 export type AnswerInput = z.infer<typeof AnswerInputSchema>;
 
 const AnswerSchema = AnswerInputSchema.extend({
-  by: z.enum(['ui', 'cli']),
+  /** `agent`: the escalation agent settled it in a person's place. */
+  by: z.enum(['ui', 'cli', 'agent']),
   answeredAt: z.string(),
 });
 export type Answer = z.infer<typeof AnswerSchema>;

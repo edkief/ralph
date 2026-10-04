@@ -1028,7 +1028,7 @@ describe('runLoop', () => {
       expect(result.status).toBe('complete');
       expect(result.iterations).toBe(2);
       const prompt = String(server?.prompts[1]?.['text']);
-      expect(prompt).toContain('## Answers from a person');
+      expect(prompt).toContain('## Decisions');
       expect(prompt).toContain('TASK-1: REST or GraphQL?');
       expect(prompt).toContain('**REST, like the rest of the API.**');
       expect(lines(resolve(root, '.ralph', 'decisions.jsonl'))).toEqual([
@@ -1391,3 +1391,117 @@ describe('parking', () => {
   });
 });
 
+
+describe('the escalation agent', () => {
+  const lines = (path: string) => readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const escalation = (overrides: Record<string, unknown> = {}) => ({ escalation: { enabled: true, ...overrides } });
+
+  it('settles a blocker in a person\'s place, and the coding agent follows its note', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    const result = await loop(root, config(root, { maxIterations: 9, ...escalation() }), {
+      onPrompt: (count) => {
+        if (count === 3) markPassing(root, 'TASK-1');
+      },
+      script: (count) =>
+        say(
+          count === 1
+            ? '<promise>BLOCKED:no network</promise>'
+            : count === 2
+              ? '<promise>RESOLVE:resume:The network is up; npm install works now.</promise>'
+              : 'done',
+        ),
+    });
+
+    expect(result.status).toBe('complete');
+    expect(result.iterations).toBe(2);
+    expect(String(server?.prompts[1]?.['text'])).toContain('## Escalation: the coding agent is blocked');
+    expect(String(server?.prompts[1]?.['text'])).toContain('<promise>BLOCKED:no network</promise>');
+    const prompt = String(server?.prompts[2]?.['text']);
+    expect(prompt).toContain('## Decisions');
+    expect(prompt).toContain('TASK-1: no network (escalation agent)');
+    expect(prompt).toContain('**The network is up; npm install works now.**');
+    expect(lines(resolve(result.historyDir, 'actions.jsonl'))).toEqual([
+      expect.objectContaining({ kind: 'blocked', action: 'resume', by: 'agent' }),
+    ]);
+    expect(lines(resolve(root, '.ralph', 'decisions.jsonl'))).toEqual([
+      expect.objectContaining({ taskId: 'TASK-1', kind: 'blocked', answer: 'The network is up; npm install works now.', by: 'agent' }),
+    ]);
+    expect(lines(resolve(result.historyDir, 'escalations.jsonl'))).toEqual([
+      expect.objectContaining({ n: 1, iteration: 1, kind: 'blocked', taskId: 'TASK-1', status: 'resolved', action: 'resume' }),
+    ]);
+    expect(existsSync(resolve(result.historyDir, 'escalation-1.events.jsonl'))).toBe(true);
+    expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
+  });
+
+  it('passes a request on to a person with what it found', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    const result = await loop(root, config(root, { maxIterations: 9, ...escalation() }), {
+      script: (count) =>
+        say(count === 1 ? '<promise>DECIDE:Stripe or Paddle?</promise>' : '<promise>ESCALATE:A billing provider needs an account only you can open.</promise>'),
+    });
+
+    expect(result.status).toBe('decide');
+    expect(readPending(resolve(root, '.ralph'))).toMatchObject({
+      kind: 'decide',
+      question: 'Stripe or Paddle?',
+      analysis: 'A billing provider needs an account only you can open.',
+      waiting: false,
+    });
+    expect(lines(resolve(result.historyDir, 'escalations.jsonl'))).toEqual([expect.objectContaining({ status: 'escalated' })]);
+  });
+
+  it('asks a person when the escalation turn gives no answer', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    const result = await loop(root, config(root, { maxIterations: 9, ...escalation() }), {
+      script: (count) => say(count === 1 ? '<promise>BLOCKED:no API key</promise>' : 'Hmm.'),
+    });
+
+    expect(result.status).toBe('blocked');
+    expect(server?.prompts).toHaveLength(3);
+    expect(readPending(resolve(root, '.ralph'))?.analysis).toContain('The escalation agent could not settle it');
+    expect(lines(resolve(result.historyDir, 'escalations.jsonl'))).toEqual([expect.objectContaining({ status: 'failed' })]);
+  });
+
+  it('settles no more than escalation.maxPerTask requests on a task', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    const result = await loop(root, config(root, { maxIterations: 9, ...escalation({ maxPerTask: 1 }) }), {
+      script: (count) => say(count === 2 ? '<promise>RESOLVE:resume:Try again.</promise>' : '<promise>BLOCKED:no API key</promise>'),
+    });
+
+    expect(result.status).toBe('blocked');
+    expect(server?.prompts).toHaveLength(3);
+    expect(readPending(resolve(root, '.ralph'))?.analysis).toContain('already settled 1 request on TASK-1');
+  });
+
+  it('leaves to a person the kinds it is not given', async () => {
+    const root = project([{ id: 'TASK-1', passes: false }]);
+    const result = await loop(root, config(root, { maxIterations: 9, ...escalation({ kinds: ['decide'] }) }), {
+      script: say('<promise>BLOCKED:no API key</promise>'),
+    });
+
+    expect(result.status).toBe('blocked');
+    expect(server?.prompts).toHaveLength(1);
+    expect(readPending(resolve(root, '.ralph'))?.analysis).toBeUndefined();
+  });
+
+  it('extends a spent budget, by no more than maxIterations', async () => {
+    const root = project([
+      { id: 'TASK-1', passes: false },
+      { id: 'TASK-2', passes: false },
+    ]);
+    const result = await loop(root, config(root, { maxIterations: 1, ...escalation() }), {
+      onPrompt: (count) => {
+        if (count === 1) markPassing(root, 'TASK-1');
+        if (count === 3) markPassing(root, 'TASK-2');
+      },
+      script: (count) => say(count === 2 ? '<promise>RESOLVE:continue:50:TASK-1 passed; the work is moving.</promise>' : 'done'),
+    });
+
+    expect(result.status).toBe('complete');
+    expect(result.iterations).toBe(2);
+    expect(lines(resolve(result.historyDir, 'actions.jsonl'))).toEqual([
+      expect.objectContaining({ kind: 'budget', action: 'continue', iterations: 1, by: 'agent' }),
+    ]);
+    expect(lines(resolve(result.historyDir, 'escalations.jsonl'))).toEqual([expect.objectContaining({ kind: 'budget', iteration: 1 })]);
+  });
+});

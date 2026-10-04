@@ -90,8 +90,9 @@ export async function respond(args: {
 }
 
 /**
- * Keep what a person answered: in the run's history, and, when they wrote
- * something, among the decisions later prompts show the agent.
+ * Keep what a person (or the escalation agent) answered: in the run's
+ * history, and, when they wrote something, among the decisions later prompts
+ * show the agent.
  */
 export function recordAnswer(ralphRoot: string, pending: PendingRequest, answer: Answer): void {
   const runDir = resolve(ralphRoot, 'history', pending.runId);
@@ -110,6 +111,7 @@ export function recordAnswer(ralphRoot: string, pending: PendingRequest, answer:
       kind: pending.kind,
       question: pending.question ?? pending.message,
       answer: text,
+      by: answer.by === 'agent' ? 'agent' : 'person',
     });
   }
 }

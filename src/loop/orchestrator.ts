@@ -4,6 +4,7 @@ import { relative, resolve, sep } from 'node:path';
 import { runIteration, type IterationResult } from './iteration.js';
 import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
 import { assessDir, assessTask, shouldAssess } from './assess.js';
+import { runEscalation, type EscalationOutcome, type EscalationRequest } from './escalate.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
@@ -64,6 +65,9 @@ export interface RunResult {
  * loop leaves a request in the Ralph folder. With `ui.wait` it then waits for
  * the answer, from the web UI or `ralph respond`, and carries on; without, it
  * exits as before and the request can still be settled for the next run.
+ * With `escalation.enabled`, the escalation agent gets the request first, and
+ * a person only what it passes on, could not settle, or what comes once it
+ * has settled `escalation.maxPerTask` requests on the task.
  *
  * Aborting `signal` interrupts the iteration in flight. Aborting `stop` lets
  * it finish, then ends the run before the next one, still pushing its commits.
@@ -191,10 +195,59 @@ async function loop(
   const ralphRoot = resolve(config.projectRoot, config.ralphDir);
   const wait = config.ui.wait ?? config.ui.enabled;
 
+  // What the coding agent last wrote, and on which task, for the escalation agent.
+  let lastAgentText: { taskId: string; text: string } | undefined;
+  // Requests the escalation agent settled, per task ('run' for the budget).
+  const settledByAgent = new Map<string, number>();
+  let escalations = 0;
+
+  /** Put `request` to the escalation agent, in a turn of its own, recorded like an iteration. */
+  const escalate = async (request: EscalationRequest): Promise<EscalationOutcome> => {
+    escalations += 1;
+    const n = escalations;
+    const startedAt = new Date().toISOString();
+    logger.info('asking the escalation agent', { kind: request.kind, ...(request.taskId ? { task: request.taskId } : {}) });
+    recorder.beginEscalation(n);
+    saveState({ escalation: { n, kind: request.kind, taskId: request.taskId, startedAt } });
+    const agentText = request.taskId && lastAgentText?.taskId === request.taskId ? lastAgentText.text : undefined;
+    const outcome = await runEscalation({
+      client,
+      config,
+      logger,
+      runId,
+      request,
+      ...(agentText ? { agentText } : {}),
+      decisions: recentDecisions(ralphRoot, DECISIONS_SHOWN),
+      // A park has nothing for this turn to hand off: it ends it.
+      signal: AbortSignal.any([signal, park]),
+      hooks: {
+        onEvent: (event) => recorder.recordEvent(event),
+        onText: (text) => reporter.status(truncate(text, 100)),
+        onTool: (tool, detail) => reporter.status(`${tool} ${detail}`),
+      },
+    });
+    reporter.clearStatus();
+    recorder.recordEscalation({
+      n,
+      // A spent budget is asked about before the iteration that would exceed it.
+      iteration: request.kind === 'budget' ? iteration - 1 : iteration,
+      kind: request.kind,
+      taskId: request.taskId,
+      status: outcome.status,
+      ...(outcome.status === 'resolved' ? { action: outcome.action } : {}),
+      ...(outcome.status === 'resolved' ? (outcome.text ? { reason: outcome.text } : {}) : { reason: outcome.status === 'escalated' ? outcome.analysis : outcome.reason }),
+      startedAt,
+      endedAt: new Date().toISOString(),
+    });
+    return outcome;
+  };
+
   /**
    * Leave a request for a person and, when the run waits for people, wait
    * for the answer. Nothing comes back when it does not wait, or when a stop
    * was asked for first; the caller then ends the run as it always did.
+   * With escalation on, the escalation agent may answer first, in a person's
+   * place, whether or not the run waits for people.
    */
   let asked = 0;
   const ask = async (
@@ -202,10 +255,50 @@ async function loop(
     settled?: () => Answer | undefined,
   ): Promise<Answer | undefined> => {
     asked += 1;
+    const id = `${runId}-${asked}`;
+    let analysis: string | undefined;
+    if (config.escalation.enabled && config.escalation.kinds.includes(request.kind) && !pause.aborted) {
+      const key = request.taskId ?? 'run';
+      const used = settledByAgent.get(key) ?? 0;
+      if (used >= config.escalation.maxPerTask) {
+        analysis = `The escalation agent already settled ${used} request${used === 1 ? '' : 's'} ${
+          request.taskId ? `on ${request.taskId}` : 'about the run'
+        } in this run (escalation.maxPerTask), so this one comes straight to you.`;
+        logger.info('the escalation agent has settled enough here: asking a person', { kind: request.kind, settled: used });
+      } else {
+        const outcome = await escalate(request);
+        if (outcome.status === 'resolved') {
+          settledByAgent.set(key, used + 1);
+          const answer: Answer = {
+            id,
+            action: outcome.action,
+            ...(outcome.text ? { text: outcome.text } : {}),
+            ...(outcome.iterations !== undefined ? { iterations: outcome.iterations } : {}),
+            by: 'agent',
+            answeredAt: new Date().toISOString(),
+          };
+          recordAnswer(ralphRoot, { id, runId, ...request, waiting: false, createdAt: answer.answeredAt }, answer);
+          logger.info('the escalation agent settled it', {
+            kind: request.kind,
+            action: outcome.action,
+            ...(outcome.text ? { note: truncate(outcome.text, 200) } : {}),
+          });
+          return answer;
+        }
+        if (outcome.status === 'escalated') {
+          analysis = outcome.analysis;
+          logger.warn('the escalation agent passes it on to a person', { kind: request.kind, about: truncate(analysis, 200) });
+        } else {
+          analysis = `The escalation agent could not settle it: ${outcome.reason}`;
+          logger.warn('the escalation agent could not settle it', { kind: request.kind, reason: outcome.reason });
+        }
+      }
+    }
     const pending: PendingRequest = {
-      id: `${runId}-${asked}`,
+      id,
       runId,
       ...request,
+      ...(analysis ? { analysis } : {}),
       waiting: wait && !pause.aborted,
       createdAt: new Date().toISOString(),
     };
@@ -359,6 +452,7 @@ async function loop(
       tasksPassed: summary.passedCount,
       tasksTotal: summary.total,
       split: null,
+      escalation: null,
     });
 
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
@@ -391,6 +485,7 @@ async function loop(
       sinceHead: before.head,
       cutShortLeft: config.stall.maxTimeoutsPerTask - (cutShortByTask.get(taskId)?.length ?? 0),
     });
+    lastAgentText = { taskId, text: result.text };
     if (cutShort.length > 0) cutShortByTask.set(taskId, [...(cutShortByTask.get(taskId) ?? []), ...cutShort]);
 
     const after = await snapshotRepo(config.projectRoot, tasks, notProgress);

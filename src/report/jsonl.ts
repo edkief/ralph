@@ -56,6 +56,27 @@ export interface SplitRecord {
 }
 
 /**
+ * A turn of the escalation agent, which got a request before a person did.
+ * `resolved` settled it with `action`; `escalated` passed it on, and `failed`
+ * gave no answer, so a person was asked. `reason` is the agent's note or
+ * analysis, or why the turn failed.
+ */
+export interface EscalationRecord {
+  /** The run's escalation turns are numbered from 1. */
+  n: number;
+  /** The iteration the request came after. */
+  iteration: number;
+  kind: string;
+  taskId: string | null;
+  status: 'resolved' | 'escalated' | 'failed';
+  action?: string;
+  reason?: string;
+  models?: TurnUsage;
+  startedAt: string;
+  endedAt: string;
+}
+
+/**
  * Where a run stands, rewritten as it moves so a reader (the web UI) can
  * follow a run in progress; `run.json` only appears once it is over.
  */
@@ -84,6 +105,11 @@ export interface RunState {
    * session. Absent from runs recorded before split turns were tracked.
    */
   split?: { taskId: string; startedAt: string; phase?: 'assess' | 'split' } | null;
+  /**
+   * The escalation turn in progress, or the last one, until the next
+   * iteration starts. Its record in `escalations.jsonl` says it ended.
+   */
+  escalation?: { n: number; kind: string; taskId: string | null; startedAt: string } | null;
   /** What the run is waiting on a person for, while it is `waiting`. */
   pending?: { id: string; kind: string; taskId: string | null } | null;
   message?: string;
@@ -127,6 +153,19 @@ export class RunRecorder {
   recordSplit(record: SplitRecord): void {
     const entry: SplitRecord = { ...record, models: this.meter.drain() };
     appendFileSync(resolve(this.dir, 'splits.jsonl'), `${JSON.stringify(entry)}\n`);
+  }
+
+  /** Events from here on belong to escalation turn `n`. */
+  beginEscalation(n: number): void {
+    this.current = resolve(this.dir, `escalation-${n}.events.jsonl`);
+    writeFileSync(this.current, '');
+    this.meter.reset();
+  }
+
+  /** Record an escalation turn, with its usage since it began. */
+  recordEscalation(record: EscalationRecord): void {
+    const entry: EscalationRecord = { ...record, models: this.meter.drain() };
+    appendFileSync(resolve(this.dir, 'escalations.jsonl'), `${JSON.stringify(entry)}\n`);
   }
 
   recordEvent(event: OpencodeEvent): void {
