@@ -72,6 +72,15 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       token: env['RALPH_UI_TOKEN'] || undefined,
       actions: env['RALPH_UI_ACTIONS'] || undefined,
     },
+    metrics: {
+      cost: {
+        currency: env['RALPH_COST_CURRENCY'] || undefined,
+        power: {
+          watts: num(env['RALPH_COST_WATTS']),
+          pricePerKwh: num(env['RALPH_COST_PRICE_PER_KWH']),
+        },
+      },
+    },
     log: {
       format: env['RALPH_LOG_FORMAT'],
       level: env['RALPH_LOG_LEVEL'],
