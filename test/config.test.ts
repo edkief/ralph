@@ -63,6 +63,24 @@ describe('loadConfig', () => {
     expect(loadConfig({ projectRoot: root, env: {} }).assess).toEqual({ mode: 'split', thresholdMs: 1_200_000, timeoutMs: 300_000 });
   });
 
+  it('estimates no cost until watts and a price are set', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).metrics.cost).toEqual({
+      estimator: 'power',
+      currency: 'USD',
+      power: { models: {} },
+    });
+    const root = project();
+    writeFileSync(
+      resolve(root, 'ralph.config.json'),
+      JSON.stringify({ metrics: { cost: { currency: 'EUR', power: { watts: 300, models: { 'ollama/small': { watts: 90 } } } } } }),
+    );
+    expect(loadConfig({ projectRoot: root, env: { RALPH_COST_PRICE_PER_KWH: '0.25', RALPH_COST_WATTS: '350' } }).metrics.cost).toEqual({
+      estimator: 'power',
+      currency: 'EUR',
+      power: { watts: 350, pricePerKwh: 0.25, models: { 'ollama/small': { watts: 90 } } },
+    });
+  });
+
   it('keeps the web UI off and on loopback unless asked', () => {
     expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280, basePath: '' });
     const fromEnv = loadConfig({

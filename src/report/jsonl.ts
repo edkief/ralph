@@ -5,6 +5,7 @@ import type { IterationResult } from '../loop/iteration.js';
 import type { ProgressDelta } from '../loop/progress.js';
 import type { IterationStatus } from '../loop/outcome.js';
 import type { LogEntry } from './logger.js';
+import { UsageMeter, type TurnUsage } from '../metrics/usage.js';
 
 export interface IterationRecord {
   iteration: number;
@@ -13,6 +14,11 @@ export interface IterationRecord {
   delta: ProgressDelta;
   /** Who wrote the handoff when the iteration ran out of time or context. */
   handoff?: 'agent' | 'fallback';
+  /**
+   * The iteration's usage by model, every attempt, wrap-up and subagent
+   * included. Absent from records written before it was metered.
+   */
+  models?: TurnUsage;
   startedAt: string;
   endedAt: string;
 }
@@ -40,6 +46,11 @@ export interface SplitRecord {
   children?: string[];
   reason?: string;
   committed?: boolean;
+  /**
+   * The turn's usage by model; for a split that carried on from an
+   * assessment, the assessment's too. Absent from records written before it was metered.
+   */
+  models?: TurnUsage;
   startedAt: string;
   endedAt: string;
 }
@@ -87,6 +98,8 @@ export interface RunState {
 export class RunRecorder {
   private readonly dir: string;
   private current: string | null = null;
+  /** The usage of the turn in progress, written with its record. */
+  private readonly meter = new UsageMeter();
 
   constructor(historyRoot: string, readonly runId: string) {
     this.dir = resolve(historyRoot, runId);
@@ -100,25 +113,32 @@ export class RunRecorder {
   beginIteration(iteration: number): void {
     this.current = resolve(this.dir, `iteration-${String(iteration).padStart(3, '0')}.events.jsonl`);
     writeFileSync(this.current, '');
+    this.meter.reset();
   }
 
   /** Events from here on belong to the split turn for `taskId`. */
   beginSplit(taskId: string): void {
     this.current = resolve(this.dir, `split-${taskId}.events.jsonl`);
     writeFileSync(this.current, '');
+    this.meter.reset();
   }
 
+  /** Record a split turn or assessment, with the usage of the turn since it began. */
   recordSplit(record: SplitRecord): void {
-    appendFileSync(resolve(this.dir, 'splits.jsonl'), `${JSON.stringify(record)}\n`);
+    const entry: SplitRecord = { ...record, models: this.meter.drain() };
+    appendFileSync(resolve(this.dir, 'splits.jsonl'), `${JSON.stringify(entry)}\n`);
   }
 
   recordEvent(event: OpencodeEvent): void {
     if (!this.current) return;
     appendFileSync(this.current, `${JSON.stringify(event)}\n`);
+    this.meter.push(event, Date.now());
   }
 
+  /** Record an iteration, with its usage since it began. */
   recordIteration(record: IterationRecord): void {
-    appendFileSync(resolve(this.dir, 'iterations.jsonl'), `${JSON.stringify(record)}\n`);
+    const entry: IterationRecord = { ...record, models: this.meter.drain() };
+    appendFileSync(resolve(this.dir, 'iterations.jsonl'), `${JSON.stringify(entry)}\n`);
   }
 
   recordLog(entry: LogEntry): void {

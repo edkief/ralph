@@ -144,6 +144,31 @@ const UiSchema = z.object({
   actions: z.enum(['guarded', 'open']).optional(),
 });
 
+/**
+ * Estimating what the project's model work cost, for the web UI's Metrics
+ * tab. `power` charges electricity on inference time, for self-hosted models:
+ * hours generating × watts / 1000 × price per kWh. Nothing is estimated until
+ * `power.watts` and `power.pricePerKwh` are set.
+ */
+const CostSchema = z.object({
+  estimator: z.enum(['power']).default('power'),
+  /** Shown beside every estimate; not converted. */
+  currency: z.string().min(1).default('USD'),
+  power: z
+    .object({
+      /** What the machine draws while a model generates. */
+      watts: z.number().positive().optional(),
+      pricePerKwh: z.number().min(0).optional(),
+      /** Per `provider/model`, where a model runs on other hardware or draws differently. */
+      models: z.record(z.string(), z.object({ watts: z.number().positive() })).default({}),
+    })
+    .prefault({}),
+});
+
+const MetricsSchema = z.object({
+  cost: CostSchema.prefault({}),
+});
+
 export const ConfigSchema = z.object({
   projectRoot: z.string(),
   /**
@@ -170,6 +195,7 @@ export const ConfigSchema = z.object({
   git: GitSchema.prefault({}),
   plan: PlanSchema.prefault({}),
   ui: UiSchema.prefault({}),
+  metrics: MetricsSchema.prefault({}),
   log: z
     .object({
       format: z.enum(['text', 'json']).default('text'),
@@ -182,3 +208,4 @@ export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
 export type PermissionsConfig = z.infer<typeof PermissionsSchema>;
 export type UiConfig = z.infer<typeof UiSchema>;
+export type CostConfig = z.infer<typeof CostSchema>;

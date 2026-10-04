@@ -33,6 +33,7 @@ export interface IterationUsage {
   output: number;
   reasoning: number;
   cacheRead: number;
+  cacheWrite: number;
   cost: number;
 }
 
@@ -122,7 +123,7 @@ export async function runIteration(args: {
   const onOuterAbort = () => streamAbort.abort();
   signal.addEventListener('abort', onOuterAbort, { once: true });
 
-  const usage: IterationUsage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cost: 0 };
+  const usage: IterationUsage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   const texts: string[] = [];
   const filesTouched = new Set<string>();
   let toolCalls = 0;
@@ -513,12 +514,13 @@ function addUsage(
 ) {
   if (!data) return;
   const tokens = data.tokens as
-    | { input?: number; output?: number; reasoning?: number; cache?: { read?: number } }
+    | { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
     | undefined;
   usage.input += tokens?.input ?? 0;
   usage.output += tokens?.output ?? 0;
   usage.reasoning += tokens?.reasoning ?? 0;
   usage.cacheRead += tokens?.cache?.read ?? 0;
+  usage.cacheWrite += tokens?.cache?.write ?? 0;
   usage.cost += data.cost ?? 0;
 }
 

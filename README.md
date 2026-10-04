@@ -124,6 +124,11 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   then the task in progress and the few that come next
 - **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
   split one came from
+- **Metrics**: what the project's model work came to over every run: iterations and planning
+  turns, inference time, tokens (input, output, reasoning, cached), the models used, and an
+  [estimated cost](#estimating-cost). Then the same by day (in the browser's time zone), by
+  task, and by run. A task that was split counts the tasks it was split into; open a task for
+  every turn spent on it, each with its transcript
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
   is an iteration, or the turn in which the agent assessed a task or proposed splitting it.
@@ -412,7 +417,8 @@ server's default until you choose one.
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
-`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`.
+`RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`,
+`RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`, `RALPH_COST_CURRENCY`.
 
 Console lines are stamped with the local time, and the banner records the start date and
 time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to see your own.
@@ -422,6 +428,40 @@ The agent can never push: `git push` stays denied, so it cannot force-push or to
 With `git.push` set, Ralph itself runs `git push <remote> HEAD` (never forced, never
 prompting for credentials). A failed push is logged and retried at the next opportunity;
 it does not stop the run.
+
+### Estimating cost
+
+The Metrics tab estimates what the work cost once `metrics.cost` says how. For self-hosted
+models, the `power` estimator charges electricity on inference time: the time a model spent
+generating, from the start of each model call to the end of its stream, less the tool runs
+within it (a test suite running does not keep the GPU busy).
+
+```jsonc
+{
+  "metrics": {
+    "cost": {
+      "estimator": "power",        // the only one for now
+      "currency": "EUR",           // shown beside every estimate, not converted; defaults to USD
+      "power": {
+        "watts": 450,              // what the machine draws while a model generates
+        "pricePerKwh": 0.32,
+        "models": { "ollama/qwen3:8b": { "watts": 180 } } // a model that draws differently
+      }
+    }
+  }
+}
+```
+
+Cost = hours generating × watts / 1000 × price per kWh, per model. Nothing is estimated until
+`watts` and `pricePerKwh` are set (or `RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`,
+`RALPH_COST_CURRENCY`). Estimates are made as the tab reads the runs, so a new price applies to
+past runs too, once the UI is restarted. Where opencode reports a cost of its own (a provider
+it knows the prices of), the tab shows that beside the estimate.
+
+Runs recorded before Ralph recorded usage per model have it worked out from their event files,
+where this machine still has them. Runs known only from the [journal](#carrying-on-from-another-machine)
+count their tokens under an `unknown` model, with their wall-clock time standing in for
+inference time; the tab says how many turns that is.
 
 ## How it works
 
@@ -677,10 +717,13 @@ Each run writes to the project's `.ralph/history/<runId>/`:
 
 - `iteration-NNN.events.jsonl` — every event received, for debugging
 - `iterations.jsonl` — one record per iteration with outcome, usage and repository delta,
-  plus the wrap-up and who wrote the handoff when it ran out of time or context
+  plus the wrap-up and who wrote the handoff when it ran out of time or context. `models`
+  holds its usage by model (calls, tokens by kind, inference time), every attempt, wrap-up
+  and subagent included
 - `log.jsonl` — Ralph's log lines, at the configured level
 - `splits.jsonl` — one record per split turn: the task, what cut it short, and the outcome;
-  and one per assessment (`trigger: "assessment"`), with the estimate
+  and one per assessment (`trigger: "assessment"`), with the estimate; each with its usage
+  by model in `models`
 - `split-TASK-x.events.jsonl` — every event of that split turn, or of the task's assessment
 - `state.json` — where the run stands (status, iteration, task, the split turn in progress,
   what it is waiting on a person for, pid), rewritten as it goes

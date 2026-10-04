@@ -4,6 +4,7 @@ import { formatDuration, runBadge, statusLabel } from './format';
 import { Overview } from './views/Overview';
 import { pendingTitle } from './views/Pending';
 import { Tasks } from './views/Tasks';
+import { Metrics } from './views/Metrics';
 import { Transcript } from './views/Transcript';
 import { Logs } from './views/Logs';
 import { Files } from './views/Files';
@@ -72,6 +73,8 @@ export function App() {
           <Overview status={status} />
         ) : route.tab === 'tasks' ? (
           <Tasks status={status} />
+        ) : route.tab === 'metrics' ? (
+          <Metrics status={status} selected={route.rest} />
         ) : route.tab === 'transcript' ? (
           <Transcript status={status} live={live.transcript} selected={route.rest} />
         ) : route.tab === 'logs' ? (
