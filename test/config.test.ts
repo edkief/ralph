@@ -63,6 +63,25 @@ describe('loadConfig', () => {
     expect(loadConfig({ projectRoot: root, env: {} }).assess).toEqual({ mode: 'split', thresholdMs: 1_200_000, timeoutMs: 300_000 });
   });
 
+  it('puts every request to a person unless the escalation agent is turned on', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).escalation).toEqual({
+      enabled: false,
+      kinds: ['split', 'decide', 'blocked', 'stalled', 'budget'],
+      timeoutMs: 600_000,
+      maxPerTask: 2,
+    });
+    const root = project();
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ escalation: { kinds: ['blocked', 'decide'], maxPerTask: 1 } }));
+    const config = loadConfig({ projectRoot: root, env: { RALPH_ESCALATION: '1', RALPH_ESCALATION_MODEL: 'anthropic/claude-x' } });
+    expect(config.escalation).toEqual({
+      enabled: true,
+      kinds: ['blocked', 'decide'],
+      model: 'anthropic/claude-x',
+      timeoutMs: 600_000,
+      maxPerTask: 1,
+    });
+  });
+
   it('estimates no cost until watts and a price are set', () => {
     expect(loadConfig({ projectRoot: project(), env: {} }).metrics.cost).toEqual({
       estimator: 'power',

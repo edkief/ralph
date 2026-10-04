@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REQUEST_KINDS } from '../human/request.js';
 
 /** Where Ralph finds the server: attach to a URL, or spawn its own. */
 const ServerSchema = z.object({
@@ -61,6 +62,28 @@ const AssessSchema = z.object({
   thresholdMs: z.number().int().positive().optional(),
   /** Working time for the triage turn; then it is interrupted and the task attempted as it is. */
   timeoutMs: z.number().int().positive().default(5 * 60_000),
+});
+
+/**
+ * A second agent between the coding agent and a person. Where the loop would
+ * ask a person (a blocker, a decision, a stall, a split to review, a spent
+ * budget), the escalation agent gets the request first: it settles it with
+ * one of the answers a person could give, or passes it on with its analysis.
+ */
+const EscalationSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** The requests the agent gets before a person. */
+  kinds: z.array(z.enum(REQUEST_KINDS)).default([...REQUEST_KINDS]),
+  /** `provider/model` for the escalation turn; defaults to `plan.model`, then `model`. */
+  model: z.string().optional(),
+  /** Working time for one escalation turn; then it is cut off and the request goes to a person. */
+  timeoutMs: z.number().int().positive().default(10 * 60_000),
+  /**
+   * Requests the agent may settle per task in a run (the budget counts as one
+   * task). Past it, the request goes straight to a person, so the agent cannot
+   * keep sending the coding agent back into the same wall.
+   */
+  maxPerTask: z.number().int().min(0).default(2),
 });
 
 /**
@@ -191,6 +214,7 @@ export const ConfigSchema = z.object({
   retries: RetriesSchema.prefault({}),
   stall: StallSchema.prefault({}),
   assess: AssessSchema.prefault({}),
+  escalation: EscalationSchema.prefault({}),
   permissions: PermissionsSchema.prefault({}),
   git: GitSchema.prefault({}),
   plan: PlanSchema.prefault({}),
@@ -208,4 +232,5 @@ export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
 export type PermissionsConfig = z.infer<typeof PermissionsSchema>;
 export type UiConfig = z.infer<typeof UiSchema>;
+export type EscalationConfig = z.infer<typeof EscalationSchema>;
 export type CostConfig = z.infer<typeof CostSchema>;

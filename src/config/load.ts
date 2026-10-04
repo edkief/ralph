@@ -58,6 +58,10 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     plan: {
       model: env['RALPH_PLAN_MODEL'],
     },
+    escalation: {
+      enabled: bool(env['RALPH_ESCALATION']),
+      model: env['RALPH_ESCALATION_MODEL'] || undefined,
+    },
     git: {
       push: env['RALPH_GIT_PUSH'],
       records: env['RALPH_GIT_RECORDS'],
