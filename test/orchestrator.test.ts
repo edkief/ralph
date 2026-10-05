@@ -544,6 +544,9 @@ describe('runLoop', () => {
 
       const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
       expect(records[0]).toMatchObject({ result: { status: 'progressed' } });
+      // Both attempts share the iteration's event file, each naming its own session.
+      const events = readFileSync(resolve(result.historyDir, 'iteration-001.events.jsonl'), 'utf8');
+      expect(events.match(/"type":"ralph\.turn\.started"/g)).toHaveLength(2);
     });
 
     it('stops a task that keeps outgrowing the context window', async () => {

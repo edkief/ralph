@@ -98,6 +98,20 @@ export const PermissionRequestSchema = z.looseObject({
 
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 
+/**
+ * Not opencode's: Ralph records this in a turn's event file when the turn
+ * starts work in a session, before any of the session's own events. It names
+ * the turn's own sessions, which the event stream does not: `session.created`
+ * carries no parent, so a retry's fresh session and a subagent's look alike.
+ */
+export const TURN_STARTED_EVENT = 'ralph.turn.started';
+
+export const TurnStartedSchema = z.looseObject({
+  sessionID: z.string(),
+  /** The turn carries on a session an earlier turn started. */
+  continued: z.boolean().optional(),
+});
+
 /** Carries the parent of a subagent session, so its work can be attributed. */
 export const SessionCreatedSchema = z.looseObject({
   sessionID: z.string(),

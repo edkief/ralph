@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
 import { OpencodeClient } from '../src/opencode/client.js';
 import { runIteration } from '../src/loop/iteration.js';
+import type { OpencodeEvent } from '../src/opencode/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 
@@ -21,7 +22,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park' | 'hooks'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -252,6 +253,8 @@ describe('runIteration', () => {
     });
 
     expect(result.status).toBe('progressed');
+    // The turn names its own session before any of the stream's events.
+    expect(seen[0]).toBe('ralph.turn.started:ses_fake_1');
     expect(seen).toContain('session.created:ses_stranger');
     expect(seen).toContain('session.step.started:ses_child');
     expect(seen).not.toContain('session.step.started:ses_stranger');
@@ -419,6 +422,7 @@ describe('runIteration', () => {
   });
 
   it('continues an existing session instead of opening a new one', async () => {
+    const seen: OpencodeEvent[] = [];
     const result = await iterate(
       {
         script: [
@@ -427,9 +431,10 @@ describe('runIteration', () => {
         ],
       },
       config(),
-      { sessionId: 'ses_fake_1' },
+      { sessionId: 'ses_fake_1', hooks: { onEvent: (event) => seen.push(event) } },
     );
 
+    expect(seen[0]).toMatchObject({ type: 'ralph.turn.started', data: { sessionID: 'ses_fake_1', continued: true } });
     expect(server?.sessionsCreated).toBe(0);
     expect(result.sessionId).toBe('ses_fake_1');
     expect(result.text).toBe('second turn');

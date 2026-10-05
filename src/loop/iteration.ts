@@ -11,6 +11,7 @@ import {
   ToolCalledSchema,
   ToolInputStartedSchema,
   ToolResultSchema,
+  TURN_STARTED_EVENT,
   errorMessage,
   isActivityEvent,
   readData,
@@ -225,6 +226,12 @@ export async function runIteration(args: {
     // Subscribe before prompting so no early event is missed.
     const stream = await client.connectEvents(streamAbort.signal);
     sessionId = args.sessionId ?? (await client.createSession(args.title));
+    // Recorded before any of the session's events, so its own work is never taken for a subagent's.
+    hooks.onEvent?.({
+      type: TURN_STARTED_EVENT,
+      created: Date.now(),
+      data: { sessionID: sessionId, continued: args.sessionId !== undefined },
+    });
     await client.prompt(sessionId, args.prompt, promptOptions);
     logger.debug('prompt sent', { sessionId });
 
