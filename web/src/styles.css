@@ -1409,6 +1409,15 @@ article.markdown h2 {
     margin-left: auto;
   }
 
+  /* The bell sits at the right, with the connection, where its panel opens. */
+  .notify {
+    margin-left: auto;
+  }
+
+  .notify + .connection {
+    margin-left: 0;
+  }
+
   .connection-label {
     display: none;
   }
@@ -1603,6 +1612,11 @@ article.markdown h2 {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+}
+
+.notify-panel.open-right {
+  left: 0;
+  right: auto;
 }
 
 .notify-title {

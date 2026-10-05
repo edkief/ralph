@@ -9,6 +9,8 @@ const EVENT_LABELS: Record<PushEvent, string> = {
 };
 
 const EVENTS_KEY = 'ralph-push-events';
+/** The panel's width at most, as in styles.css. */
+const PANEL_WIDTH = 320;
 
 /** Why this browser cannot get notifications from here, if it cannot. */
 function unsupported(): string | null {
@@ -65,6 +67,8 @@ async function registration(): Promise<ServiceWorkerRegistration> {
 export function Notifications({ status }: { status: StatusView | null }) {
   const push = useJson<PushView>('/api/push');
   const [open, setOpen] = useState(false);
+  // Opens toward the side with room: rightward when the bell sits too near the left edge.
+  const [openRight, setOpenRight] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
   const [events, setEvents] = useState<PushEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -170,14 +174,18 @@ export function Notifications({ status }: { status: StatusView | null }) {
         className={`button small notify-toggle${subscription ? ' on' : ''}`}
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          const rect = root.current?.getBoundingClientRect();
+          setOpenRight(rect !== undefined && rect.right < Math.min(PANEL_WIDTH, window.innerWidth - 32) + 16);
+          setOpen(!open);
+        }}
         title={subscription ? 'Notifications are on for this browser' : 'Get notified when Ralph needs you'}
       >
         <BellIcon />
         <span className="notify-label">{subscription ? 'Notifying' : 'Notify me'}</span>
       </button>
       {open ? (
-        <div className="notify-panel" role="dialog" aria-label="Notifications">
+        <div className={`notify-panel${openRight ? ' open-right' : ''}`} role="dialog" aria-label="Notifications">
           <div className="notify-title">Notifications on this device</div>
           {blocked ? (
             <p className="muted small">{blocked}</p>
