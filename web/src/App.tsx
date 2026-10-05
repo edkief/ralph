@@ -119,13 +119,30 @@ function Header({ status, connected }: { status: StatusView | null; connected: b
                 {badge!.label}
               </span>
               <span className="header-iteration">
-                Iteration <strong>{run.iteration || '–'}</strong>
+                <span className="label-full">Iteration</span>{' '}
+                <span className="label-short" aria-hidden="true">
+                  Iter
+                </span>
+                <strong>{run.iteration || '–'}</strong>
                 {run.maxIterations ? <span className="muted">/{run.maxIterations}</span> : null}
                 {run.taskId ? <span className="task-chip">{run.taskId}</span> : null}
+                {/* The space sits outside the span, so a narrow header can wrap before the time. */}
                 {working && run.split ? (
-                  <span className="muted"> · splitting · {formatDuration(now - Date.parse(run.split.startedAt))}</span>
+                  <>
+                    {' '}
+                    <span className="muted header-elapsed">
+                      <span className="header-sep">· </span>
+                      splitting · {formatDuration(now - Date.parse(run.split.startedAt))}
+                    </span>
+                  </>
                 ) : working && run.iterationStartedAt ? (
-                  <span className="muted"> · {formatDuration(now - Date.parse(run.iterationStartedAt))}</span>
+                  <>
+                    {' '}
+                    <span className="muted header-elapsed">
+                      <span className="header-sep">· </span>
+                      {formatDuration(now - Date.parse(run.iterationStartedAt))}
+                    </span>
+                  </>
                 ) : null}
               </span>
             </>
@@ -136,9 +153,10 @@ function Header({ status, connected }: { status: StatusView | null; connected: b
 
         <div className="header-progress" title={tasks?.error ?? `${tasks?.passed ?? 0} of ${tasks?.total ?? 0} tasks pass`}>
           <div className="progress-label">
-            <span>Tasks</span>
+            <span className="progress-name">Tasks</span>
             <strong>
               {tasks?.passed ?? 0}/{tasks?.total ?? 0}
+              <span className="progress-unit"> tasks</span>
             </strong>
           </div>
           <div className="progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>

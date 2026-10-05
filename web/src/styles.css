@@ -150,6 +150,12 @@ pre {
   margin-left: 4px;
 }
 
+/* Shorter wording for a phone's header; see the narrow-screen rules. */
+.label-short,
+.progress-unit {
+  display: none;
+}
+
 .header-progress {
   margin-left: auto;
   width: 220px;
@@ -1395,27 +1401,118 @@ article.markdown h2 {
     padding-inline: 16px;
   }
 
-  .header-inner {
-    gap: 8px 16px;
+  /*
+   * Two rows: the project, then the connection and the bell at the right
+   * (where the bell's panel opens); the run, with the task count at the
+   * right. Task progress becomes a strip along the header's bottom edge.
+   */
+  .header {
+    position: relative;
+    border-bottom: 0;
   }
 
-  .header-progress {
-    margin-left: 0;
-    width: 100%;
-    order: 3;
+  .header-inner {
+    gap: 0 8px;
+    min-height: 0;
+    padding-block: 8px 13px;
   }
 
   .connection {
+    order: 1;
     margin-left: auto;
   }
 
-  /* The bell sits at the right, with the connection, where its panel opens. */
   .notify {
-    margin-left: auto;
+    order: 2;
   }
 
-  .notify + .connection {
-    margin-left: 0;
+  /* Ends the first row. */
+  .header-inner::after {
+    content: '';
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .header-run {
+    order: 4;
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .header-progress {
+    order: 5;
+    width: auto;
+    margin: 6px 0 0;
+  }
+
+  .progress-label {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .progress-name {
+    display: none;
+  }
+
+  .progress-unit {
+    display: inline;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .header-progress .progress {
+    position: absolute;
+    inset: auto 0 0;
+    height: 3px;
+    border-radius: 0;
+    background: var(--border);
+  }
+
+  .label-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .label-short {
+    display: inline;
+    color: var(--muted);
+  }
+
+  /* A running turn's time needs the room: the number speaks for itself. */
+  .header-run:has(.header-elapsed) .label-short {
+    display: none;
+  }
+
+  /* On the narrowest phones the time wraps onto a line of its own. */
+  .header-iteration {
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .header-iteration > * {
+    white-space: nowrap;
+  }
+
+  .header-sep {
+    display: none;
+  }
+
+  .header-run .badge {
+    padding-inline: 7px;
+  }
+
+  .header-run .task-chip {
+    margin-left: 4px;
+    padding-inline: 5px;
   }
 
   .connection-label {
@@ -1651,5 +1748,13 @@ article.markdown h2 {
 @media (max-width: 640px) {
   .notify-label {
     display: none;
+  }
+
+  /* Only the bell is left: a full-size tap target. */
+  .button.small.notify-toggle {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
   }
 }
