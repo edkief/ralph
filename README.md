@@ -134,7 +134,8 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
   is an iteration, the turn in which the agent assessed a task or proposed splitting it, or an
-  escalation turn.
+  escalation turn. A subagent's work is tagged as such; a turn retried in a fresh session, after
+  a provider failure or a context overflow, is marked where it starts over.
   Long tool input, output and text are cut; the event file in `.ralph/history/` keeps them
   whole
 - **Logs**: Ralph's own log for each run, filterable by level
@@ -462,7 +463,7 @@ See `templates/ralph.config.json` for a complete file.
   },
   "retries": {
     "providerRetriesPerIteration": 3,
-    "iterationRetries": 1,
+    "iterationRetries": 1,         // retries of a turn the provider failed or that outgrew the context window
     "backoffMs": 15000
   },
   "stall": {
@@ -602,8 +603,9 @@ than quietly burning the whole budget.
 | `iteration-timeout` | Turn used up its working time, `iterationMs`. |
 
 A retry storm interrupts the session server-side rather than killing a process, so opencode
-can clean up, and retries the whole turn (`retries.iterationRetries`): it says nothing about
-the task itself.
+can clean up, and retries the whole turn in a fresh session within the same iteration
+(`retries.iterationRetries`): it says nothing about the task itself. A turn that runs out of
+time is not retried this way; the next iteration resumes from its handoff instead (see below).
 
 ### Running out of time
 
@@ -625,7 +627,7 @@ its work over instead of losing it:
      run the command that hung again.
 2. **Hard limit.** The wrap-up gets `wrapUpMs` (default 10 minutes), so an iteration never
    runs longer than `iterationMs + wrapUpMs`. A wrap-up that overruns or goes quiet is
-   interrupted like any timeout, and is retried.
+   interrupted, and the iteration ends as `timeout`.
 
 If the agent leaves no complete handoff, Ralph writes one itself from what it saw: the commits
 made, the uncommitted changes, the agent's last messages and any earlier handoff. The next
@@ -635,7 +637,9 @@ commit that completes the task. `ralph doctor` warns about handoffs left behind.
 Every prompt also states the time budget and when it ends, and asks for checkpoint commits,
 so that running out of time costs little.
 
-An iteration that wrapped up is not retried; the next one resumes from the handoff. Handoff
+An iteration that ran out of time is not retried, whether its wrap-up finished (`wrapped-up`)
+or not (`timeout`): it is recorded as it ended, and the next iteration resumes from the handoff.
+So each attempt that runs out of time uses an iteration of the budget. Handoff
 changes alone do not count as progress. A task that runs out of time
 `stall.maxTimeoutsPerTask` times (default 2) has stalled: it is probably too big for one
 iteration and needs splitting (see below). Set `wrapUpMs: 0` to interrupt outright as before;
@@ -655,9 +659,9 @@ opencode config, not here. It cannot help when:
 - compaction is off (`compaction.auto: false`) or the summary itself fails.
 
 When the turn still fails, the iteration ends as `context-overflow`, with the provider's
-message as its error. Ralph treats it like running out of time: it writes the handoff from
-what it saw, adds advice to keep the next session lean, and retries in a fresh session that
-resumes from the handoff. There is no wrap-up turn, since the full session has no room left for
+message as its error. Ralph writes the handoff from what it saw, as for running out of time,
+adds advice to keep the next session lean, and retries within the same iteration
+(`retries.iterationRetries`), in a fresh session that resumes from the handoff. There is no wrap-up turn, since the full session has no room left for
 one. Overflows count toward `stall.maxTimeoutsPerTask` along with timeouts, so a task too big
 for one context is split like one too big for the time budget.
 
