@@ -678,12 +678,13 @@ async function commitRunRecords(
 const DECISIONS_SHOWN = 20;
 
 /**
- * Run an iteration, retrying the whole turn when the provider failed, the
- * agent timed out or its conversation outgrew the context window — those say
- * little about the task, mostly about the runtime. An attempt that runs out of
- * time or context leaves a handoff, so a retry starts a fresh session from it
- * rather than from nothing. One that wrapped up is not retried: the next
- * iteration resumes from its handoff instead.
+ * Run an iteration, retrying the whole turn when the provider failed or the
+ * conversation outgrew the context window — those say little about the task,
+ * mostly about the runtime. An attempt that runs out of context leaves a
+ * handoff, so a retry starts a fresh session from it rather than from nothing.
+ * One that ran out of time is not retried, whether or not its wrap-up
+ * finished: it is recorded as it ended, and the next iteration resumes from
+ * its handoff.
  */
 async function attemptIteration(context: {
   args: {
@@ -766,8 +767,7 @@ async function attemptIteration(context: {
     }
 
     const done = { result, cutShort, ...(handoff ? { handoff } : {}) };
-    const retryable =
-      result.status === 'provider-error' || result.status === 'timeout' || result.status === 'context-overflow';
+    const retryable = result.status === 'provider-error' || result.status === 'context-overflow';
     // A retry is a fresh turn, which a stop request rules out.
     if (
       !retryable ||
