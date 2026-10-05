@@ -791,6 +791,20 @@ button.button {
   margin-top: 8px;
 }
 
+/* A card is half a phone's width: a long label wraps inside its button, not past the card. */
+.stop-buttons .button {
+  white-space: normal;
+  height: auto;
+  min-height: 26px;
+  padding-block: 3px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.stop-buttons input {
+  max-width: 100%;
+}
+
 .stop-note {
   font-size: 12px;
   color: var(--muted);
