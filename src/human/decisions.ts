@@ -2,8 +2,8 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
- * What a person told Ralph: the answer to an agent's question, or a note left
- * when resuming a run. Kept in `decisions.jsonl` in the Ralph folder and shown
+ * What a person, or the escalation agent in their place, told Ralph: the
+ * answer to an agent's question, or a note left when resuming a run. Kept in `decisions.jsonl` in the Ralph folder and shown
  * to the agent in later prompts, so an answer outlives the run it was given in.
  */
 export interface Decision {
@@ -15,6 +15,8 @@ export interface Decision {
   /** What the agent asked, or what had stopped the run. */
   question?: string;
   answer: string;
+  /** Who gave it; absent from entries written before the escalation agent, all a person's. */
+  by?: 'person' | 'agent';
 }
 
 export const decisionsPath = (ralphRoot: string) => resolve(ralphRoot, 'decisions.jsonl');
@@ -45,6 +47,7 @@ export function recentDecisions(ralphRoot: string, count: number): Decision[] {
           kind: String(value.kind ?? 'note'),
           ...(typeof value.question === 'string' ? { question: value.question } : {}),
           answer: value.answer,
+          ...(value.by === 'agent' || value.by === 'person' ? { by: value.by } : {}),
         });
       }
     } catch {

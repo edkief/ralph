@@ -7,7 +7,7 @@ import type { TranscriptEntry } from '../ui/types.js';
 import type { LogEntry } from './logger.js';
 
 /** Files of a run copied as they are: small, and what the web UI shows of it. */
-const COPIED = ['run.json', 'iterations.jsonl', 'splits.jsonl', 'actions.jsonl'];
+const COPIED = ['run.json', 'iterations.jsonl', 'splits.jsonl', 'escalations.jsonl', 'actions.jsonl'];
 /** The log levels kept: debug lines are for the machine that ran it. */
 const KEPT_LEVELS = new Set(['info', 'warn', 'error']);
 /** What a session wrote or was sent, and a tool's input or output, kept per entry. */

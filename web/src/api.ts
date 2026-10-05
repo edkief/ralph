@@ -117,8 +117,8 @@ export interface LiveState {
   connected: boolean;
   status: StatusView | null;
   log: { runId: string; lines: LogLine[] } | null;
-  /** The session followed: an iteration, or with `split` the turn splitting that task. */
-  transcript: { runId: string; iteration: number; split?: string; entries: TranscriptEntry[] } | null;
+  /** The session followed: an iteration, with `split` the turn splitting that task, or with `escalation` that escalation turn. */
+  transcript: { runId: string; iteration: number; split?: string; escalation?: number; entries: TranscriptEntry[] } | null;
 }
 
 type LiveAction =
@@ -139,12 +139,13 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
       return { ...state, log: { runId, lines: [...previous, ...lines].slice(-MAX_LOG_LINES) } };
     }
     case 'transcript': {
-      const { runId, iteration, split, reset, entries } = action.data;
+      const { runId, iteration, split, escalation, reset, entries } = action.data;
       const same =
         !reset &&
         state.transcript?.runId === runId &&
         state.transcript.iteration === iteration &&
-        state.transcript.split === split;
+        state.transcript.split === split &&
+        state.transcript.escalation === escalation;
       const next = same ? [...state.transcript!.entries] : [];
       const index = new Map(next.map((entry, position) => [entry.id, position]));
       for (const entry of entries) {
@@ -156,7 +157,7 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
           next[at] = entry;
         }
       }
-      return { ...state, transcript: { runId, iteration, ...(split ? { split } : {}), entries: next } };
+      return { ...state, transcript: { runId, iteration, ...(split ? { split } : {}), ...(escalation ? { escalation } : {}), entries: next } };
     }
   }
 }

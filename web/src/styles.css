@@ -706,6 +706,14 @@ button.button {
   font-weight: 600;
 }
 
+.pending-analysis {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .pending-split ol {
   margin: 8px 0 0;
   padding-left: 22px;

@@ -101,6 +101,13 @@ export function Pending({ status }: { status: StatusView }) {
       <div className="pending-body">
         <p className={pending.kind === 'decide' ? 'pending-question' : 'pending-message'}>{pending.question ?? pending.message}</p>
 
+        {pending.analysis ? (
+          <div className="pending-analysis">
+            <span className="muted small">The escalation agent passed this on:</span>
+            <p>{pending.analysis}</p>
+          </div>
+        ) : null}
+
         {pending.split ? (
           <div className="pending-split">
             {pending.split.reason ? <p className="muted">{pending.split.reason}</p> : null}

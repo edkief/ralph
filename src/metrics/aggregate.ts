@@ -7,6 +7,8 @@ export interface TurnInput {
   runId: string;
   kind: MetricsTurn['kind'];
   iteration: number;
+  /** The escalation turn's number in its run, for an escalation. */
+  escalation?: number;
   taskId: string | null;
   startedAt: string | null;
   wallMs: number | null;
@@ -106,6 +108,7 @@ export function aggregateMetrics(args: {
       runId: input.runId,
       kind: input.kind,
       iteration: input.iteration,
+      ...(input.escalation !== undefined ? { escalation: input.escalation } : {}),
       taskId: input.taskId,
       startedAt: input.startedAt,
       wallMs: input.wallMs,

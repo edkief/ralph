@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { useJson, useNow, type RunDetail, type SplitView, type StatusView } from '../api';
+import { useJson, useNow, type EscalationView, type RunDetail, type SplitView, type StatusView } from '../api';
 import { formatCount, formatDateTime, formatDuration, formatRunId, runBadge, statusLabel, statusTone } from '../format';
 import { href } from '../route';
 import { TaskRow, activeTaskId } from './TaskRow';
@@ -15,8 +15,10 @@ export function Overview({ status }: { status: StatusView }) {
   const detail = useJson<RunDetail>(run ? `/api/runs/${encodeURIComponent(run.runId)}` : null, run ? `${run.updatedAt}:${run.iteration}` : null);
   const iterations = detail.data?.iterations ?? [];
   const splits = detail.data?.splits ?? [];
+  const escalations = detail.data?.escalations ?? [];
   const waiting = run?.live === true && run.status === 'waiting';
   const splitting = run?.live && !waiting ? run.split : null;
+  const escalating = run?.live && !waiting ? escalations.find((turn) => turn.status === 'running') : undefined;
   const active = activeTaskId(status);
   const remaining = tasks.items.filter((task) => !task.passes);
   // The task in progress first, even when the agent picked one further down the list.
@@ -28,6 +30,17 @@ export function Overview({ status }: { status: StatusView }) {
     [...turns]
       .reverse()
       .map((split) => <SplitRow key={`${split.taskId}-${split.status}-${split.endedAt ?? ''}`} runId={run!.runId} split={split} now={now} />);
+  /** Rows for the split and escalation turns that came after an iteration, newest first. */
+  const afterRows = (splitTurns: SplitView[], escalationTurns: EscalationView[]) =>
+    [
+      ...splitTurns.map((split) => ({ startedAt: split.startedAt ?? '', row: splitRows([split]) })),
+      ...escalationTurns.map((turn) => ({
+        startedAt: turn.startedAt ?? '',
+        row: <EscalationRow key={`escalation-${turn.n}`} runId={run!.runId} turn={turn} now={now} />,
+      })),
+    ]
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0))
+      .map((entry) => entry.row);
 
   return (
     <div className="stack">
@@ -67,7 +80,9 @@ export function Overview({ status }: { status: StatusView }) {
             {run?.maxIterations ? <span className="muted"> / {run.maxIterations}</span> : null}
           </div>
           <div className="card-detail">
-            {splitting
+            {escalating
+              ? `Escalating ${escalating.kind}${escalating.taskId ? ` on ${escalating.taskId}` : ''} · ${formatDuration(now - Date.parse(escalating.startedAt ?? ''))} so far`
+              : splitting
               ? `${splitting.phase === 'assess' ? 'Assessing' : 'Splitting'} ${splitting.taskId} · ${formatDuration(now - Date.parse(splitting.startedAt))} so far`
               : waiting
               ? `${run?.taskId ?? ''} · waiting for you`
@@ -97,7 +112,7 @@ export function Overview({ status }: { status: StatusView }) {
           Iterations
           {run ? <span className="panel-subtitle">run {formatRunId(run.runId)}</span> : null}
         </h2>
-        {iterations.length === 0 && splits.length === 0 ? (
+        {iterations.length === 0 && splits.length === 0 && escalations.length === 0 ? (
           <div className="empty small">{run ? 'No iterations yet' : 'No runs yet'}</div>
         ) : (
           <div className="table-wrap">
@@ -115,10 +130,16 @@ export function Overview({ status }: { status: StatusView }) {
               </thead>
               <tbody>
                 {/* Turns before an iteration that has not started, or never did. */}
-                {splitRows(splits.filter((split) => !iterations.some((iteration) => iteration.iteration === split.iteration)))}
+                {afterRows(
+                  splits.filter((split) => !iterations.some((iteration) => iteration.iteration === split.iteration)),
+                  escalations.filter((turn) => !iterations.some((iteration) => iteration.iteration === turn.iteration)),
+                )}
                 {[...iterations].reverse().map((iteration) => (
                   <Fragment key={iteration.iteration}>
-                  {splitRows(splits.filter((split) => split.iteration === iteration.iteration && !split.trigger))}
+                  {afterRows(
+                    splits.filter((split) => split.iteration === iteration.iteration && !split.trigger),
+                    escalations.filter((turn) => turn.iteration === iteration.iteration),
+                  )}
                   <tr>
                     <td>
                       <a href={href('transcript', `${run!.runId}/${iteration.iteration}`)} title="Open the transcript">{iteration.iteration}</a>
@@ -224,6 +245,39 @@ function SplitRow({ runId, split, now }: { runId: string; split: SplitView; now:
       <td className="num">–</td>
       <td className="num">–</td>
       <td className="split-outcome" title={split.reason}>
+        {outcome}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * A turn of the escalation agent, listed with the split turns above the
+ * iteration whose request it got: the answer it gave and its note, or what it
+ * passed on to a person.
+ */
+function EscalationRow({ runId, turn, now }: { runId: string; turn: EscalationView; now: number }) {
+  const outcome = [turn.action ? `${turn.action}:` : '', turn.reason ?? ''].filter(Boolean).join(' ');
+  return (
+    <tr className="split-row">
+      <td>
+        <a href={href('transcript', `${runId}/escalation-${turn.n}`)} title="Open the escalation's transcript">
+          escalate
+        </a>
+      </td>
+      <td>{turn.taskId ?? '–'}</td>
+      <td>
+        <span className={`badge tone-${statusTone(turn.status)}`} title={`A ${turn.kind} request`}>
+          {turn.status === 'running' ? <span className="pulse" /> : null}
+          {statusLabel(turn.status)}
+        </span>
+      </td>
+      <td className="num">
+        {turn.status === 'running' && turn.startedAt ? formatDuration(now - Date.parse(turn.startedAt)) : formatDuration(turn.durationMs)}
+      </td>
+      <td className="num">–</td>
+      <td className="num">–</td>
+      <td className="split-outcome" title={turn.reason}>
         {outcome}
       </td>
     </tr>

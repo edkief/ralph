@@ -18,6 +18,9 @@
   "assess": {
     "mode": "off"
   },
+  "escalation": {
+    "enabled": false
+  },
   "permissions": {
     "fallback": "allow",
     "deny": ["git push", "git remote", "rm -rf /", "shutdown", "reboot"]

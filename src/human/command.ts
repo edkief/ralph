@@ -45,6 +45,7 @@ export async function runRespond(args: {
       state.waiting ? 'Ralph is waiting for an answer' : 'The last run stopped for a person',
       [
         pending.message,
+        ...(pending.analysis ? ['', `The escalation agent passed this on: ${pending.analysis}`] : []),
         ...(pending.split
           ? ['', ...pending.split.tasks.map((task) => `${task.id}  ${task.title}`), '', `Specs and proposal: ${pending.split.dir}/`]
           : []),

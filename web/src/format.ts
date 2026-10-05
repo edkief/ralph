@@ -54,6 +54,7 @@ export function statusTone(status: string | null | undefined): Tone {
     case 'proposed':
     case 'applied':
     case 'fits':
+    case 'resolved':
       return 'good';
     case 'blocked':
     case 'stalled':
@@ -64,6 +65,7 @@ export function statusTone(status: string | null | undefined): Tone {
     case 'decide':
     case 'declined':
     case 'retry':
+    case 'escalated':
     case 'max-iterations':
     case 'timeout':
     case 'wrapped-up':

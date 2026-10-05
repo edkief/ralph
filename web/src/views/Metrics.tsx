@@ -527,11 +527,11 @@ function TaskTurns({ data, taskId }: { data: MetricsView; taskId: string }) {
             </thead>
             <tbody>
               {[...turns].reverse().map((turn) => (
-                <tr key={`${turn.runId}-${turn.kind}-${turn.iteration}-${turn.taskId}`} className={turn.kind === 'iteration' ? undefined : 'split-row'}>
+                <tr key={`${turn.runId}-${turn.kind}-${turn.iteration}-${turn.escalation ?? turn.taskId}`} className={turn.kind === 'iteration' ? undefined : 'split-row'}>
                   <td>{formatDateTime(turn.startedAt)}</td>
                   <td>
-                    <a href={href('transcript', `${turn.runId}/${turn.kind === 'iteration' ? turn.iteration : `split-${turn.taskId}`}`)} title="Open the transcript">
-                      {turn.kind === 'iteration' ? `iteration ${turn.iteration}` : turn.kind === 'assessment' ? 'assess' : 'split'}
+                    <a href={href('transcript', `${turn.runId}/${turnSession(turn)}`)} title="Open the transcript">
+                      {turn.kind === 'iteration' ? `iteration ${turn.iteration}` : turn.kind === 'assessment' ? 'assess' : turn.kind === 'escalation' ? 'escalation' : 'split'}
                     </a>
                     {turn.source === 'legacy' || turn.source === 'none' ? <span className="pill warn metrics-approx" title="Recorded before Ralph recorded usage">approx.</span> : null}
                   </td>
@@ -682,4 +682,11 @@ function niceMax(value: number, measure: Measure): number {
 function roundedTop(x: number, y: number, width: number, height: number, radius: number): string {
   const r = Math.min(radius, height);
   return `M${x},${y + height}V${y + r}Q${x},${y} ${x + r},${y}H${x + width - r}Q${x + width},${y} ${x + width},${y + r}V${y + height}Z`;
+}
+
+/** The turn's session in the Transcript tab's URL. */
+function turnSession(turn: MetricsTurn): string {
+  if (turn.kind === 'iteration') return String(turn.iteration);
+  if (turn.kind === 'escalation') return `escalation-${turn.escalation ?? ''}`;
+  return `split-${turn.taskId}`;
 }

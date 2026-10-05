@@ -15,7 +15,7 @@ export interface PromptContext {
   timeBudget?: { ms: number; until: Date };
   /** A handoff left by an earlier attempt at the next task. */
   handoff?: { path: string; text: string };
-  /** What a person answered or noted in this run and earlier ones, oldest first. */
+  /** What a person or the escalation agent answered or noted, in this run and earlier ones, oldest first. */
   decisions?: Decision[];
 }
 
@@ -95,15 +95,17 @@ export function buildPrompt(context: PromptContext): string {
     const log = [...(ralphDir === '' ? [] : ralphDir.split(sep)), 'decisions.jsonl'].join('/');
     sections.push(
       [
-        `## Answers from a person`,
+        `## Decisions`,
         ``,
-        `A person answered these questions and left these notes, latest last (\`${log}\`). They are`,
-        `decided: follow them where they apply, over the spec where the two disagree, and do not ask again.`,
+        `A person, or the escalation agent in their place, answered these questions and left these notes,`,
+        `latest last (\`${log}\`). They are decided: follow them where they apply, over the spec where the`,
+        `two disagree, and do not ask again.`,
         ``,
         ...context.decisions.map((decision) => {
           const about = decision.taskId ? `${decision.taskId}: ` : '';
           const question = decision.question ? `${about}${oneLine(decision.question)}` : `${about}note`;
-          return `- ${question}\n  **${decision.answer.trim().split('\n').join('\n  ')}**`;
+          const by = decision.by === 'agent' ? ' (escalation agent)' : '';
+          return `- ${question}${by}\n  **${decision.answer.trim().split('\n').join('\n  ')}**`;
         }),
       ].join('\n'),
     );

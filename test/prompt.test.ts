@@ -138,21 +138,23 @@ describe('buildPrompt', () => {
     expect(prompt.indexOf('## Resuming')).toBeLessThan(prompt.indexOf('# Do the work'));
   });
 
-  it('shows what a person answered, and leaves the section out when there is nothing', () => {
+  it('shows what a person or the escalation agent answered, and leaves the section out when there is nothing', () => {
     const root = project();
     const base = { projectRoot: root, ralphDir: '.ralph', iteration: 1, maxIterations: 5, pinTask: false };
-    expect(buildPrompt(base)).not.toContain('Answers from a person');
+    expect(buildPrompt(base)).not.toContain('## Decisions');
 
     const prompt = buildPrompt({
       ...base,
       decisions: [
         { time: 't', runId: 'r', taskId: 'TASK-4', kind: 'decide', question: 'REST or\nGraphQL?', answer: 'REST.\nKeep it simple.' },
         { time: 't', runId: 'r', taskId: null, kind: 'stalled', answer: 'Use the staging database.' },
+        { time: 't', runId: 'r', taskId: 'TASK-5', kind: 'blocked', question: 'no network', answer: 'It is up now.', by: 'agent' },
       ],
     });
-    expect(prompt).toContain('## Answers from a person');
+    expect(prompt).toContain('## Decisions');
     expect(prompt).toContain('`.ralph/decisions.jsonl`');
     expect(prompt).toContain('- TASK-4: REST or GraphQL?\n  **REST.\n  Keep it simple.**');
     expect(prompt).toContain('- note\n  **Use the staging database.**');
+    expect(prompt).toContain('- TASK-5: no network (escalation agent)\n  **It is up now.**');
   });
 });

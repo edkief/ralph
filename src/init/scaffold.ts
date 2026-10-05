@@ -15,6 +15,7 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['tasks.json', `${RALPH_DIR}/tasks.json`],
   ['PRD.md', `${RALPH_DIR}/prd/PRD.md`],
   ['STEERING.md', `${RALPH_DIR}/STEERING.md`],
+  ['ESCALATION.md', `${RALPH_DIR}/ESCALATION.md`],
   ['TASK-1.json', `${RALPH_DIR}/tasks/TASK-1.json`],
   ['LOG.md', `${RALPH_DIR}/logs/LOG.md`],
   ['ralph.config.json', 'ralph.config.json'],

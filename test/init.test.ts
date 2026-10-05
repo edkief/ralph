@@ -11,6 +11,7 @@ const EXPECTED = [
   '.ralph/tasks.json',
   '.ralph/prd/PRD.md',
   '.ralph/STEERING.md',
+  '.ralph/ESCALATION.md',
   '.ralph/tasks/TASK-1.json',
   '.ralph/logs/LOG.md',
   'ralph.config.json',
