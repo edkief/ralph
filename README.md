@@ -182,6 +182,41 @@ Behind a reverse proxy that serves the UI under a path prefix, set that prefix w
 strips it from every request and redirects the bare prefix to itself plus a slash; the app's
 own URLs are relative, so the proxy rewrites nothing. Requests outside the prefix get 404.
 
+#### Notifications
+
+The web UI can notify you through your browser's Web Push service, on a desktop or a phone,
+whether or not a page is open. Open **Notify me** in the header, choose what to hear about,
+and **Turn on**:
+
+- **Ralph needs me**: a request reached a person (after any [escalation agent](#the-escalation-agent)
+  passed it on). On by default.
+- **A run ends**: it finished, failed, stalled or stopped. A run that ended over a request is
+  told once, as the request. On by default.
+- **An iteration ends**, with its outcome, and **a task passes**: off unless you tick them.
+
+Each browser chooses for itself, and **Send a test** checks that one is reached. Clicking a
+notification opens the UI on the view it is about, at the address the browser subscribed
+from, so behind a reverse proxy and under `ui.basePath` it opens the proxy's address. To
+open somewhere else (e.g. a public HTTPS name where you subscribed from a LAN address), set
+`ui.push.url`.
+
+- The UI server sends them, so they come only while one runs: beside the loop, in the
+  [daemon](#daemon-mode), or as `ralph ui`. It checks the project every two seconds and
+  tells each event once, also across restarts. A server that starts does not replay what
+  happened before.
+- Browsers allow Web Push only on `https://` or `localhost`/`127.0.0.1`. To get
+  notifications on another device, serve the UI over HTTPS, e.g. behind a TLS proxy.
+- On iPhone and iPad, Web Push reaches only a web app added to the home screen: open the UI
+  in Safari, Share → Add to Home Screen, then turn notifications on from there.
+- Subscribing is an action: it needs loopback, `ui.token`, or `ui.actions: "open"`, like
+  answering Ralph.
+- The key pair (VAPID) is made on first use and kept in `.ralph/history/push.json`, out of
+  git, with the subscriptions. Deleting that file signs every browser out. Payloads are
+  encrypted for each browser, so the push service (Google, Mozilla, Apple) cannot read them.
+- Set `ui.push.subject` to a `mailto:` or `https:` contact for the push services. Apple
+  refuses the default, `mailto:ralph@localhost`. Set `ui.push.enabled` to `false` (or
+  `RALPH_UI_PUSH=0`) to turn notifications off altogether.
+
 ### When Ralph needs a person
 
 Some things only a person can settle. Ralph leaves each as a request in `.ralph/history/pending.json`,
@@ -470,7 +505,12 @@ See `templates/ralph.config.json` for a complete file.
     "basePath": "",                // path prefix behind a reverse proxy, e.g. /ralph/ws-1
     "wait": false,                 // wait for a person's answer instead of exiting; defaults to `enabled`
     "token": "…",                  // required for actions when the UI is not on loopback
-    "actions": "guarded"           // "open": take actions off loopback without a token (behind an authenticating proxy)
+    "actions": "guarded",          // "open": take actions off loopback without a token (behind an authenticating proxy)
+    "push": {
+      "enabled": true,             // Web Push notifications to the browsers that subscribe
+      "subject": "mailto:you@example.com", // contact for the push services; Apple refuses the default
+      "url": "https://ralph.example.com/ws-1/" // what a click opens; defaults to where the browser subscribed
+    }
   }
 }
 ```
@@ -482,6 +522,7 @@ The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
 `RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`,
+`RALPH_UI_PUSH`, `RALPH_UI_PUSH_SUBJECT`, `RALPH_UI_PUSH_URL`,
 `RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`, `RALPH_COST_CURRENCY`.
 
 Console lines are stamped with the local time, and the banner records the start date and
@@ -806,6 +847,8 @@ The web UI reads all of these, so it needs nothing else from the loop. What of t
 in git is in the [journal](#carrying-on-from-another-machine). Beside the runs,
 `history/pending.json` holds what Ralph is asking a person while it asks, and
 `history/answer.json` and `history/stop.json` carry an answer or a stop request to the loop.
+`history/push.json` holds the web UI's notification key pair and subscriptions, and what it
+has already told them.
 
 ## Notes on the opencode API
 

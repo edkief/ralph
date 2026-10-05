@@ -5,7 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RecordsMode } from '../loop/records.js';
-import type { CostConfig } from '../config/schema.js';
+import type { CostConfig, PushConfig } from '../config/schema.js';
 import { costEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
@@ -13,10 +13,24 @@ import { DaemonRequestError, requestRun } from '../daemon/control.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
 import { LOG_TAIL_BYTES, MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
+import { detect } from './notify.js';
+import {
+  DEFAULT_EVENTS,
+  EndpointSchema,
+  loadPushStore,
+  PUSH_EVENTS,
+  saveSeen,
+  sendPush,
+  SubscribeSchema,
+  subscribe,
+  unsubscribe,
+  webPushSender,
+  type PushSender,
+} from './push.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
 import type { OpencodeEvent } from '../opencode/events.js';
-import type { ActionsView, LiveEvents, LiveTranscript, LogLine, StatusView, TranscriptEntry } from './types.js';
+import type { ActionsView, LiveEvents, LiveTranscript, LogLine, PushPayload, PushView, StatusView, TranscriptEntry } from './types.js';
 
 /** The built React app, next to the compiled server: dist/ui → dist/web. */
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
@@ -25,10 +39,21 @@ const POLL_MS = 500;
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const STALLED_MS = 60_000;
+/** How often the project is looked at for something to notify. */
+const PUSH_POLL_MS = 2_000;
 /** Times the buffer limit beyond which a stream is dropped without waiting. */
 const HARD_LIMIT_FACTOR = 4;
 /** An action's body is an id and a few lines of text. */
 const MAX_BODY_BYTES = 64 * 1024;
+
+const ACTION_PATHS = new Set([
+  '/api/actions/respond',
+  '/api/actions/stop',
+  '/api/actions/run',
+  '/api/actions/push/subscribe',
+  '/api/actions/push/unsubscribe',
+  '/api/actions/push/test',
+]);
 
 const StopSchema = z.object({ mode: z.enum(STOP_MODES) });
 const RunSchema = z.object({ iterations: z.number().int().min(1).max(10_000).optional() });
@@ -42,6 +67,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 const SECURITY_HEADERS = {
@@ -67,6 +93,12 @@ export interface UiServerOptions {
   records?: RecordsMode;
   /** `metrics.cost`: how the Metrics tab estimates what the work cost. */
   cost?: CostConfig;
+  /** `ui.push`: Web Push notifications to the browsers that subscribed. Off when absent. */
+  push?: PushConfig;
+  /** Delivers a push notification; defaults to the push service, through web-push. */
+  pushSender?: PushSender;
+  /** How often the project is looked at for something to notify. */
+  pushPollMs?: number;
   /** Where the built web app lives; defaults to dist/web. */
   webRoot?: string;
   /** How often live streams look for changes. */
@@ -125,6 +157,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           token: false,
         };
   const status = (): StatusView => ({ ...project.status(), actions });
+  const push = options.push?.enabled ? options.push : undefined;
+  const pushSender = options.pushSender ?? webPushSender;
+  const pushView = (): PushView => ({
+    enabled: Boolean(push),
+    publicKey: push ? loadPushStore(project.ralphRoot).vapid.publicKey : null,
+    events: [...PUSH_EVENTS],
+    defaults: DEFAULT_EVENTS,
+  });
 
   const fail = (req: IncomingMessage, res: ServerResponse, cause: unknown) => {
     if (cause instanceof NotFoundError) return sendJson(res, 404, { error: cause.message });
@@ -176,6 +216,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/file/raw') return sendImage(res, project.imageFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
     if (path === '/api/metrics') return sendJson(res, 200, project.metrics(cost));
+    if (path === '/api/push') return sendJson(res, 200, pushView());
     if (path === '/api/live') return live(req, res);
     if (path === '/api/git') return gitStatus(options.projectRoot).then((view) => sendJson(res, 200, view));
 
@@ -198,9 +239,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     return sendJson(res, 404, { error: 'Not found' });
   };
 
-  /** Take an action: answer what the loop asked a person, ask it to stop, or have the daemon run a batch. */
+  /**
+   * Take an action: answer what the loop asked a person, ask it to stop, have
+   * the daemon run a batch, or (un)subscribe this browser to notifications.
+   */
   const act = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
-    if (path !== '/api/actions/respond' && path !== '/api/actions/stop' && path !== '/api/actions/run') {
+    if (!ACTION_PATHS.has(path)) {
       throw new RequestError(405, 'Read-only', { Allow: 'GET, HEAD' });
     }
     if (!actions.enabled) throw new RequestError(403, actions.reason ?? 'Actions are off');
@@ -223,6 +267,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       if (cause instanceof RequestError) throw cause;
       throw new RequestError(400, 'The body is not JSON');
     }
+
+    if (path.startsWith('/api/actions/push/')) return pushAction(res, path, body);
 
     if (path === '/api/actions/run') {
       const parsed = RunSchema.safeParse(body);
@@ -266,6 +312,81 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       throw cause;
     }
   };
+
+  const pushAction = async (res: ServerResponse, path: string, body: unknown): Promise<void> => {
+    if (!push) throw new RequestError(409, 'Push notifications are off: ui.push.enabled is false');
+    if (path === '/api/actions/push/subscribe') {
+      const parsed = SubscribeSchema.safeParse(body);
+      if (!parsed.success) throw new RequestError(400, 'A subscription needs an https endpoint and its keys');
+      subscribe(project.ralphRoot, parsed.data.subscription, parsed.data.events);
+      options.logger.info('web UI action', { action: 'push-subscribe', events: (parsed.data.events ?? DEFAULT_EVENTS).join(',') });
+      return sendJson(res, 200, { message: 'Notifications are on for this browser.' });
+    }
+    const parsed = EndpointSchema.safeParse(body);
+    if (!parsed.success) throw new RequestError(400, 'Name the subscription by its endpoint');
+    if (path === '/api/actions/push/unsubscribe') {
+      unsubscribe(project.ralphRoot, parsed.data.endpoint);
+      options.logger.info('web UI action', { action: 'push-unsubscribe' });
+      return sendJson(res, 200, { message: 'Notifications are off for this browser.' });
+    }
+    const delivered = await sendPush({
+      ralphRoot: project.ralphRoot,
+      event: null,
+      endpoint: parsed.data.endpoint,
+      payload: withBase({
+        title: `${project.status().project}: notifications work`,
+        body: 'Ralph will tell you here when it needs you.',
+        tag: 'test',
+        path: '#/overview',
+      }),
+      subject: push.subject,
+      sender: pushSender,
+      logger: options.logger,
+    });
+    if (delivered === 0) throw new RequestError(502, 'The test notification was not delivered: subscribe this browser again');
+    return sendJson(res, 200, { message: 'A test notification is on its way.' });
+  };
+
+  const withBase = (payload: PushPayload): PushPayload => (push?.url ? { ...payload, base: push.url } : payload);
+
+  /**
+   * Watch the project for what the subscribed browsers asked to hear about,
+   * whether or not a page is open. With nobody subscribed the watermark is
+   * dropped, so a first subscriber is not sent what came before.
+   */
+  let notifying = false;
+  const notify = async (): Promise<void> => {
+    if (!push || notifying) return;
+    notifying = true;
+    try {
+      const store = loadPushStore(project.ralphRoot);
+      if (store.subscriptions.length === 0) {
+        if (store.seen) saveSeen(project.ralphRoot, null);
+        return;
+      }
+      const view = project.status();
+      const detail = view.run ? project.runDetail(view.run.runId) : null;
+      const { seen, notifications } = detect(store.seen, view, detail);
+      // Told before sent: a notification lost to a crash beats one sent twice.
+      if (JSON.stringify(seen) !== JSON.stringify(store.seen)) saveSeen(project.ralphRoot, seen);
+      for (const { event, payload } of notifications) {
+        await sendPush({
+          ralphRoot: project.ralphRoot,
+          event,
+          payload: withBase(payload),
+          subject: push.subject,
+          sender: pushSender,
+          logger: options.logger,
+        });
+      }
+    } catch (cause) {
+      options.logger.debug('push notification check failed', { error: (cause as Error).message });
+    } finally {
+      notifying = false;
+    }
+  };
+  const notifier = push ? setInterval(() => void notify(), options.pushPollMs ?? PUSH_POLL_MS) : undefined;
+  notifier?.unref();
 
   /**
    * The latest run as server-sent events: the status whenever it changes, new
@@ -477,6 +598,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     url,
     close: () =>
       new Promise<void>((resolveClose) => {
+        clearInterval(notifier);
         // Live streams never end on their own.
         for (const client of [...clients]) client.stop();
         server.close(() => resolveClose());

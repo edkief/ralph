@@ -9,6 +9,7 @@ import { Transcript } from './views/Transcript';
 import { Logs } from './views/Logs';
 import { Files } from './views/Files';
 import { Git } from './views/Git';
+import { Notifications } from './views/Notifications';
 import { TABS, href, useRoute } from './route';
 
 export function App() {
@@ -144,6 +145,8 @@ function Header({ status, connected }: { status: StatusView | null; connected: b
             <div className="progress-fill" style={{ width: `${percent}%` }} />
           </div>
         </div>
+
+        <Notifications status={status} />
 
         <div className={connected ? 'connection ok' : 'connection down'} title={connected ? 'Receiving updates' : 'Reconnecting'}>
           <span className="connection-dot" />

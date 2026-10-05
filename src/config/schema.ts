@@ -131,6 +131,26 @@ const PlanSchema = z.object({
 });
 
 /**
+ * Web Push notifications from the web UI's server: when a request reaches a
+ * person, when a run ends and, for a browser that asks for them, when an
+ * iteration ends or a task passes. Nothing is sent until a browser subscribes
+ * from the UI, and only while a UI server runs.
+ */
+const PushSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** The contact push services may reach about these notifications (VAPID `sub`): a `mailto:` or `https:` URL. */
+  subject: z
+    .string()
+    .regex(/^(mailto:|https:\/\/)/, 'must be a mailto: or https:// URL')
+    .default('mailto:ralph@localhost'),
+  /**
+   * What clicking a notification opens. Without it, the address the browser
+   * subscribed from, which already includes any proxy and `basePath`.
+   */
+  url: z.string().url().optional(),
+});
+
+/**
  * The web UI. `ralph ui` always serves it; `enabled` also starts it beside the
  * loop. Loopback by default: reading needs no authentication, and actions
  * (answering the loop, stopping it) are only taken on loopback, with `token`,
@@ -165,6 +185,7 @@ const UiSchema = z.object({
    * `guarded`, the default, takes them only on loopback or with `token`.
    */
   actions: z.enum(['guarded', 'open']).optional(),
+  push: PushSchema.prefault({}),
 });
 
 /**
@@ -232,5 +253,6 @@ export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
 export type PermissionsConfig = z.infer<typeof PermissionsSchema>;
 export type UiConfig = z.infer<typeof UiSchema>;
+export type PushConfig = z.infer<typeof PushSchema>;
 export type EscalationConfig = z.infer<typeof EscalationSchema>;
 export type CostConfig = z.infer<typeof CostSchema>;
