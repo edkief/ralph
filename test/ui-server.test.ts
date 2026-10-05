@@ -8,8 +8,9 @@ import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
 import { Logger } from '../src/report/logger.js';
+import { loadPushStore, type PushSender } from '../src/ui/push.js';
 import { readDaemonRequest, writeDaemonState, type DaemonState } from '../src/daemon/control.js';
-import type { FileContent, GitCommitDetail, GitView, LiveEvents, MetricsView, RunDetail, RunView, StatusView } from '../src/ui/types.js';
+import type { FileContent, GitCommitDetail, GitView, LiveEvents, MetricsView, PushPayload, PushView, RunDetail, RunView, StatusView } from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const LIVE_RUN = '20260930-120000';
@@ -1146,5 +1147,131 @@ describe('web UI git', () => {
     await start(root, { basePath: '/ralph/ws-1' });
     expect((await get<Repository>('/ralph/ws-1/api/git')).body.commits).toHaveLength(3);
     expect((await get(`/ralph/ws-1/api/git/commits/${git(root, 'rev-parse', 'HEAD')}`)).status).toBe(200);
+  });
+});
+
+describe('web UI push notifications', () => {
+  const browser = { endpoint: 'https://push.example.com/send/1', keys: { p256dh: 'key', auth: 'secret' } };
+  const sent: Array<{ endpoint: string; payload: PushPayload; urgency: string }> = [];
+  const sender: PushSender = async (subscription, body, options) => {
+    sent.push({ endpoint: subscription.endpoint, payload: JSON.parse(body) as PushPayload, urgency: options.urgency });
+  };
+
+  async function startPush(root: string, extra: { token?: string; enabled?: boolean; url?: string; webRoot?: string; basePath?: string } = {}) {
+    sent.length = 0;
+    server = await startUiServer({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      host: '127.0.0.1',
+      port: 0,
+      ...(extra.token ? { token: extra.token } : {}),
+      ...(extra.basePath ? { basePath: extra.basePath } : {}),
+      push: { enabled: extra.enabled ?? true, subject: 'mailto:me@example.com', ...(extra.url ? { url: extra.url } : {}) },
+      pushSender: sender,
+      pushPollMs: 20,
+      logger,
+      webRoot: extra.webRoot ?? resolve(root, 'no-web'),
+    });
+  }
+
+  async function post(path: string, body: unknown, headers: Record<string, string> = {}) {
+    const response = await fetch(`${server!.url}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: (await response.json()) as { error?: string; message?: string } };
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let waited = 0; !check(); waited += 10) {
+      if (waited > 2_000) throw new Error('timed out');
+      await new Promise((settle) => setTimeout(settle, 10));
+    }
+  }
+
+  const ask = (root: string) =>
+    writePending(resolve(root, '.ralph'), {
+      id: `${LIVE_RUN}-1`,
+      runId: LIVE_RUN,
+      kind: 'blocked',
+      taskId: 'TASK-2',
+      message: 'The database is not running',
+      waiting: true,
+      createdAt: '2026-09-30T12:11:00.000Z',
+    });
+
+  it('serves the public key, and takes subscriptions only with the token', async () => {
+    const root = project();
+    await startPush(root, { token: 's3cret' });
+    const { body } = await get<PushView>('/api/push');
+    expect(body).toEqual({
+      enabled: true,
+      publicKey: loadPushStore(resolve(root, '.ralph')).vapid.publicKey,
+      events: ['request', 'run-end', 'iteration', 'task'],
+      defaults: ['request', 'run-end'],
+    });
+
+    expect((await post('/api/actions/push/subscribe', { subscription: browser })).status).toBe(401);
+    const auth = { Authorization: 'Bearer s3cret' };
+    expect((await post('/api/actions/push/subscribe', { subscription: { ...browser, endpoint: 'http://push.example.com/1' } }, auth)).status).toBe(400);
+    expect((await post('/api/actions/push/subscribe', { subscription: browser, events: ['task'] }, auth)).status).toBe(200);
+    expect(loadPushStore(resolve(root, '.ralph')).subscriptions).toMatchObject([{ endpoint: browser.endpoint, events: ['task'] }]);
+
+    expect((await post('/api/actions/push/test', { endpoint: browser.endpoint }, auth)).status).toBe(200);
+    expect(sent).toMatchObject([{ endpoint: browser.endpoint, payload: { title: expect.stringContaining('notifications work') } }]);
+
+    expect((await post('/api/actions/push/unsubscribe', { endpoint: browser.endpoint }, auth)).status).toBe(200);
+    expect(loadPushStore(resolve(root, '.ralph')).subscriptions).toEqual([]);
+    expect((await post('/api/actions/push/test', { endpoint: browser.endpoint }, auth)).status).toBe(502);
+  });
+
+  it('refuses subscriptions when push is off', async () => {
+    const root = project();
+    await startPush(root, { enabled: false });
+    expect((await get<PushView>('/api/push')).body).toMatchObject({ enabled: false, publicKey: null });
+    expect((await post('/api/actions/push/subscribe', { subscription: browser })).status).toBe(409);
+  });
+
+  it('notifies a subscribed browser when the loop asks for a person, with no page open', async () => {
+    const root = project();
+    await startPush(root, { url: 'https://ralph.example.com/ws-1/' });
+    expect((await post('/api/actions/push/subscribe', { subscription: browser })).status).toBe(200);
+    // The first look takes the watermark: the run so far is not news.
+    await until(() => loadPushStore(resolve(root, '.ralph')).seen !== null);
+    expect(sent).toEqual([]);
+
+    ask(root);
+    await until(() => sent.length > 0);
+    expect(sent).toEqual([
+      {
+        endpoint: browser.endpoint,
+        urgency: 'high',
+        payload: {
+          title: expect.stringMatching(/: Ralph needs you$/),
+          body: 'TASK-2 is blocked: The database is not running',
+          tag: `request-${LIVE_RUN}-1`,
+          path: '#/overview',
+          base: 'https://ralph.example.com/ws-1/',
+        },
+      },
+    ]);
+    await new Promise((settle) => setTimeout(settle, 100));
+    expect(sent).toHaveLength(1);
+  });
+
+  it('serves the service worker and the manifest under a proxy prefix', async () => {
+    const root = project();
+    const web = resolve(root, 'web');
+    mkdirSync(web, { recursive: true });
+    writeFileSync(resolve(web, 'index.html'), '<div id="root"></div>');
+    writeFileSync(resolve(web, 'sw.js'), 'self.addEventListener("push", () => {});');
+    writeFileSync(resolve(web, 'manifest.webmanifest'), '{}');
+    await startPush(root, { webRoot: web, basePath: '/ralph/ws-1' });
+
+    const worker = await fetch(`${server!.url}/ralph/ws-1/sw.js`);
+    expect(worker.headers.get('content-type')).toContain('text/javascript');
+    expect(worker.headers.get('cache-control')).toBe('no-cache');
+    expect((await fetch(`${server!.url}/ralph/ws-1/manifest.webmanifest`)).headers.get('content-type')).toContain('application/manifest+json');
   });
 });

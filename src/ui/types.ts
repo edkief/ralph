@@ -73,6 +73,32 @@ export interface PendingView {
   createdAt: string;
 }
 
+/**
+ * What a push notification can be sent for: a request reaching a person, a
+ * run ending, an iteration ending, a task passing. Each browser picks its own.
+ */
+export type PushEvent = 'request' | 'run-end' | 'iteration' | 'task';
+
+/** Whether this server sends push notifications, and what a browser needs to subscribe. */
+export interface PushView {
+  enabled: boolean;
+  /** The VAPID public key, base64url, for `pushManager.subscribe`. */
+  publicKey: string | null;
+  events: PushEvent[];
+  /** What a new subscription gets unless it asks otherwise. */
+  defaults: PushEvent[];
+}
+
+/** What the service worker shows. `path` is the view, as a hash route; `base` replaces the worker's scope when set. */
+export interface PushPayload {
+  title: string;
+  body: string;
+  /** Notifications with the same tag replace each other on the device. */
+  tag: string;
+  path: string;
+  base?: string;
+}
+
 /** Whether this server takes actions (answers, stop requests), and what the browser needs for them. */
 export interface ActionsView {
   enabled: boolean;

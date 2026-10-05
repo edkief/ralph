@@ -15,6 +15,7 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     openActions: config.ui.actions === 'open',
     records: config.git.records,
     cost: config.metrics.cost,
+    push: config.ui.push,
     logger,
   });
   if (!isLoopback(config.ui.host)) {
