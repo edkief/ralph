@@ -101,21 +101,31 @@ describe('loadConfig', () => {
   });
 
   it('keeps the web UI off and on loopback unless asked', () => {
-    expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280, basePath: '' });
+    expect(loadConfig({ projectRoot: project(), env: {} }).ui).toEqual({ enabled: false, host: '127.0.0.1', port: 4280, basePath: '', push: { enabled: true, subject: 'mailto:ralph@localhost' } });
     const fromEnv = loadConfig({
       projectRoot: project(),
       env: { RALPH_UI: '1', RALPH_UI_HOST: '0.0.0.0', RALPH_UI_PORT: '8080', RALPH_UI_BASE_PATH: '/ralph/ws-1' },
     });
-    expect(fromEnv.ui).toEqual({ enabled: true, host: '0.0.0.0', port: 8080, basePath: '/ralph/ws-1' });
+    expect(fromEnv.ui).toEqual({ enabled: true, host: '0.0.0.0', port: 8080, basePath: '/ralph/ws-1', push: { enabled: true, subject: 'mailto:ralph@localhost' } });
     const fromFlags = loadConfig({
       projectRoot: project(),
       env: { RALPH_UI: '1' },
       overrides: { ui: { enabled: false, port: 9000 } },
     });
-    expect(fromFlags.ui).toEqual({ enabled: false, host: '127.0.0.1', port: 9000, basePath: '' });
+    expect(fromFlags.ui).toEqual({ enabled: false, host: '127.0.0.1', port: 9000, basePath: '', push: { enabled: true, subject: 'mailto:ralph@localhost' } });
     expect(() =>
       loadConfig({ projectRoot: project(), env: { RALPH_UI_BASE_PATH: 'ralph' } }),
     ).toThrow(/basePath/);
+  });
+
+  it('offers push notifications unless turned off, with a contact and an optional click target', () => {
+    expect(loadConfig({ projectRoot: project(), env: { RALPH_UI_PUSH: '0' } }).ui.push.enabled).toBe(false);
+    const push = loadConfig({
+      projectRoot: project(),
+      env: { RALPH_UI_PUSH_SUBJECT: 'mailto:me@example.com', RALPH_UI_PUSH_URL: 'https://ralph.example.com/ws-1/' },
+    }).ui.push;
+    expect(push).toEqual({ enabled: true, subject: 'mailto:me@example.com', url: 'https://ralph.example.com/ws-1/' });
+    expect(() => loadConfig({ projectRoot: project(), env: { RALPH_UI_PUSH_SUBJECT: 'me@example.com' } })).toThrow(/subject/);
   });
 
   it('opens the web UI\'s actions only when asked', () => {

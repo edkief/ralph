@@ -75,6 +75,11 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       wait: bool(env['RALPH_UI_WAIT']),
       token: env['RALPH_UI_TOKEN'] || undefined,
       actions: env['RALPH_UI_ACTIONS'] || undefined,
+      push: {
+        enabled: bool(env['RALPH_UI_PUSH']),
+        subject: env['RALPH_UI_PUSH_SUBJECT'] || undefined,
+        url: env['RALPH_UI_PUSH_URL'] || undefined,
+      },
     },
     metrics: {
       cost: {
