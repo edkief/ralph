@@ -9,6 +9,8 @@ import {
   ToolCalledSchema,
   ToolInputStartedSchema,
   ToolResultSchema,
+  TURN_STARTED_EVENT,
+  TurnStartedSchema,
   errorMessage,
   readData,
   sessionIdOf,
@@ -49,7 +51,13 @@ const MAX_TEXT = 100_000;
  */
 export class TranscriptBuilder {
   private readonly entries = new Map<string, TranscriptEntry>();
-  private mainSession: string | undefined;
+  /** The turn's own sessions, as Ralph recorded them: a retry starts another. */
+  private readonly ownSessions = new Set<string>();
+  /**
+   * For an event file recorded before Ralph named the turn's sessions: the
+   * first session seen stands for the turn, and any other for a subagent.
+   */
+  private firstSession: string | undefined;
   private seq = 0;
   /** Open text or reasoning parts that arrived without ids, by session. */
   private readonly anonymous = new Map<string, string>();
@@ -61,14 +69,20 @@ export class TranscriptBuilder {
 
   push(event: OpencodeEvent): TranscriptEntry[] {
     const session = sessionIdOf(event);
-    if (event.type === 'session.created') {
-      this.mainSession ??= session;
-      return [];
+    const time = typeof event['created'] === 'number' ? { time: event['created'] } : {};
+    if (event.type === TURN_STARTED_EVENT) {
+      const started = readData(event, TurnStartedSchema);
+      if (!started || this.ownSessions.has(started.sessionID)) return [];
+      const retry = this.ownSessions.size > 0;
+      this.ownSessions.add(started.sessionID);
+      return retry ? this.notice(time, 'warn', 'the turn started over in a fresh session') : [];
     }
-    this.mainSession ??= session;
+    if (this.ownSessions.size === 0) this.firstSession ??= session;
+    if (event.type === 'session.created') return [];
+    const own = this.ownSessions.size > 0 ? session !== undefined && this.ownSessions.has(session) : session === this.firstSession;
     const base = {
-      ...(typeof event['created'] === 'number' ? { time: event['created'] } : {}),
-      ...(session && session !== this.mainSession ? { subagent: true } : {}),
+      ...time,
+      ...(session && !own ? { subagent: true } : {}),
     };
 
     if (event.type.includes('permission')) {

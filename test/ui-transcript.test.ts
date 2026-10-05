@@ -85,6 +85,41 @@ describe('TranscriptBuilder', () => {
     expect(entries[1]).not.toHaveProperty('subagent');
   });
 
+  it('shows a retry in a fresh session as a new attempt, not as a subagent', () => {
+    const entries = build([
+      { type: 'ralph.turn.started', created: 1, data: { sessionID: 'first' } },
+      { type: 'session.created', data: { sessionID: 'first' } },
+      { type: 'session.text.ended', data: { sessionID: 'first', text: 'out of time' } },
+      { type: 'ralph.turn.started', created: 2, data: { sessionID: 'second' } },
+      { type: 'session.created', data: { sessionID: 'second' } },
+      { type: 'session.inbox.enqueued', data: { sessionID: 'second', item: { payload: { text: 'Resuming' } } } },
+      { type: 'session.text.ended', data: { sessionID: 'second', text: 'picking up' } },
+      { type: 'session.execution.succeeded', data: { sessionID: 'second' } },
+    ]);
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['text', 'notice', 'prompt', 'text', 'notice']);
+    expect(entries[1]).toMatchObject({ kind: 'notice', level: 'warn', text: 'the turn started over in a fresh session', time: 2 });
+    expect(entries[4]).toMatchObject({ kind: 'notice', text: 'execution finished' });
+    expect(entries.some((entry) => entry.subagent)).toBe(false);
+  });
+
+  it('tags a session that is not the turn\'s own as a subagent\'s, whichever was created first', () => {
+    const entries = build([
+      { type: 'ralph.turn.started', data: { sessionID: 'main' } },
+      { type: 'session.created', data: { sessionID: 'stranger' } },
+      { type: 'session.created', data: { sessionID: 'main' } },
+      { type: 'session.created', data: { sessionID: 'child' } },
+      { type: 'session.text.ended', data: { sessionID: 'main', text: 'mine' } },
+      { type: 'session.text.ended', data: { sessionID: 'child', text: 'delegated' } },
+      // A turn that carries on its session names it again: not a new attempt.
+      { type: 'ralph.turn.started', data: { sessionID: 'main', continued: true } },
+    ]);
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).not.toHaveProperty('subagent');
+    expect(entries[1]).toMatchObject({ text: 'delegated', subagent: true });
+  });
+
   it('clips long text, reasoning, prompts and tool input', () => {
     const long = 'x'.repeat(150_000);
     const entries = build([

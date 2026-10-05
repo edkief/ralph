@@ -312,18 +312,20 @@ describe('runLoop', () => {
       expect(server?.prompts).toHaveLength(1);
     });
 
-    it('does not retry a timed-out iteration once a stop is requested', async () => {
+    it('does not retry an iteration once a stop is requested', async () => {
       const root = project([{ id: 'TASK-1', passes: false }]);
       const stop = new AbortController();
 
       const result = await loop(
         root,
-        config(root, {
-          maxIterations: 5,
-          timeouts: { inactivityMs: 1_000, wrapUpMs: 0 },
-          retries: { backoffMs: 0, iterationRetries: 2 },
-        }),
-        { onPrompt: () => stop.abort(), script: [] },
+        config(root, { maxIterations: 5, retries: { backoffMs: 0, iterationRetries: 2 } }),
+        {
+          onPrompt: () => stop.abort(),
+          script: [
+            { type: 'session.step.failed', data: { error: { type: 'unknown', message: 'prompt is too long' } } },
+            { type: 'session.execution.failed' },
+          ],
+        },
         stop.signal,
       );
 
@@ -454,6 +456,56 @@ describe('runLoop', () => {
       // The second attempt was told about the first.
       expect(String(server?.prompts[2]?.['text'])).toContain('## Resuming TASK-1');
     });
+    it('ends an iteration whose wrap-up overruns as a timeout, and resumes in the next one rather than retrying in place', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 3,
+          timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 1_000 },
+          retries: { backoffMs: 0, iterationRetries: 1 },
+        }),
+        {
+          steer: true,
+          onPrompt: (count) => {
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count <= 2 ? endless : say('<promise>TASK-1:DONE</promise>')),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      expect(server?.sessionsCreated).toBe(2);
+      expect(String(server?.prompts[2]?.['text'])).toContain('RALPH_ITERATION=2');
+      expect(String(server?.prompts[2]?.['text'])).toContain('## Resuming TASK-1');
+      expect(existsSync(resolve(result.historyDir, 'iteration-001.events.jsonl'))).toBe(true);
+      expect(existsSync(resolve(result.historyDir, 'iteration-002.events.jsonl'))).toBe(true);
+
+      const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(records.map((record: { iteration: number }) => record.iteration)).toEqual([1, 2]);
+      expect(records[0]).toMatchObject({ handoff: 'fallback', result: { status: 'timeout', trip: 'wrap-up-timeout' } });
+    });
+
+    it('stalls a task that runs out of time twice, one iteration each, even with retries to spare', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          timeouts: { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 0 },
+          retries: { backoffMs: 0, iterationRetries: 2 },
+          stall: { maxTimeoutsPerTask: 2, maxUnproductiveIterations: 5, onRepeatedTimeout: 'stop' },
+        }),
+        { script: endless },
+      );
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(2);
+      expect(server?.sessionsCreated).toBe(2);
+    });
   });
 
   describe('running out of context', () => {
@@ -492,6 +544,9 @@ describe('runLoop', () => {
 
       const records = readFileSync(resolve(result.historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
       expect(records[0]).toMatchObject({ result: { status: 'progressed' } });
+      // Both attempts share the iteration's event file, each naming its own session.
+      const events = readFileSync(resolve(result.historyDir, 'iteration-001.events.jsonl'), 'utf8');
+      expect(events.match(/"type":"ralph\.turn\.started"/g)).toHaveLength(2);
     });
 
     it('stops a task that keeps outgrowing the context window', async () => {
