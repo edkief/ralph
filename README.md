@@ -124,12 +124,14 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   duration, tool calls, tokens and changes, with a row for every split turn, assessment or
   [escalation](#the-escalation-agent) and its outcome,
   then the task in progress and the few that come next
-- **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
-  split one came from
+- **Tasks**: the whole backlog in order, with what passes and each task's spec. A task that
+  was split heads the tasks it was split into, with its title and its spec from before the
+  split, and is not counted
 - **Metrics**: what the project's model work came to over every run: iterations, planning
   turns and escalations, inference time, tokens (input, output, reasoning, cached), the models used, and the
   [energy drawn and estimated cost](#estimating-cost). Then the same by day (in the browser's time zone), by
-  task, and by run. A task that was split counts the tasks it was split into; open a task for
+  task, and by run. A task that was split keeps its title and counts the tasks it was split into,
+  whether the loop split it or you did with `ralph split --apply`; open a task for
   every turn spent on it, each with its transcript
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
@@ -394,7 +396,7 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   ESCALATION.md    # optional — guidance for the escalation agent
   logs/LOG.md      # optional — the agent's own running log
   handoff/         # written when a task runs out of time or is parked
-  split/           # proposed and applied splits of tasks that were too big
+  split/           # proposed and applied splits of tasks that were too big, and what each split task was
   assess/          # the estimate of each task assessed before its first attempt
   decisions.jsonl  # what a person (or the escalation agent) answered or noted; shown to the agent in later prompts
   artifacts/       # evidence the agent keeps, by task: screenshots, short reports
@@ -699,9 +701,19 @@ outcome. A turn started with `ralph split` runs outside any run and is not recor
 
 Applying a split replaces the task in `tasks.json` with the new ones, in its place so they come
 next, and moves their specs next to the old spec. The old spec and its handoff move into
-`.ralph/split/TASK-8/`, which stays as the record of the split. The change is committed as
-`chore(plan): split TASK-8 into TASK-8.1 and TASK-8.2`. Proposed specs are plain files: edit
-them before applying if they need it.
+`.ralph/split/TASK-8/`, which stays as the record of the split: `proposal.json` gains a
+`parent` with the old task's title and where its spec and handoff went. The change is
+committed as `chore(plan): split TASK-8 into TASK-8.1 and TASK-8.2`. Proposed specs are plain
+files: edit them before applying if they need it.
+
+The old task is gone from `tasks.json`, but not from view. Each iteration on a task it was split
+into gets a "Split from TASK-8" section in its prompt. The section names the old task, gives
+its spec (the whole of what it asked for) and the handoff its last attempt left, and lists the
+tasks it was split into, with which ones pass. So the agent knows the full scope and what
+was already done, and keeps to its own part. For a task split twice, the section follows each
+split back. The Tasks tab shows the old task over the new ones. In Metrics, the old task keeps
+its title and its own figures, and adds up the new tasks' figures. A split recorded before
+Ralph kept the title has it read from the archived spec.
 
 A split is not tried, and the run stops, when:
 
