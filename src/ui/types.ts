@@ -13,12 +13,25 @@ export interface TaskView {
   splitFrom?: string;
 }
 
+/** A task that was split, and so is gone from tasks.json, as its split record keeps it. */
+export interface SplitTaskView {
+  id: string;
+  /** Null for an older record with no archived spec to read it from. */
+  title: string | null;
+  /** Its archived spec. */
+  specFilePath?: string;
+  /** The tasks it was split into, in order. */
+  children: string[];
+}
+
 export interface TasksView {
   total: number;
   passed: number;
   /** The task the loop would pick next. */
   next: string | null;
   items: TaskView[];
+  /** Tasks that were split, which `items` and the counts leave out. */
+  splits: SplitTaskView[];
   /** Why tasks.json could not be read, when it could not. */
   error?: string;
 }

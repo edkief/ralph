@@ -143,6 +143,19 @@ describe('RalphProject.metrics', () => {
     expect(tasks.find((task) => task.id === 'T-1')!.total.iterations).toBe(2);
   });
 
+  it('titles a split task as its split record keeps it', () => {
+    const ralph = project();
+    const dir = resolve(ralph.projectRoot, ralph.ralphDir, 'split', 'T-2');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      resolve(dir, 'proposal.json'),
+      JSON.stringify({ task: 'T-2', splittable: true, tasks: [{ id: 'T-2a', title: 'a' }, { id: 'T-2b', title: 'b' }], appliedAt: '2026-10-01T03:00:00.000Z', parent: { title: 'Two' } }),
+    );
+    const split = ralph.metrics({ estimator: undefined, currency: 'USD' }).tasks.find((task) => task.id === 'T-2')!;
+    expect(split).toMatchObject({ title: 'Two', passes: null, children: ['T-2a', 'T-2b'] });
+    expect(split.total.iterations).toBe(3);
+  });
+
   it('estimates power cost per model on inference time', () => {
     const metrics = project().metrics({ estimator: power, currency: 'EUR' });
     const big = metrics.models.find((model) => model.model === BIG)!;

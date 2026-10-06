@@ -534,6 +534,10 @@ pre {
   flex: none;
 }
 
+.task.split-parent .task-title {
+  color: var(--muted);
+}
+
 .task-category {
   font-size: 11px;
   color: var(--muted);
