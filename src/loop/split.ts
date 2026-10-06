@@ -8,6 +8,7 @@ import { handoffPath, readHandoff } from './handoff.js';
 import { restrictWrites } from './permissions.js';
 import { commitPaths } from './records.js';
 import { TaskStore, type Task } from '../tasks/store.js';
+import { splitDir } from '../tasks/splits.js';
 import { checkSpec, readTemplate, TASK_ID } from '../init/plan.js';
 import { TEMPLATES_DIR } from '../init/scaffold.js';
 import { buildSplitFixPrompt, buildSplitPrompt } from '../prompt/split.js';
@@ -58,10 +59,7 @@ export type SplitOutcome =
 
 export class SplitError extends Error {}
 
-/** Where a task's split is proposed and, once applied, archived; relative to the project root. */
-export function splitDir(ralphDir: string, taskId: string): string {
-  return `${ralphDir.replace(/\/+$/, '')}/split/${taskId}`;
-}
+export { splitDir };
 
 /**
  * Check the proposal for `taskId` on disk, returning it or the problems the
@@ -224,7 +222,8 @@ export interface AppliedSplit {
  * Replace `taskId` in tasks.json with the tasks its proposal lists, in its
  * place so they are picked up next, and move their specs next to the
  * parent's. The parent's spec and handoff are archived in the split folder,
- * which keeps the proposal as the record of the split. Commits the change
+ * which keeps the proposal, with the parent's title and archive added, as
+ * the record of the split. Commits the change
  * when `commit` is set and the project is a git repository.
  */
 export async function applySplit(args: {
@@ -278,18 +277,23 @@ export async function applySplit(args: {
   writeFileSync(store.path, `${JSON.stringify(raw, null, 2)}\n`);
 
   const touched = [display(projectRoot, store.path), dir, ...children.map((child) => child.specFilePath!)];
+  // The split task leaves tasks.json: its record keeps what it was and where its spec and handoff went.
+  const record: { title: string; specFilePath?: string; handoffPath?: string; splitFrom?: string } = { title: parent.title };
   if (parent.specFilePath && existsSync(resolve(projectRoot, parent.specFilePath))) {
     renameSync(resolve(projectRoot, parent.specFilePath), resolve(projectRoot, dir, `${taskId}.json`));
     touched.push(parent.specFilePath);
+    record.specFilePath = `${dir}/${taskId}.json`;
   }
   const handoffFile = handoffPath(projectRoot, ralphDir, taskId);
   if (existsSync(handoffFile)) {
     renameSync(handoffFile, resolve(projectRoot, dir, 'handoff.md'));
     touched.push(display(projectRoot, handoffFile));
+    record.handoffPath = `${dir}/handoff.md`;
   }
+  if (parent.splitFrom) record.splitFrom = parent.splitFrom;
   writeFileSync(
     resolve(projectRoot, dir, 'proposal.json'),
-    `${JSON.stringify({ ...proposal, appliedAt: new Date().toISOString() }, null, 2)}\n`,
+    `${JSON.stringify({ ...proposal, parent: record, appliedAt: new Date().toISOString() }, null, 2)}\n`,
   );
 
   if (!args.commit) return { children, committed: false };
