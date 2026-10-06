@@ -13,7 +13,7 @@ const SECTIONS = [
 /** Days the summary's chart covers, up to the latest. */
 const CHART_DAYS = 30;
 
-type Measure = 'tokens' | 'inferenceMs' | 'estimatedCost';
+type Measure = 'tokens' | 'inferenceMs' | 'energyKwh' | 'estimatedCost';
 
 /**
  * What the project's model work came to, over every run: totals, then by
@@ -65,10 +65,10 @@ export function Metrics({ status, selected }: { status: StatusView; selected: st
 }
 
 function Summary({ data }: { data: MetricsView }) {
-  const { totals, cost } = data;
+  const { totals, cost, energy } = data;
   return (
     <>
-      <section className="cards">
+      <section className="cards metrics-cards">
         <div className="card">
           <div className="card-label">Iterations</div>
           <div className="card-value">{totals.iterations}</div>
@@ -91,6 +91,17 @@ function Summary({ data }: { data: MetricsView }) {
           </div>
         </div>
         <div className="card">
+          <div className="card-label">Energy</div>
+          <div className="card-value">{totals.energyKwh !== null ? formatEnergy(totals.energyKwh) : <span className="muted">not set</span>}</div>
+          <div className="card-detail" title={energy.basis ?? undefined}>
+            {energy.basis ?? (
+              <>
+                Set <code>metrics.cost.power.watts</code> in ralph.config.json
+              </>
+            )}
+          </div>
+        </div>
+        <div className="card">
           <div className="card-label">Estimated cost</div>
           <div className="card-value">
             {totals.estimatedCost !== null ? formatMoney(totals.estimatedCost, cost.currency) : <span className="muted">not set</span>}
@@ -98,7 +109,7 @@ function Summary({ data }: { data: MetricsView }) {
           <div className="card-detail" title={cost.basis ?? undefined}>
             {cost.basis ?? (
               <>
-                Set <code>metrics.cost</code> in ralph.config.json
+                Set <code>{energy.basis ? 'metrics.cost.power.pricePerKwh' : 'metrics.cost'}</code> in ralph.config.json
               </>
             )}
             {totals.reportedCost > 0 ? ` · ${formatMoney(totals.reportedCost, 'USD')} reported by opencode` : ''}
@@ -126,6 +137,7 @@ function Summary({ data }: { data: MetricsView }) {
                 <th className="num">Cached</th>
                 <th className="num">Share</th>
                 <th className="num">Inference</th>
+                <th className="num">Energy</th>
                 <th className="num">Cost</th>
               </tr>
             </thead>
@@ -141,6 +153,7 @@ function Summary({ data }: { data: MetricsView }) {
                   <td className="num">{formatCount(model.cacheRead + model.cacheWrite)}</td>
                   <td className="num">{totals.tokens > 0 ? `${Math.round((model.tokens / totals.tokens) * 100)}%` : '–'}</td>
                   <td className="num">{formatDuration(model.inferenceMs)}</td>
+                  <td className="num">{energyCell(model)}</td>
                   <td className="num">{costCell(model, data)}</td>
                 </tr>
               ))}
@@ -202,6 +215,7 @@ function useDays(turns: MetricsTurn[], withCost: boolean, withEnergy: boolean): 
 const MEASURES: Array<{ id: Measure; label: string }> = [
   { id: 'tokens', label: 'Tokens' },
   { id: 'inferenceMs', label: 'Inference time' },
+  { id: 'energyKwh', label: 'Energy' },
   { id: 'estimatedCost', label: 'Estimated cost' },
 ];
 
@@ -211,10 +225,17 @@ function DailyChart({ data }: { data: MetricsView }) {
   const days = useDays(data.turns, withCost, withEnergy).slice(-CHART_DAYS);
   const [measure, setMeasure] = useState<Measure>('tokens');
   const [hovered, setHovered] = useState<number | null>(null);
-  const shown = measure === 'estimatedCost' && !withCost ? 'tokens' : measure;
-  const value = (day: Day) => (shown === 'estimatedCost' ? (day.estimatedCost ?? 0) : day[shown]);
+  const available = (id: Measure) => (id === 'estimatedCost' ? withCost : id === 'energyKwh' ? withEnergy : true);
+  const shown = available(measure) ? measure : 'tokens';
+  const value = (day: Day) => day[shown] ?? 0;
   const format = (amount: number) =>
-    shown === 'tokens' ? formatCount(amount) : shown === 'inferenceMs' ? formatDuration(amount) : formatMoney(amount, data.cost.currency);
+    shown === 'tokens'
+      ? formatCount(amount)
+      : shown === 'inferenceMs'
+        ? formatDuration(amount)
+        : shown === 'energyKwh'
+          ? formatEnergy(amount)
+          : formatMoney(amount, data.cost.currency);
   const max = niceMax(Math.max(0, ...days.map(value)), shown);
 
   // Drawn at the panel's own width, so text and bars keep their size.
@@ -242,7 +263,7 @@ function DailyChart({ data }: { data: MetricsView }) {
         </a>
       </h2>
       <div className="chart-toolbar" role="radiogroup" aria-label="Measure">
-        {MEASURES.filter((entry) => entry.id !== 'estimatedCost' || withCost).map((entry) => (
+        {MEASURES.filter((entry) => available(entry.id)).map((entry) => (
           <button
             key={entry.id}
             type="button"
@@ -311,6 +332,7 @@ function DailyChart({ data }: { data: MetricsView }) {
             <strong>{day.date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
             <div>{formatCount(day.tokens)} tokens</div>
             <div>{formatDuration(day.inferenceMs)} inference</div>
+            {day.energyKwh !== null ? <div>{formatEnergy(day.energyKwh)}</div> : null}
             {day.estimatedCost !== null ? <div>{formatMoney(day.estimatedCost, data.cost.currency)}</div> : null}
             <div className="muted">
               {day.iterations} iteration{day.iterations === 1 ? '' : 's'}
@@ -347,6 +369,7 @@ function Days({ data }: { data: MetricsView }) {
                 <th className="num">Cached</th>
                 <th className="num">Tokens</th>
                 <th className="num">Inference</th>
+                <th className="num">Energy</th>
                 <th className="num">Cost</th>
               </tr>
             </thead>
@@ -361,6 +384,7 @@ function Days({ data }: { data: MetricsView }) {
                   <td className="num">{formatCount(day.cacheRead + day.cacheWrite)}</td>
                   <td className="num">{formatCount(day.tokens)}</td>
                   <td className="num">{formatDuration(day.inferenceMs)}</td>
+                  <td className="num">{energyCell(day)}</td>
                   <td className="num">{costCell(day, data)}</td>
                 </tr>
               ))}
@@ -419,6 +443,7 @@ function Tasks({ data }: { data: MetricsView }) {
             {formatCount(total.tokens)}
           </td>
           <td className="num">{formatDuration(total.inferenceMs)}</td>
+          <td className="num">{energyCell(total)}</td>
           <td className="num">{costCell(total, data)}</td>
         </tr>
         {open
@@ -448,6 +473,7 @@ function Tasks({ data }: { data: MetricsView }) {
               <th className="num">Planning</th>
               <th className="num">Tokens</th>
               <th className="num">Inference</th>
+              <th className="num">Energy</th>
               <th className="num">Cost</th>
             </tr>
           </thead>
@@ -476,7 +502,7 @@ function TaskTurns({ data, taskId }: { data: MetricsView; taskId: string }) {
   if (!task) return <div className="empty">Nothing recorded for {taskId}. <a href={href('metrics', 'tasks')}>All tasks</a></div>;
   return (
     <>
-      <section className="cards">
+      <section className="cards metrics-cards">
         <div className="card">
           <div className="card-label">
             <a href={href('metrics', 'tasks')}>Tasks</a> / {task.id}
@@ -503,6 +529,11 @@ function TaskTurns({ data, taskId }: { data: MetricsView; taskId: string }) {
           <div className="card-detail">{formatDuration(task.total.inferenceMs)} inference</div>
         </div>
         <div className="card">
+          <div className="card-label">Energy</div>
+          <div className="card-value">{task.total.energyKwh !== null ? formatEnergy(task.total.energyKwh) : <span className="muted">not set</span>}</div>
+          <div className="card-detail">{task.children.length ? 'with the tasks split from it' : ' '}</div>
+        </div>
+        <div className="card">
           <div className="card-label">Estimated cost</div>
           <div className="card-value">{task.total.estimatedCost !== null ? formatMoney(task.total.estimatedCost, data.cost.currency) : <span className="muted">not set</span>}</div>
           <div className="card-detail">{task.children.length ? 'with the tasks split from it' : ' '}</div>
@@ -524,6 +555,7 @@ function TaskTurns({ data, taskId }: { data: MetricsView; taskId: string }) {
                 <th className="num">Tokens</th>
                 <th className="num">Inference</th>
                 <th className="num">Wall</th>
+                <th className="num">Energy</th>
                 <th className="num">Cost</th>
               </tr>
             </thead>
@@ -542,6 +574,7 @@ function TaskTurns({ data, taskId }: { data: MetricsView; taskId: string }) {
                   <td className="num">{formatCount(turn.tokens)}</td>
                   <td className="num">{formatDuration(turn.inferenceMs)}</td>
                   <td className="num">{formatDuration(turn.wallMs)}</td>
+                  <td className="num">{energyCell(turn)}</td>
                   <td className="num">{costCell(turn, data)}</td>
                 </tr>
               ))}
@@ -571,6 +604,7 @@ function Runs({ data }: { data: MetricsView }) {
               <th className="num">Tokens</th>
               <th className="num">Inference</th>
               <th className="num">Wall</th>
+              <th className="num">Energy</th>
               <th className="num">Cost</th>
             </tr>
           </thead>
@@ -590,6 +624,7 @@ function Runs({ data }: { data: MetricsView }) {
                 <td className="num">{formatCount(run.tokens)}</td>
                 <td className="num">{formatDuration(run.inferenceMs)}</td>
                 <td className="num">{formatDuration(run.wallMs)}</td>
+                <td className="num">{energyCell(run)}</td>
                 <td className="num">{costCell(run, data)}</td>
               </tr>
             ))}
@@ -603,6 +638,10 @@ function Runs({ data }: { data: MetricsView }) {
 function costCell(usage: MetricsUsage, data: MetricsView): string {
   if (usage.estimatedCost !== null) return formatMoney(usage.estimatedCost, data.cost.currency);
   return usage.reportedCost > 0 ? formatMoney(usage.reportedCost, 'USD') : '–';
+}
+
+function energyCell(usage: MetricsUsage): string {
+  return usage.energyKwh !== null ? formatEnergy(usage.energyKwh) : '–';
 }
 
 function tokenBreakdown(usage: MetricsUsage): string {
@@ -626,6 +665,18 @@ export function formatMoney(amount: number, currency: string): string {
   } catch {
     return `${new Intl.NumberFormat(undefined, digits).format(amount)} ${currency}`;
   }
+}
+
+/** An amount of energy: in Wh below 1 kWh, in kWh from there. */
+export function formatEnergy(kwh: number): string {
+  const [amount, unit] = Math.abs(kwh) < 1 ? [kwh * 1000, 'Wh'] : [kwh, 'kWh'];
+  const digits =
+    amount !== 0 && Math.abs(amount) < 0.1
+      ? { minimumSignificantDigits: 2, maximumSignificantDigits: 2 }
+      : Math.abs(amount) < 100
+        ? { maximumFractionDigits: unit === 'Wh' ? 1 : 2 }
+        : { maximumFractionDigits: 0 };
+  return `${new Intl.NumberFormat(undefined, digits).format(amount)} ${unit}`;
 }
 
 /** The width of the element `ref` is put on, as it resizes. */

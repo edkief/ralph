@@ -1348,6 +1348,10 @@ article.markdown h2 {
   z-index: 1;
 }
 
+.cards.metrics-cards {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .metrics-task {
   display: inline-flex;
   align-items: center;
@@ -1403,8 +1407,14 @@ article.markdown h2 {
 /* ── Small screens ──────────────────────────────────────────────────── */
 
 @media (max-width: 1000px) {
-  .cards {
+  .cards,
+  .cards.metrics-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* An odd card out takes the whole row rather than leaving half of it empty. */
+  .metrics-cards > .card:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }
 
