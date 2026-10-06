@@ -173,7 +173,7 @@ interface Day extends MetricsUsage {
 }
 
 /** Turns grouped by the day they started on, in this browser's time zone, with every day between. */
-function useDays(turns: MetricsTurn[], withCost: boolean): Day[] {
+function useDays(turns: MetricsTurn[], withCost: boolean, withEnergy: boolean): Day[] {
   return useMemo(() => {
     const days = new Map<string, Day>();
     for (const turn of turns) {
@@ -182,7 +182,7 @@ function useDays(turns: MetricsTurn[], withCost: boolean): Day[] {
       if (Number.isNaN(started.getTime())) continue;
       const date = new Date(started.getFullYear(), started.getMonth(), started.getDate());
       const key = dayKey(date);
-      const day = days.get(key) ?? { ...zero(withCost), key, date, iterations: 0, planningTurns: 0 };
+      const day = days.get(key) ?? { ...zero(withCost, withEnergy), key, date, iterations: 0, planningTurns: 0 };
       add(day, turn);
       if (turn.kind === 'iteration') day.iterations += 1;
       else day.planningTurns += 1;
@@ -193,10 +193,10 @@ function useDays(turns: MetricsTurn[], withCost: boolean): Day[] {
     // Every day from the first to the last, so quiet days show as gaps.
     const all: Day[] = [];
     for (let date = known[0]!.date; date <= known.at(-1)!.date; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
-      all.push(days.get(dayKey(date)) ?? { ...zero(withCost), key: dayKey(date), date, iterations: 0, planningTurns: 0 });
+      all.push(days.get(dayKey(date)) ?? { ...zero(withCost, withEnergy), key: dayKey(date), date, iterations: 0, planningTurns: 0 });
     }
     return all;
-  }, [turns, withCost]);
+  }, [turns, withCost, withEnergy]);
 }
 
 const MEASURES: Array<{ id: Measure; label: string }> = [
@@ -207,7 +207,8 @@ const MEASURES: Array<{ id: Measure; label: string }> = [
 
 function DailyChart({ data }: { data: MetricsView }) {
   const withCost = data.cost.estimator !== null;
-  const days = useDays(data.turns, withCost).slice(-CHART_DAYS);
+  const withEnergy = data.energy.basis !== null;
+  const days = useDays(data.turns, withCost, withEnergy).slice(-CHART_DAYS);
   const [measure, setMeasure] = useState<Measure>('tokens');
   const [hovered, setHovered] = useState<number | null>(null);
   const shown = measure === 'estimatedCost' && !withCost ? 'tokens' : measure;
@@ -324,7 +325,8 @@ function DailyChart({ data }: { data: MetricsView }) {
 
 function Days({ data }: { data: MetricsView }) {
   const withCost = data.cost.estimator !== null;
-  const days = useDays(data.turns, withCost).filter((day) => day.iterations + day.planningTurns > 0);
+  const withEnergy = data.energy.basis !== null;
+  const days = useDays(data.turns, withCost, withEnergy).filter((day) => day.iterations + day.planningTurns > 0);
   return (
     <>
       <DailyChart data={data} />
@@ -645,8 +647,8 @@ function useWidth(initial: number): [RefObject<HTMLDivElement | null>, number] {
   return [ref, width];
 }
 
-function zero(withCost: boolean): MetricsUsage {
-  return { steps: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, inferenceMs: 0, reportedCost: 0, estimatedCost: withCost ? 0 : null };
+function zero(withCost: boolean, withEnergy: boolean): MetricsUsage {
+  return { steps: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, inferenceMs: 0, reportedCost: 0, estimatedCost: withCost ? 0 : null, energyKwh: withEnergy ? 0 : null };
 }
 
 function add(into: MetricsUsage, from: MetricsUsage): void {
@@ -660,6 +662,7 @@ function add(into: MetricsUsage, from: MetricsUsage): void {
   into.inferenceMs += from.inferenceMs;
   into.reportedCost += from.reportedCost;
   if (into.estimatedCost !== null) into.estimatedCost += from.estimatedCost ?? 0;
+  if (into.energyKwh !== null) into.energyKwh += from.energyKwh ?? 0;
 }
 
 function dayKey(date: Date): string {

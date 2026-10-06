@@ -179,7 +179,7 @@ describe('web UI server', () => {
     await start(project());
     const { status, body } = await get<MetricsView>('/api/metrics');
     expect(status).toBe(200);
-    expect(body.totals).toMatchObject({ runs: 2, iterations: 1, estimatedCost: null });
+    expect(body.totals).toMatchObject({ runs: 2, iterations: 1, estimatedCost: null, energyKwh: null });
     expect(body.cost.estimator).toBeNull();
     expect(body.tasks.map((task) => task.id)).toEqual(['TASK-1', 'TASK-0', 'TASK-2']);
   });

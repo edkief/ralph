@@ -1,5 +1,5 @@
 import type { MetricsModel, MetricsRun, MetricsTask, MetricsTurn, MetricsUsage, MetricsView } from '../ui/types.js';
-import type { CostEstimator } from './cost.js';
+import type { CostEstimator, EnergyEstimator } from './cost.js';
 import { totalTokens, type ModelUsage, type TurnUsage } from './usage.js';
 
 /** A turn as read from a run's records, its usage worked out. */
@@ -30,7 +30,13 @@ export interface TaskInput {
   splitFrom?: string;
 }
 
-export function emptyMetrics(estimator: CostEstimator | undefined): MetricsUsage {
+/** What prices the work and what measures its energy; either may be unset. */
+export interface Estimators {
+  cost: CostEstimator | undefined;
+  energy: EnergyEstimator | undefined;
+}
+
+export function emptyMetrics(estimators: Estimators): MetricsUsage {
   return {
     steps: 0,
     input: 0,
@@ -41,7 +47,8 @@ export function emptyMetrics(estimator: CostEstimator | undefined): MetricsUsage
     tokens: 0,
     inferenceMs: 0,
     reportedCost: 0,
-    estimatedCost: estimator ? 0 : null,
+    estimatedCost: estimators.cost ? 0 : null,
+    energyKwh: estimators.energy ? 0 : null,
   };
 }
 
@@ -56,10 +63,11 @@ function addMetrics<T extends MetricsUsage>(into: T, from: MetricsUsage): T {
   into.inferenceMs += from.inferenceMs;
   into.reportedCost += from.reportedCost;
   if (into.estimatedCost !== null && from.estimatedCost !== null) into.estimatedCost += from.estimatedCost;
+  if (into.energyKwh !== null && from.energyKwh !== null) into.energyKwh += from.energyKwh;
   return into;
 }
 
-function modelMetrics(model: string, usage: ModelUsage, estimator: CostEstimator | undefined): MetricsUsage {
+function modelMetrics(model: string, usage: ModelUsage, estimators: Estimators): MetricsUsage {
   return {
     steps: usage.steps,
     input: usage.input,
@@ -70,7 +78,8 @@ function modelMetrics(model: string, usage: ModelUsage, estimator: CostEstimator
     tokens: totalTokens(usage),
     inferenceMs: usage.inferenceMs,
     reportedCost: usage.cost,
-    estimatedCost: estimator ? (estimator.estimate(model, usage) ?? 0) : null,
+    estimatedCost: estimators.cost ? (estimators.cost.estimate(model, usage) ?? 0) : null,
+    energyKwh: estimators.energy ? estimators.energy.kwh(model, usage) : null,
   };
 }
 
@@ -87,15 +96,17 @@ export function aggregateMetrics(args: {
   /** Applied splits: the task split, and the tasks it was split into. */
   splits: Array<{ taskId: string; children: string[] }>;
   estimator: CostEstimator | undefined;
+  /** Measures the energy drawn; unset when no draw is configured. */
+  energy?: EnergyEstimator | undefined;
   currency: string;
 }): MetricsView {
-  const { estimator } = args;
-  const totals = { ...emptyMetrics(estimator), runs: args.runs.length, iterations: 0, planningTurns: 0, wallMs: 0 };
+  const estimators: Estimators = { cost: args.estimator, energy: args.energy };
+  const totals = { ...emptyMetrics(estimators), runs: args.runs.length, iterations: 0, planningTurns: 0, wallMs: 0 };
   const models = new Map<string, MetricsModel>();
   const runs = new Map<string, MetricsRun>(
     args.runs.map((run) => [
       run.runId,
-      { ...emptyMetrics(estimator), runId: run.runId, status: run.status, startedAt: run.startedAt, iterations: 0, planningTurns: 0, wallMs: 0 },
+      { ...emptyMetrics(estimators), runId: run.runId, status: run.status, startedAt: run.startedAt, iterations: 0, planningTurns: 0, wallMs: 0 },
     ]),
   );
   const ownByTask = new Map<string, MetricsUsage & { iterations: number; planningTurns: number }>();
@@ -104,7 +115,7 @@ export function aggregateMetrics(args: {
   const turns: MetricsTurn[] = [];
   for (const input of args.turns) {
     const turn: MetricsTurn = {
-      ...emptyMetrics(estimator),
+      ...emptyMetrics(estimators),
       runId: input.runId,
       kind: input.kind,
       iteration: input.iteration,
@@ -116,9 +127,9 @@ export function aggregateMetrics(args: {
       source: input.source,
     };
     for (const [model, usage] of Object.entries(input.usage)) {
-      const metrics = modelMetrics(model, usage, estimator);
+      const metrics = modelMetrics(model, usage, estimators);
       addMetrics(turn, metrics);
-      const entry = models.get(model) ?? { ...emptyMetrics(estimator), model, turns: 0 };
+      const entry = models.get(model) ?? { ...emptyMetrics(estimators), model, turns: 0 };
       addMetrics(entry, metrics).turns += 1;
       models.set(model, entry);
     }
@@ -139,7 +150,7 @@ export function aggregateMetrics(args: {
       run.wallMs += input.wallMs ?? 0;
     }
     if (input.taskId) {
-      const own = ownByTask.get(input.taskId) ?? { ...emptyMetrics(estimator), iterations: 0, planningTurns: 0 };
+      const own = ownByTask.get(input.taskId) ?? { ...emptyMetrics(estimators), iterations: 0, planningTurns: 0 };
       addMetrics(own, turn);
       own.iterations += iterations;
       own.planningTurns += 1 - iterations;
@@ -152,9 +163,10 @@ export function aggregateMetrics(args: {
     totals,
     models: [...models.values()].sort((a, b) => b.tokens - a.tokens),
     runs: [...runs.values()].sort((a, b) => time(b.startedAt) - time(a.startedAt) || (a.runId < b.runId ? 1 : -1)),
-    tasks: taskTree(args.tasks, args.splits, ownByTask, estimator),
+    tasks: taskTree(args.tasks, args.splits, ownByTask, estimators),
     turns,
-    cost: { estimator: estimator?.id ?? null, currency: args.currency, basis: estimator?.basis ?? null },
+    cost: { estimator: args.estimator?.id ?? null, currency: args.currency, basis: args.estimator?.basis ?? null },
+    energy: { basis: args.energy?.basis ?? null },
     coverage,
   };
 }
@@ -169,7 +181,7 @@ function taskTree(
   backlog: TaskInput[],
   splits: Array<{ taskId: string; children: string[] }>,
   own: Map<string, MetricsUsage & { iterations: number; planningTurns: number }>,
-  estimator: CostEstimator | undefined,
+  estimators: Estimators,
 ): MetricsTask[] {
   const parentOf = new Map<string, string>();
   const childrenOf = new Map<string, string[]>();
@@ -200,7 +212,7 @@ function taskTree(
   const totalOf = (id: string, path: Set<string>): MetricsTask['total'] => {
     const known = totals.get(id);
     if (known) return known;
-    const total = { ...emptyMetrics(estimator), iterations: 0, planningTurns: 0 };
+    const total = { ...emptyMetrics(estimators), iterations: 0, planningTurns: 0 };
     const mine = own.get(id);
     if (mine) {
       addMetrics(total, mine);
@@ -222,7 +234,7 @@ function taskTree(
 
   return ids.map((id) => {
     const task = listed.get(id);
-    const mine = own.get(id) ?? { ...emptyMetrics(estimator), iterations: 0, planningTurns: 0 };
+    const mine = own.get(id) ?? { ...emptyMetrics(estimators), iterations: 0, planningTurns: 0 };
     return {
       ...mine,
       id,
