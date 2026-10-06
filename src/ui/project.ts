@@ -12,7 +12,7 @@ import type { EscalationRecord, IterationRecord, RunState, SplitRecord } from '.
 import type { OpencodeEvent } from '../opencode/events.js';
 import { aggregateMetrics, type TaskInput, type TurnInput } from '../metrics/aggregate.js';
 import { UNKNOWN_MODEL, usageOfEventsFile, type TurnUsage } from '../metrics/usage.js';
-import type { CostEstimator } from '../metrics/cost.js';
+import type { CostEstimator, EnergyEstimator } from '../metrics/cost.js';
 import type {
   DaemonView,
   FileContent,
@@ -352,7 +352,7 @@ export class RalphProject {
    * this machine still has one; else only its record's totals count, under an
    * unknown model, with its wall-clock time standing in for inference time.
    */
-  metrics(cost: { estimator: CostEstimator | undefined; currency: string }): MetricsView {
+  metrics(cost: { estimator: CostEstimator | undefined; energy?: EnergyEstimator | undefined; currency: string }): MetricsView {
     const runs = this.runIds().map((runId) => this.run(runId));
     const turns: TurnInput[] = [];
     const splits: Array<{ taskId: string; children: string[] }> = [];
@@ -431,6 +431,7 @@ export class RalphProject {
       tasks,
       splits,
       estimator: cost.estimator,
+      energy: cost.energy,
       currency: cost.currency,
     });
   }

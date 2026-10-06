@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RecordsMode } from '../loop/records.js';
 import type { CostConfig, PushConfig } from '../config/schema.js';
-import { costEstimator } from '../metrics/cost.js';
+import { costEstimator, energyEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
@@ -146,7 +146,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const loopbackOnly = isLoopback(options.host);
   const basePath = (options.basePath ?? '').replace(/\/+$/, '');
   const token = options.token;
-  const cost = { estimator: options.cost ? costEstimator(options.cost) : undefined, currency: options.cost?.currency ?? 'USD' };
+  const cost = {
+    estimator: options.cost ? costEstimator(options.cost) : undefined,
+    energy: options.cost ? energyEstimator(options.cost) : undefined,
+    currency: options.cost?.currency ?? 'USD',
+  };
   const actions: ActionsView =
     loopbackOnly || token || options.openActions
       ? { enabled: true, token: Boolean(token) }

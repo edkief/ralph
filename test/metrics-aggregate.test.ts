@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RalphProject } from '../src/ui/project.js';
-import { costEstimator } from '../src/metrics/cost.js';
+import { costEstimator, energyEstimator } from '../src/metrics/cost.js';
 import { emptyUsage } from '../src/metrics/usage.js';
 
 const LOCAL = '20261001-090000';
@@ -103,6 +103,7 @@ describe('RalphProject.metrics', () => {
       inferenceMs: 3_600_000 + 600_000 + 1_800_000 + 3_600_000 + 60_000 + 900_000,
       reportedCost: 0.5,
       estimatedCost: null,
+      energyKwh: null,
     });
     expect(metrics.models.map((model) => [model.model, model.turns])).toEqual([
       [BIG, 3],
@@ -124,6 +125,7 @@ describe('RalphProject.metrics', () => {
       'assessment:T-3:none',
     ]);
     expect(metrics.cost).toEqual({ estimator: null, currency: 'USD', basis: null });
+    expect(metrics.energy).toEqual({ basis: null });
   });
 
   it('rolls a split task up from the tasks it was split into, listing it before them', () => {
@@ -152,5 +154,21 @@ describe('RalphProject.metrics', () => {
     expect(metrics.models.find((model) => model.model === 'unknown')!.estimatedCost).toBeCloseTo(0.25);
     expect(metrics.cost).toMatchObject({ estimator: 'power', currency: 'EUR' });
     expect(metrics.totals.estimatedCost).toBeCloseTo(big.estimatedCost! + small.estimatedCost! + 0.25);
+  });
+
+  it('measures energy on inference time, with or without a price', () => {
+    const draw = energyEstimator({ estimator: 'power', currency: 'EUR', power: { watts: 1000, models: { [SMALL]: { watts: 100 } } } });
+    const metrics = project().metrics({ estimator: undefined, energy: draw, currency: 'EUR' });
+    expect(metrics.energy.basis).toBe('1000 W (1 model set apart) × inference time');
+    expect(metrics.totals.estimatedCost).toBeNull();
+    const big = metrics.models.find((model) => model.model === BIG)!;
+    // 1 h + 10 min + 30 min at 1 kW.
+    expect(big.energyKwh).toBeCloseTo(1 + 1 / 6 + 0.5);
+    const small = metrics.models.find((model) => model.model === SMALL)!;
+    expect(small.energyKwh).toBeCloseTo((1 + 1 / 60) * 0.1);
+    expect(metrics.totals.energyKwh).toBeCloseTo(big.energyKwh! + small.energyKwh! + 0.25);
+    const split = metrics.tasks.find((task) => task.id === 'T-2')!;
+    expect(split.total.energyKwh).toBeGreaterThan(split.energyKwh!);
+    expect(metrics.turns.reduce((sum, turn) => sum + turn.energyKwh!, 0)).toBeCloseTo(metrics.totals.energyKwh!);
   });
 });

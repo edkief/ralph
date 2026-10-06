@@ -191,8 +191,9 @@ const UiSchema = z.object({
 /**
  * Estimating what the project's model work cost, for the web UI's Metrics
  * tab. `power` charges electricity on inference time, for self-hosted models:
- * hours generating × watts / 1000 × price per kWh. Nothing is estimated until
- * `power.watts` and `power.pricePerKwh` are set.
+ * hours generating × watts / 1000 × price per kWh. The energy (the same
+ * without the price) is shown once `power.watts` is set; the cost once
+ * `power.pricePerKwh` is set too.
  */
 const CostSchema = z.object({
   estimator: z.enum(['power']).default('power'),

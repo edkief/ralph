@@ -360,6 +360,8 @@ export interface MetricsUsage {
   reportedCost: number;
   /** The configured estimate, in `MetricsView.cost.currency`; null when none is configured. */
   estimatedCost: number | null;
+  /** Energy drawn, in kWh, from the configured power draw; null when none is configured. */
+  energyKwh: number | null;
 }
 
 /** One turn of a run: an iteration, a planning turn (an assessment or a split proposal), or an escalation. */
@@ -429,6 +431,10 @@ export interface MetricsView {
     estimator: string | null;
     currency: string;
     /** How estimates are made, in a line. */
+    basis: string | null;
+  };
+  energy: {
+    /** How energy is estimated, in a line; null until a power draw is configured. */
     basis: string | null;
   };
   /** How many turns had their usage from each source. */

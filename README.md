@@ -127,8 +127,8 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Tasks**: the whole backlog in order, with what passes, each task's spec and which task a
   split one came from
 - **Metrics**: what the project's model work came to over every run: iterations, planning
-  turns and escalations, inference time, tokens (input, output, reasoning, cached), the models used, and an
-  [estimated cost](#estimating-cost). Then the same by day (in the browser's time zone), by
+  turns and escalations, inference time, tokens (input, output, reasoning, cached), the models used, and the
+  [energy drawn and estimated cost](#estimating-cost). Then the same by day (in the browser's time zone), by
   task, and by run. A task that was split counts the tasks it was split into; open a task for
   every turn spent on it, each with its transcript
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
@@ -558,9 +558,11 @@ within it (a test suite running does not keep the GPU busy).
 }
 ```
 
-Cost = hours generating × watts / 1000 × price per kWh, per model. Nothing is estimated until
-`watts` and `pricePerKwh` are set (or `RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`,
-`RALPH_COST_CURRENCY`). Estimates are made as the tab reads the runs, so a new price applies to
+Energy = hours generating × watts / 1000, in kWh, per model; cost = energy × price per kWh.
+The tab shows both side by side: the energy once `watts` is set, the cost once `pricePerKwh` is
+set too (or `RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`, `RALPH_COST_CURRENCY`). Energy does
+not move with the price, so it compares across tariffs and machines; leave the price out to
+track energy alone. Estimates are made as the tab reads the runs, so a new price applies to
 past runs too, once the UI is restarted. Where opencode reports a cost of its own (a provider
 it knows the prices of), the tab shows that beside the estimate.
 
