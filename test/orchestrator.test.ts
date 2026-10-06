@@ -1251,6 +1251,7 @@ describe('runLoop', () => {
       pid: process.pid,
       iteration: 1,
       taskId: 'TASK-1',
+      iterationMs: config(root, { maxIterations: 1 }).timeouts.iterationMs,
       lastStatus: 'no-progress',
       tasksPassed: 0,
       tasksTotal: 1,

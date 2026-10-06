@@ -98,6 +98,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     iteration: 0,
     taskId: null,
     iterationStartedAt: null,
+    iterationMs: config.timeouts.iterationMs,
     lastStatus: null,
     tasksPassed: 0,
     tasksTotal: 0,

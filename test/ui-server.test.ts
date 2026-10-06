@@ -67,6 +67,7 @@ function project(): string {
       iteration: 2,
       taskId: 'TASK-2',
       iterationStartedAt: '2026-09-30T12:10:00.000Z',
+      iterationMs: 1_800_000,
       lastStatus: 'progressed',
       tasksPassed: 1,
       tasksTotal: 2,
@@ -111,7 +112,10 @@ function patchState(root: string, patch: Record<string, unknown>): void {
   writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), ...patch }));
 }
 
-async function start(root: string, extra: { webRoot?: string; host?: string; basePath?: string; token?: string; openActions?: boolean } = {}): Promise<UiServer> {
+async function start(
+  root: string,
+  extra: { webRoot?: string; host?: string; basePath?: string; token?: string; openActions?: boolean; git?: { remote: string; pushTimeoutMs: number } } = {},
+): Promise<UiServer> {
   server = await startUiServer({
     projectRoot: root,
     ralphDir: '.ralph',
@@ -120,6 +124,7 @@ async function start(root: string, extra: { webRoot?: string; host?: string; bas
     ...(extra.basePath !== undefined ? { basePath: extra.basePath } : {}),
     ...(extra.token ? { token: extra.token } : {}),
     ...(extra.openActions ? { openActions: true } : {}),
+    ...(extra.git ? { git: extra.git } : {}),
     logger,
     pollMs: 50,
     webRoot: extra.webRoot ?? resolve(root, 'no-web'),
@@ -156,7 +161,7 @@ describe('web UI server', () => {
 
     expect(body.tasks).toMatchObject({ total: 2, passed: 1, next: 'TASK-2' });
     expect(body.tasks.items[1]).toEqual({ id: 'TASK-2', title: 'Feature', passes: false, splitFrom: 'TASK-0' });
-    expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: true, iteration: 2, taskId: 'TASK-2' });
+    expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: true, iteration: 2, taskId: 'TASK-2', iterationMs: 1_800_000 });
   });
 
   it('takes a run whose process is gone as ended', async () => {
@@ -165,7 +170,8 @@ describe('web UI server', () => {
     writeFileSync(state, JSON.stringify({ runId: LIVE_RUN, status: 'running', pid: 2 ** 22 + 1, hostname: hostname() }));
     await start(root);
     const { body } = await get<StatusView>('/api/status');
-    expect(body.run).toMatchObject({ status: 'running', live: false });
+    // Recorded before the iteration's time limit was kept.
+    expect(body.run).toMatchObject({ status: 'running', live: false, iterationMs: null });
   });
 
   it('lists runs newest first, older ones from their summary', async () => {
@@ -805,7 +811,7 @@ describe('web UI actions', () => {
 
     expect(body.run).toMatchObject({ status: 'waiting', live: true });
     expect(body.pending).toMatchObject({ kind: 'decide', taskId: 'TASK-2', question: 'REST or GraphQL?', waiting: true, answered: false, actions: ['answer', 'stop'] });
-    expect(body.actions).toEqual({ enabled: true, token: false });
+    expect(body.actions).toEqual({ enabled: true, token: false, park: false });
   });
 
   it('shows what the escalation agent found when it passed the request on', async () => {
@@ -889,6 +895,45 @@ describe('web UI actions', () => {
 
     writeFileSync(resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json'), JSON.stringify({ runId: LIVE_RUN, status: 'complete', pid: process.pid, hostname: hostname() }));
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(409);
+    // Without a remote to push to, there is nothing to park with nothing running.
+    expect((await post('/api/actions/stop', { mode: 'park' })).status).toBe(409);
+  });
+
+  it('with nothing running, parks by committing the records and pushing', async () => {
+    const root = project();
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    writeFileSync(resolve(root, '.gitignore'), '.ralph/history/\n');
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'init');
+    const remote = mkdtempSync(resolve(tmpdir(), 'ralph-remote-'));
+    git(remote, 'init', '-q', '--bare');
+    git(root, 'remote', 'add', 'origin', remote);
+    patchState(root, { status: 'complete' });
+    writeFileSync(resolve(root, '.ralph', 'decisions.jsonl'), '{}\n');
+    await start(root, { git: { remote: 'origin', pushTimeoutMs: 30_000 } });
+
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: false, park: true });
+    expect((await post('/api/actions/stop', { mode: 'after-iteration' })).status).toBe(409);
+    const parked = await post('/api/actions/stop', { mode: 'park' });
+    expect(parked.status).toBe(200);
+    expect(parked.body.message).toContain('Pushed to origin');
+    expect(readStopRequest(resolve(root, '.ralph'))).toBeUndefined();
+    expect(git(root, 'log', '-1', '--format=%s')).toBe('chore(ralph): record, parked');
+    expect(git(remote, 'log', '-1', '--format=%s', 'HEAD')).toBe('chore(ralph): record, parked');
+  });
+
+  it('says why a park with nothing running did not push', async () => {
+    const root = project();
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    patchState(root, { status: 'complete' });
+    await start(root, { git: { remote: 'nowhere', pushTimeoutMs: 30_000 } });
+
+    const parked = await post('/api/actions/stop', { mode: 'park' });
+    expect(parked.status).toBe(502);
+    expect(parked.body.error).toContain('Could not push to nowhere');
   });
 
   it('reports the daemon without its heartbeat, and one that is gone as stopped', async () => {
@@ -992,7 +1037,7 @@ describe('web UI actions', () => {
     ask(root);
     await start(root, { host: '0.0.0.0', openActions: true });
 
-    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: false });
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: false, park: false });
     expect((await post('/api/actions/respond', reply, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
     expect((await post('/api/actions/respond', JSON.stringify(reply), { 'Content-Type': 'text/plain' })).status).toBe(415);
     expect((await post('/api/actions/respond', reply)).status).toBe(200);
@@ -1003,7 +1048,7 @@ describe('web UI actions', () => {
     ask(root);
     await start(root, { host: '0.0.0.0', token: 's3cret', openActions: true });
 
-    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true });
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true, park: false });
     expect((await post('/api/actions/respond', reply)).status).toBe(401);
     expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer s3cret' })).status).toBe(200);
   });
@@ -1013,7 +1058,7 @@ describe('web UI actions', () => {
     ask(root);
     await start(root, { host: '0.0.0.0', token: 's3cret' });
 
-    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true });
+    expect((await get<StatusView>('/api/status')).body.actions).toEqual({ enabled: true, token: true, park: false });
     const missing = await post('/api/actions/respond', reply);
     expect(missing.status).toBe(401);
     expect(missing.headers.get('www-authenticate')).toBe('Bearer');

@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   useJson,
+  useNow,
   useStickToBottom,
   type EscalationView,
   type IterationView,
@@ -13,7 +14,7 @@ import {
   type StatusView,
   type TranscriptEntry,
 } from '../api';
-import { formatClock, formatCount, formatRunId, statusLabel } from '../format';
+import { formatClock, formatCount, formatDuration, formatMinutes, formatRunId, statusLabel } from '../format';
 import { href } from '../route';
 
 /** How a split turn is named in the URL, next to iteration numbers. */
@@ -150,6 +151,17 @@ export function Transcript({
         ) : null}
       </div>
 
+      {session ? (
+        <SessionHead
+          status={status}
+          kind={escalation ? 'escalation' : split ? 'split' : 'iteration'}
+          info={info}
+          taskId={info?.taskId ?? split ?? (iteration && runId === status.run?.runId && status.run.iteration === iteration ? status.run.taskId : null)}
+          startedAt={info?.startedAt ?? (inProgress && !split && !escalation ? (status.run?.iterationStartedAt ?? null) : null)}
+          inProgress={inProgress}
+          limitMs={detail.data?.run.iterationMs ?? null}
+        />
+      ) : null}
       <div className="transcript-scroll" ref={ref} onScroll={onScroll}>
         {fetched.error && !isLive ? <div className="banner bad">{fetched.error}</div> : null}
         {!session ? (
@@ -180,6 +192,107 @@ export function Transcript({
       ) : null}
     </div>
   );
+}
+
+/**
+ * What the session works on, and how long it has taken: the task's id and
+ * title, and for an iteration a ring of its time against the limit after
+ * which the agent is asked to wrap up.
+ */
+function SessionHead({
+  status,
+  kind,
+  info,
+  taskId,
+  startedAt,
+  inProgress,
+  limitMs,
+}: {
+  status: StatusView;
+  kind: 'iteration' | 'split' | 'escalation';
+  info: IterationView | SplitView | EscalationView | undefined;
+  taskId: string | null;
+  startedAt: string | null;
+  inProgress: boolean;
+  limitMs: number | null;
+}) {
+  const now = useNow();
+  const title = taskId ? taskTitle(status, taskId) : null;
+  const elapsed = inProgress && startedAt ? now - Date.parse(startedAt) : (info?.durationMs ?? null);
+  const what =
+    kind === 'escalation' && info && 'n' in info
+      ? `Escalation ${info.n} · ${info.kind}`
+      : kind === 'split'
+        ? info && 'trigger' in info && info.trigger === 'assessment'
+          ? 'Assessing'
+          : 'Splitting'
+        : null;
+  if (!taskId && !what && elapsed === null) return null;
+  const ring = kind === 'iteration' && limitMs && elapsed !== null;
+  const over = ring && elapsed >= limitMs;
+
+  return (
+    <div className="session-head">
+      <div className="session-task" title={[taskId, title].filter(Boolean).join(' · ')}>
+        {what ? <span className="session-kind">{what}</span> : null}
+        {taskId ? <span className="task-chip">{taskId}</span> : null}
+        {title ? <span className="session-title">{title}</span> : null}
+      </div>
+      {elapsed !== null ? (
+        <div
+          className={`session-time${over ? ' over' : ''}`}
+          title={
+            ring
+              ? `${formatDuration(elapsed)} of ${formatDuration(limitMs)}${over ? (inProgress ? ': past the limit, the agent is wrapping up' : ': it ran past the limit') : '; then the agent is asked to wrap up'}`
+              : `${inProgress ? 'Running for' : 'Took'} ${formatDuration(elapsed)}`
+          }
+        >
+          {ring ? <TimeRing fraction={elapsed / limitMs} over={Boolean(over)} /> : null}
+          <span className="session-figures">
+            {formatMinutes(elapsed)}
+            {ring ? <span className="muted"> / {formatMinutes(limitMs)}</span> : null}
+          </span>
+          {over && inProgress ? <span className="session-note">wrapping up</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A small ring filled to `fraction` of a full turn. */
+function TimeRing({ fraction, over }: { fraction: number; over: boolean }) {
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const filled = Math.min(1, Math.max(0, fraction));
+  return (
+    <svg
+      className="time-ring"
+      width={18}
+      height={18}
+      viewBox="0 0 18 18"
+      role="progressbar"
+      aria-label="Time against the iteration's limit"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(filled * 100)}
+    >
+      <circle className="time-ring-track" cx={9} cy={9} r={radius} />
+      <circle
+        className={`time-ring-fill${over ? ' over' : ''}`}
+        cx={9}
+        cy={9}
+        r={radius}
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference * (1 - filled)}
+        transform="rotate(-90 9 9)"
+      />
+    </svg>
+  );
+}
+
+/** A task's title, from the backlog or, for a task that was split, its split record. */
+function taskTitle(status: StatusView, taskId: string): string | null {
+  return status.tasks.items.find((task) => task.id === taskId)?.title ?? status.tasks.splits.find((task) => task.id === taskId)?.title ?? null;
 }
 
 /**

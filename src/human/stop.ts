@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { commitRecords } from '../loop/records.js';
+import { commitRecords, type RecordsMode } from '../loop/records.js';
 import { pushBranch } from '../loop/push.js';
 import { RalphProject } from '../ui/project.js';
 import { requestStop, STOP_MESSAGES, type StopMode } from './request.js';
@@ -33,21 +33,48 @@ export async function runStop(args: {
     return ExitCode.ConfigError;
   }
 
-  if (config.git.records !== 'never') {
+  const parked = await parkIdle({
+    projectRoot: config.projectRoot,
+    ralphDir: config.ralphDir,
+    records: config.git.records,
+    remote: config.git.remote,
+    pushTimeoutMs: config.git.pushTimeoutMs,
+    ...(run ? { runId: run.runId } : {}),
+  });
+  for (const line of parked.lines) output.write(`${line}\n`);
+  return parked.ok ? 0 : ExitCode.ConfigError;
+}
+
+/**
+ * Park a project with nothing running: commit Ralph's records (unless
+ * `git.records` is `never`) and push the branch. Shared by `ralph stop --park`
+ * and the web UI's Park button.
+ */
+export async function parkIdle(args: {
+  projectRoot: string;
+  ralphDir: string;
+  records: RecordsMode;
+  remote: string;
+  pushTimeoutMs: number;
+  /** The latest run, whose journal is brought up to date. */
+  runId?: string;
+}): Promise<{ ok: boolean; lines: string[] }> {
+  const lines: string[] = [];
+  if (args.records !== 'never') {
     const records = await commitRecords({
-      projectRoot: config.projectRoot,
-      ralphDir: config.ralphDir,
+      projectRoot: args.projectRoot,
+      ralphDir: args.ralphDir,
       subject: 'chore(ralph): record, parked',
-      ...(run ? { runId: run.runId } : {}),
+      ...(args.runId ? { runId: args.runId } : {}),
     });
-    if (records.error) output.write(`Could not commit Ralph's records: ${records.error}\n`);
-    else if (records.committed) output.write(`Committed Ralph's records (${records.files.length} file${records.files.length === 1 ? '' : 's'}).\n`);
+    if (records.error) lines.push(`Could not commit Ralph's records: ${records.error}`);
+    else if (records.committed) lines.push(`Committed Ralph's records (${records.files.length} file${records.files.length === 1 ? '' : 's'}).`);
   }
-  const pushed = await pushBranch(config.projectRoot, config.git.remote, config.git.pushTimeoutMs);
+  const pushed = await pushBranch(args.projectRoot, args.remote, args.pushTimeoutMs);
   if (!pushed.ok) {
-    output.write(`Could not push to ${config.git.remote}: ${pushed.error}\n`);
-    return ExitCode.ConfigError;
+    lines.push(`Could not push to ${args.remote}: ${pushed.error}`);
+    return { ok: false, lines };
   }
-  output.write(`Pushed to ${config.git.remote}. Nothing was running; uncommitted work outside Ralph's records stays as it is.\n`);
-  return 0;
+  lines.push(`Pushed to ${args.remote}. Nothing was running; uncommitted work outside Ralph's records stays as it is.`);
+  return { ok: true, lines };
 }

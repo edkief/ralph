@@ -7,6 +7,14 @@ export function formatDuration(ms: number | null | undefined): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`;
 }
 
+/** A duration to the minute, as a glance at the time left wants it: 45s, 12m, 1h05m. */
+export function formatMinutes(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`;
+}
+
 export function formatClock(time: string | number | null | undefined): string {
   if (time === null || time === undefined) return '';
   const date = new Date(time);
