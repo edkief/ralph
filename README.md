@@ -136,7 +136,9 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 - **Transcript**: the session in progress as it happens (what the agent says, each tool call
   with its input and output, model calls, retries), or any earlier one of any run. A session
   is an iteration, the turn in which the agent assessed a task or proposed splitting it, or an
-  escalation turn. A subagent's work is tagged as such; a turn retried in a fresh session, after
+  escalation turn. A header names the session's task, by id and title, and for an iteration
+  rings its time against `timeouts.iterationMs`: the ring turns amber once the agent is past it
+  and wrapping up. A subagent's work is tagged as such; a turn retried in a fresh session, after
   a provider failure or a context overflow, is marked where it starts over.
   Long tool input, output and text are cut; the event file in `.ralph/history/` keeps them
   whole
@@ -831,8 +833,8 @@ Git LFS is the way to keep more.
 3. Ralph's records are committed and the branch is pushed, whatever `git.push` says. A failed
    push is logged; the run still ends `stopped`.
 
-With nothing running, `ralph stop --park` commits Ralph's records and pushes; work left
-uncommitted outside them stays as it is.
+With nothing running, `ralph stop --park`, or **Park** on the web UI's Overview, commits
+Ralph's records and pushes; work left uncommitted outside them stays as it is.
 
 On the other machine: `git pull`, then `ralph`. The next attempt at the task resumes from its
 handoff, with the decisions in its prompt.
