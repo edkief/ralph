@@ -656,7 +656,12 @@ describe('runLoop', () => {
 
       expect(result.status).toBe('complete');
       expect(result.iterations).toBe(3);
-      expect(String(server?.prompts[2]?.['text'])).toContain('Work on **TASK-1.1**');
+      const next = String(server?.prompts[2]?.['text']);
+      expect(next).toContain('Work on **TASK-1.1**');
+      // The new task is told which task it came from, and where that one's spec went.
+      expect(next).toContain('## Split from TASK-1');
+      expect(next).toContain('`.ralph/split/TASK-1/TASK-1.json`');
+      expect(next).toContain('▶ TASK-1.1');
       const tasks = JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8'));
       expect(tasks.map((task: { id: string }) => task.id)).toEqual(['TASK-1.1', 'TASK-1.2']);
       expect(tasks[0]).toMatchObject({ splitFrom: 'TASK-1', splitDepth: 1, specFilePath: '.ralph/tasks/TASK-1.1.json' });

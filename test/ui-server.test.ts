@@ -184,6 +184,43 @@ describe('web UI server', () => {
     expect(body.tasks.map((task) => task.id)).toEqual(['TASK-1', 'TASK-0', 'TASK-2']);
   });
 
+  it('keeps split tasks in view from their records, splits applied by hand included', async () => {
+    const root = project();
+    const ralph = resolve(root, '.ralph');
+    const record = (task: string, children: string[], extra: Record<string, unknown> = {}) => {
+      mkdirSync(resolve(ralph, 'split', task), { recursive: true });
+      writeFileSync(
+        resolve(ralph, 'split', task, 'proposal.json'),
+        JSON.stringify({ task, splittable: true, reason: 'smaller', tasks: children.map((id) => ({ id, title: id })), appliedAt: '2026-09-29T10:00:00.000Z', ...extra }),
+      );
+    };
+    record('TASK-0', ['TASK-0.1', 'TASK-2'], { parent: { title: 'Big feature', specFilePath: '.ralph/split/TASK-0/TASK-0.json' } });
+    // TASK-2 split again by hand, by a Ralph that did not keep the title: no run recorded it, and it is gone from tasks.json.
+    record('TASK-2', ['TASK-2.1', 'TASK-2.2']);
+    writeFileSync(resolve(ralph, 'split', 'TASK-2', 'TASK-2.json'), JSON.stringify({ id: 'TASK-2', title: 'Feature' }));
+    writeFileSync(
+      resolve(ralph, 'tasks.json'),
+      JSON.stringify([
+        { id: 'TASK-1', title: 'Scaffold', passes: true },
+        { id: 'TASK-2.1', title: 'Half', passes: false, splitFrom: 'TASK-2', splitDepth: 2 },
+        { id: 'TASK-2.2', title: 'Other half', passes: false, splitFrom: 'TASK-2', splitDepth: 2 },
+      ]),
+    );
+    await start(root);
+
+    const { body } = await get<StatusView>('/api/status');
+    expect(body.tasks).toMatchObject({ total: 3, passed: 1 });
+    expect([...body.tasks.splits].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: 'TASK-0', title: 'Big feature', specFilePath: '.ralph/split/TASK-0/TASK-0.json', children: ['TASK-0.1', 'TASK-2'] },
+      { id: 'TASK-2', title: 'Feature', specFilePath: '.ralph/split/TASK-2/TASK-2.json', children: ['TASK-2.1', 'TASK-2.2'] },
+    ]);
+
+    const metrics = (await get<MetricsView>('/api/metrics')).body;
+    const task = (id: string) => metrics.tasks.find((entry) => entry.id === id);
+    expect(task('TASK-0')).toMatchObject({ title: 'Big feature', parent: null, children: ['TASK-0.1', 'TASK-2'] });
+    expect(task('TASK-2')).toMatchObject({ title: 'Feature', parent: 'TASK-0', children: ['TASK-2.1', 'TASK-2.2'] });
+  });
+
   it('orders runs by when they started, not by their local-time ids', async () => {
     // Run ahead of UTC, then interrupted: its id sorts after the live run's, run in UTC.
     const root = project();

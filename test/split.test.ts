@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applySplit, describeIds, readProposal, splitDir, SplitError } from '../src/loop/split.js';
 import { TaskStore } from '../src/tasks/store.js';
+import { readSplitRecords, splitLineage } from '../src/tasks/splits.js';
 
 const spec = (id: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ id, title: `Title of ${id}`, acceptanceCriteria: [`${id} works`], ...extra }, null, 2);
@@ -168,12 +169,37 @@ describe('applySplit', () => {
     expect(JSON.parse(readFileSync(resolve(dir, 'TASK-2.json'), 'utf8'))).toMatchObject({ id: 'TASK-2' });
     expect(existsSync(resolve(root, '.ralph', 'handoff', 'TASK-2.md'))).toBe(false);
     expect(readFileSync(resolve(dir, 'handoff.md'), 'utf8')).toContain('Halfway.');
-    expect(JSON.parse(readFileSync(resolve(dir, 'proposal.json'), 'utf8'))).toHaveProperty('appliedAt');
+    const record = JSON.parse(readFileSync(resolve(dir, 'proposal.json'), 'utf8'));
+    expect(record).toHaveProperty('appliedAt');
+    expect(record.parent).toEqual({
+      title: 'Title of TASK-2',
+      specFilePath: '.ralph/split/TASK-2/TASK-2.json',
+      handoffPath: '.ralph/split/TASK-2/handoff.md',
+    });
 
     const log = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: root, encoding: 'utf8' });
     expect(log).toContain('chore(plan): split TASK-2 into TASK-2.1 and TASK-2.2');
     expect(log).toContain('Parser first, then the printer.');
     expect(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' })).toBe('');
+  });
+
+  it('leaves a record the new tasks can find the split task from', async () => {
+    const root = project();
+    propose(root, good, goodSpecs);
+    await applySplit({ projectRoot: root, ralphDir: '.ralph', taskId: 'TASK-2', commit: false });
+
+    expect(splitLineage(readSplitRecords(root, '.ralph'), tasksOf(root), 'TASK-2.2')).toEqual([
+      {
+        id: 'TASK-2',
+        title: 'Title of TASK-2',
+        specFilePath: '.ralph/split/TASK-2/TASK-2.json',
+        handoffPath: '.ralph/split/TASK-2/handoff.md',
+        children: [
+          { id: 'TASK-2.1', title: 'Parse', passes: false },
+          { id: 'TASK-2.2', title: 'Print', passes: false },
+        ],
+      },
+    ]);
   });
 
   it('keeps a wrapped task list wrapped', async () => {

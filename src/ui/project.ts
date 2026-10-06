@@ -2,6 +2,7 @@ import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, 
 import { hostname } from 'node:os';
 import { basename, extname, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
+import { readSplitRecords } from '../tasks/splits.js';
 import { TASK_ID } from '../init/plan.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
 import { daemonLive, readDaemonState } from '../daemon/control.js';
@@ -164,7 +165,7 @@ export class RalphProject {
 
   tasks(): TasksView {
     const store = TaskStore.forProject(this.projectRoot, this.ralphDir);
-    if (!store.exists()) return { total: 0, passed: 0, next: null, items: [], error: 'tasks.json not found' };
+    if (!store.exists()) return { total: 0, passed: 0, next: null, items: [], splits: [], error: 'tasks.json not found' };
     try {
       const items = store.readTasks().map((task) => ({
         id: task.id,
@@ -179,9 +180,15 @@ export class RalphProject {
         passed: items.filter((task) => task.passes).length,
         next: items.find((task) => !task.passes)?.id ?? null,
         items,
+        splits: readSplitRecords(this.projectRoot, this.ralphDir).map((record) => ({
+          id: record.taskId,
+          title: record.title,
+          ...(record.specFilePath ? { specFilePath: record.specFilePath } : {}),
+          children: record.children.map((child) => child.id),
+        })),
       };
     } catch (cause) {
-      return { total: 0, passed: 0, next: null, items: [], error: (cause as Error).message };
+      return { total: 0, passed: 0, next: null, items: [], splits: [], error: (cause as Error).message };
     }
   }
 
@@ -355,7 +362,11 @@ export class RalphProject {
   metrics(cost: { estimator: CostEstimator | undefined; energy?: EnergyEstimator | undefined; currency: string }): MetricsView {
     const runs = this.runIds().map((runId) => this.run(runId));
     const turns: TurnInput[] = [];
-    const splits: Array<{ taskId: string; children: string[] }> = [];
+    // Every applied split has a record, those applied by hand too; runs add the ones whose record is gone.
+    const splits: Array<{ taskId: string; children: string[]; title?: string | null }> = readSplitRecords(
+      this.projectRoot,
+      this.ralphDir,
+    ).map((record) => ({ taskId: record.taskId, children: record.children.map((child) => child.id), title: record.title }));
 
     for (const run of runs) {
       const dir = this.runDir(run.runId);

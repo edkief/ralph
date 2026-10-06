@@ -93,8 +93,8 @@ export function aggregateMetrics(args: {
   runs: RunInput[];
   turns: TurnInput[];
   tasks: TaskInput[];
-  /** Applied splits: the task split, and the tasks it was split into. */
-  splits: Array<{ taskId: string; children: string[] }>;
+  /** Applied splits: the task split, the tasks it was split into, and its title when its record keeps it. */
+  splits: Array<{ taskId: string; children: string[]; title?: string | null }>;
   estimator: CostEstimator | undefined;
   /** Measures the energy drawn; unset when no draw is configured. */
   energy?: EnergyEstimator | undefined;
@@ -175,11 +175,12 @@ export function aggregateMetrics(args: {
  * Every task with figures or in the backlog, with its own figures and those
  * rolled up from the tasks split from it. A task that was split is gone from
  * tasks.json; it is brought back, from the split records and the `splitFrom`
- * of the tasks that replaced it, just before the first of them.
+ * of the tasks that replaced it, just before the first of them, titled as
+ * its split record keeps it.
  */
 function taskTree(
   backlog: TaskInput[],
-  splits: Array<{ taskId: string; children: string[] }>,
+  splits: Array<{ taskId: string; children: string[]; title?: string | null }>,
   own: Map<string, MetricsUsage & { iterations: number; planningTurns: number }>,
   estimators: Estimators,
 ): MetricsTask[] {
@@ -194,6 +195,8 @@ function taskTree(
   };
   for (const task of backlog) if (task.splitFrom) link(task.splitFrom, task.id);
   for (const split of splits) for (const child of split.children) link(split.taskId, child);
+  const splitTitles = new Map<string, string>();
+  for (const split of splits) if (split.title && !splitTitles.has(split.taskId)) splitTitles.set(split.taskId, split.title);
 
   const listed = new Map(backlog.map((task) => [task.id, task]));
   const ids: string[] = [];
@@ -238,7 +241,7 @@ function taskTree(
     return {
       ...mine,
       id,
-      title: task?.title ?? null,
+      title: task?.title ?? splitTitles.get(id) ?? null,
       passes: task ? task.passes : null,
       parent: parentOf.get(id) ?? null,
       children: childrenOf.get(id) ?? [],
