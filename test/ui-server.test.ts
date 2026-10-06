@@ -67,6 +67,7 @@ function project(): string {
       iteration: 2,
       taskId: 'TASK-2',
       iterationStartedAt: '2026-09-30T12:10:00.000Z',
+      iterationMs: 1_800_000,
       lastStatus: 'progressed',
       tasksPassed: 1,
       tasksTotal: 2,
@@ -160,7 +161,7 @@ describe('web UI server', () => {
 
     expect(body.tasks).toMatchObject({ total: 2, passed: 1, next: 'TASK-2' });
     expect(body.tasks.items[1]).toEqual({ id: 'TASK-2', title: 'Feature', passes: false, splitFrom: 'TASK-0' });
-    expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: true, iteration: 2, taskId: 'TASK-2' });
+    expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: true, iteration: 2, taskId: 'TASK-2', iterationMs: 1_800_000 });
   });
 
   it('takes a run whose process is gone as ended', async () => {
@@ -169,7 +170,8 @@ describe('web UI server', () => {
     writeFileSync(state, JSON.stringify({ runId: LIVE_RUN, status: 'running', pid: 2 ** 22 + 1, hostname: hostname() }));
     await start(root);
     const { body } = await get<StatusView>('/api/status');
-    expect(body.run).toMatchObject({ status: 'running', live: false });
+    // Recorded before the iteration's time limit was kept.
+    expect(body.run).toMatchObject({ status: 'running', live: false, iterationMs: null });
   });
 
   it('lists runs newest first, older ones from their summary', async () => {

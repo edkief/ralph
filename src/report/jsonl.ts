@@ -94,6 +94,8 @@ export interface RunState {
   iteration: number;
   taskId: string | null;
   iterationStartedAt: string | null;
+  /** `timeouts.iterationMs` for this run. Absent from runs recorded before it was kept. */
+  iterationMs?: number;
   /** Outcome of the last finished iteration. */
   lastStatus: IterationStatus | null;
   tasksPassed: number;

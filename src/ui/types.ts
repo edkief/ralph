@@ -49,6 +49,8 @@ export interface RunView {
   iteration: number;
   taskId: string | null;
   iterationStartedAt: string | null;
+  /** Working time an iteration gets before the agent is asked to wrap up; null for older runs. */
+  iterationMs: number | null;
   lastStatus: string | null;
   tasksPassed: number | null;
   tasksTotal: number | null;
