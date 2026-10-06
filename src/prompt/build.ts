@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import type { Task } from '../tasks/store.js';
+import type { SplitAncestor } from '../tasks/splits.js';
 import { formatClock } from '../report/time.js';
 import type { Decision } from '../human/decisions.js';
 
@@ -15,6 +16,8 @@ export interface PromptContext {
   timeBudget?: { ms: number; until: Date };
   /** A handoff left by an earlier attempt at the next task. */
   handoff?: { path: string; text: string };
+  /** The tasks the next task was split from, nearest first. */
+  lineage?: SplitAncestor[];
   /** What a person or the escalation agent answered or noted, in this run and earlier ones, oldest first. */
   decisions?: Decision[];
 }
@@ -75,6 +78,10 @@ export function buildPrompt(context: PromptContext): string {
     );
   }
 
+  if (context.lineage && context.lineage.length > 0 && context.nextTask) {
+    sections.push(splitSection(context.nextTask.id, context.lineage));
+  }
+
   if (context.handoff && context.nextTask) {
     const path = relative(context.projectRoot, context.handoff.path).split(sep).join('/');
     sections.push(
@@ -118,6 +125,44 @@ export function buildPrompt(context: PromptContext): string {
     ),
   );
   return sections.join('\n\n');
+}
+
+/**
+ * Where a task made by a split came from: the scope of the task it replaced,
+ * what the last attempt at that one left, and the tasks that share the rest.
+ */
+function splitSection(taskId: string, lineage: SplitAncestor[]): string {
+  const [parent] = lineage as [SplitAncestor, ...SplitAncestor[]];
+  const lines = [
+    `## Split from ${parent.id}`,
+    ``,
+    `${taskId} is part of ${name(parent)}, which was split into smaller tasks when it was too big for one`,
+    `iteration. Read what it was for context: its full scope, and the work already done on it,`,
+    `which stays done.`,
+  ];
+  lineage.forEach((ancestor, index) => {
+    const mine = index === 0 ? taskId : lineage[index - 1]!.id;
+    lines.push(``, index === 0 ? `${name(ancestor)}:` : `${name(lineage[index - 1]!)} was itself split from ${name(ancestor)}:`, ``);
+    if (ancestor.specFilePath) lines.push(`- Its spec, the whole of what it asked for: \`${ancestor.specFilePath}\``);
+    if (ancestor.handoffPath) lines.push(`- Where its last attempt stopped: \`${ancestor.handoffPath}\``);
+    lines.push(`- Commits that mention ${ancestor.id}: \`git log --grep=${ancestor.id}\``);
+    lines.push(`- What it was split into, in order:`);
+    for (const child of ancestor.children) {
+      const state = child.id === mine ? '▶' : child.passes ? '✓' : '○';
+      const note = child.id === taskId ? ' (this task)' : child.id === mine ? ` (which ${taskId} is part of)` : child.passes === null ? ' (split again)' : '';
+      lines.push(`  ${state} ${child.id} — ${child.title}${note}`);
+    }
+  });
+  lines.push(
+    ``,
+    `Do only ${taskId}. What ${parent.id} asks beyond it belongs to the other tasks it was split into: leave`,
+    `that to them.`,
+  );
+  return lines.join('\n');
+}
+
+function name(ancestor: SplitAncestor): string {
+  return ancestor.title ? `${ancestor.id} (${ancestor.title})` : ancestor.id;
 }
 
 function oneLine(text: string): string {

@@ -157,4 +157,60 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('- note\n  **Use the staging database.**');
     expect(prompt).toContain('- TASK-5: no network (escalation agent)\n  **It is up now.**');
   });
+
+  it('tells a task made by a split which task it came from, and where that one stopped', () => {
+    const root = project();
+    const base = { projectRoot: root, ralphDir: '.ralph', iteration: 1, maxIterations: 5, pinTask: true };
+    const child = { id: 'TASK-4.2', title: 'Render it', passes: false, splitFrom: 'TASK-4' };
+    expect(buildPrompt({ ...base, nextTask: child })).not.toContain('## Split from');
+
+    const prompt = buildPrompt({
+      ...base,
+      nextTask: child,
+      handoff: { path: resolve(root, '.ralph/handoff/TASK-4.2.md'), text: 'Mine.' },
+      lineage: [
+        {
+          id: 'TASK-4',
+          title: 'Add the widget',
+          specFilePath: '.ralph/split/TASK-4/TASK-4.json',
+          handoffPath: '.ralph/split/TASK-4/handoff.md',
+          children: [
+            { id: 'TASK-4.1', title: 'Model it', passes: true },
+            { id: 'TASK-4.2', title: 'Render it', passes: false },
+            { id: 'TASK-4.3', title: 'Document it', passes: false },
+          ],
+        },
+      ],
+    });
+    expect(prompt).toContain('## Split from TASK-4');
+    expect(prompt).toContain('TASK-4.2 is part of TASK-4 (Add the widget)');
+    expect(prompt).toContain('`.ralph/split/TASK-4/TASK-4.json`');
+    expect(prompt).toContain('Where its last attempt stopped: `.ralph/split/TASK-4/handoff.md`');
+    expect(prompt).toContain('`git log --grep=TASK-4`');
+    expect(prompt).toContain('  ✓ TASK-4.1 — Model it\n  ▶ TASK-4.2 — Render it (this task)\n  ○ TASK-4.3 — Document it');
+    expect(prompt).toContain('Do only TASK-4.2.');
+    // After the task, before its own handoff.
+    expect(prompt.indexOf('## Your task')).toBeLessThan(prompt.indexOf('## Split from'));
+    expect(prompt.indexOf('## Split from')).toBeLessThan(prompt.indexOf('## Resuming'));
+  });
+
+  it('follows a task split twice, and does without a title, spec or handoff', () => {
+    const prompt = buildPrompt({
+      projectRoot: project(),
+      ralphDir: '.ralph',
+      iteration: 1,
+      maxIterations: 5,
+      pinTask: true,
+      nextTask: { id: 'TASK-4.1.2', title: 'b', passes: false, splitFrom: 'TASK-4.1' },
+      lineage: [
+        { id: 'TASK-4.1', title: 'Model it', children: [{ id: 'TASK-4.1.1', title: 'a', passes: true }, { id: 'TASK-4.1.2', title: 'b', passes: false }] },
+        { id: 'TASK-4', title: null, children: [{ id: 'TASK-4.1', title: 'Model it', passes: null }, { id: 'TASK-4.2', title: 'Render it', passes: false }] },
+      ],
+    });
+    expect(prompt).toContain('## Split from TASK-4.1');
+    expect(prompt).toContain('TASK-4.1 (Model it) was itself split from TASK-4:');
+    expect(prompt).toContain('  ▶ TASK-4.1 — Model it (which TASK-4.1.2 is part of)\n  ○ TASK-4.2 — Render it');
+    expect(prompt).not.toContain('Its spec');
+    expect(prompt).not.toContain('Where its last attempt stopped');
+  });
 });

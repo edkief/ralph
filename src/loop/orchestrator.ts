@@ -11,6 +11,7 @@ import { pushBranch } from './push.js';
 import { commitParkedWork, commitRecords, journalDir, type RecordsCommit } from './records.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore, type Task } from '../tasks/store.js';
+import { readSplitRecords, splitLineage } from '../tasks/splits.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
 import { recentDecisions } from '../human/decisions.js';
@@ -465,6 +466,9 @@ async function loop(
       prompt: () => {
         const text = readHandoff(handoffFile);
         const decisions = recentDecisions(ralphRoot, DECISIONS_SHOWN);
+        const lineage = next.splitFrom
+          ? splitLineage(readSplitRecords(config.projectRoot, config.ralphDir), tasks.readTasks(), next.id)
+          : [];
         return buildPrompt({
           projectRoot: config.projectRoot,
           ralphDir: config.ralphDir,
@@ -477,6 +481,7 @@ async function loop(
             until: new Date(Date.now() + config.timeouts.iterationMs),
           },
           ...(text ? { handoff: { path: handoffFile, text } } : {}),
+          ...(lineage.length > 0 ? { lineage } : {}),
           ...(decisions.length > 0 ? { decisions } : {}),
         });
       },
