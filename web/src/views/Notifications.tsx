@@ -73,13 +73,15 @@ export function Notifications({ status }: { status: StatusView | null }) {
   const [events, setEvents] = useState<PushEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
-  const [needsToken, setNeedsToken] = useState(false);
+  // Once asked for, the token field stays until an action goes through: hiding it
+  // as soon as a token is held would take it away at the first character typed.
+  const [needsToken, setNeedsToken] = useState(() => !hasToken());
   const root = useRef<HTMLDivElement>(null);
 
   const config = push.data;
   const actions = status?.actions;
   const blocked = unsupported();
-  const askToken = Boolean(actions?.token) && (needsToken || !hasToken());
+  const askToken = Boolean(actions?.token) && needsToken;
 
   useEffect(() => {
     if (config) setEvents(savedEvents(config.defaults));
@@ -115,6 +117,7 @@ export function Notifications({ status }: { status: StatusView | null }) {
     setMessage(null);
     try {
       setMessage({ tone: 'good', text: await work() });
+      setNeedsToken(false);
     } catch (cause) {
       const failure = cause as Error & { status?: number };
       if (failure.status === 401) {
@@ -213,10 +216,7 @@ export function Notifications({ status }: { status: StatusView | null }) {
                   <input
                     type="password"
                     autoComplete="off"
-                    onChange={(change) => {
-                      rememberToken(change.target.value);
-                      setNeedsToken(change.target.value === '');
-                    }}
+                    onChange={(change) => rememberToken(change.target.value)}
                   />
                 </label>
               ) : null}

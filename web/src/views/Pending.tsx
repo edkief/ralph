@@ -44,7 +44,9 @@ export function Pending({ status }: { status: StatusView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ id: string; message: string } | null>(null);
-  const [needsToken, setNeedsToken] = useState(false);
+  // Once asked for, the token field stays until an action goes through: hiding it
+  // as soon as a token is held would take it away at the first character typed.
+  const [needsToken, setNeedsToken] = useState(() => !hasToken());
 
   if (!pending) {
     return done ? (
@@ -56,7 +58,7 @@ export function Pending({ status }: { status: StatusView }) {
 
   const takesText = pending.actions.some((action) => action !== 'stop' && action !== 'approve' && action !== 'continue');
   const sent = pending.answered || done?.id === pending.id;
-  const askToken = Boolean(actions?.token) && (needsToken || !hasToken());
+  const askToken = Boolean(actions?.token) && needsToken;
 
   const act = async (action: Action) => {
     const ending = status.daemon?.live ? 'The run ends as it would have without waiting, and the daemon goes idle.' : 'Ralph exits as it would have without waiting.';
@@ -71,6 +73,7 @@ export function Pending({ status }: { status: StatusView }) {
         ...(action === 'continue' ? { iterations } : {}),
       });
       setDone({ id: pending.id, message: result.message });
+      setNeedsToken(false);
       setText('');
     } catch (cause) {
       const failure = cause as Error & { status?: number };
@@ -140,10 +143,7 @@ export function Pending({ status }: { status: StatusView }) {
                 <input
                   type="password"
                   autoComplete="off"
-                  onChange={(event) => {
-                    rememberToken(event.target.value);
-                    setNeedsToken(event.target.value === '');
-                  }}
+                  onChange={(event) => rememberToken(event.target.value)}
                 />
               </label>
             ) : null}
@@ -243,16 +243,19 @@ export function RunButtons({ status }: { status: StatusView }) {
   const [iterations, setIterations] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<{ message: string; bad: boolean } | null>(null);
-  const [needsToken, setNeedsToken] = useState(false);
+  // Once asked for, the token field stays until an action goes through: hiding it
+  // as soon as a token is held would take it away at the first character typed.
+  const [needsToken, setNeedsToken] = useState(() => !hasToken());
   if (!daemon?.live || daemon.status !== 'idle' || status.run?.live || !status.actions?.enabled) return null;
   const count = iterations ?? daemon.defaultIterations;
-  const askToken = status.actions.token && (needsToken || !hasToken());
+  const askToken = status.actions.token && needsToken;
 
   const run = async () => {
     setBusy(true);
     try {
       const result = await postJson<{ message: string }>('/api/actions/run', { iterations: count });
       setState({ message: result.message, bad: false });
+      setNeedsToken(false);
     } catch (cause) {
       const failure = cause as Error & { status?: number };
       if (failure.status === 401) {
@@ -274,10 +277,7 @@ export function RunButtons({ status }: { status: StatusView }) {
           autoComplete="off"
           placeholder="ui.token"
           aria-label="Web UI token (ui.token)"
-          onChange={(event) => {
-            rememberToken(event.target.value);
-            setNeedsToken(event.target.value === '');
-          }}
+          onChange={(event) => rememberToken(event.target.value)}
         />
       ) : null}
       <input
