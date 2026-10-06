@@ -119,6 +119,8 @@ export interface ActionsView {
   reason?: string;
   /** Requests must carry the configured token. */
   token: boolean;
+  /** Park works with nothing running: Ralph's records are committed and the branch pushed. */
+  park: boolean;
 }
 
 export interface StatusView {

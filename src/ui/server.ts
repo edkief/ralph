@@ -9,6 +9,7 @@ import type { CostConfig, PushConfig } from '../config/schema.js';
 import { costEstimator, energyEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
+import { parkIdle } from '../human/stop.js';
 import { DaemonRequestError, requestRun } from '../daemon/control.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
 import { LOG_TAIL_BYTES, MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
@@ -91,6 +92,8 @@ export interface UiServerOptions {
   logger: Logger;
   /** `git.records`: whether answers given with no loop waiting are committed. */
   records?: RecordsMode;
+  /** Where a park with nothing running pushes; without it, Park needs a run in progress. */
+  git?: { remote: string; pushTimeoutMs: number };
   /** `metrics.cost`: how the Metrics tab estimates what the work cost. */
   cost?: CostConfig;
   /** `ui.push`: Web Push notifications to the browsers that subscribed. Off when absent. */
@@ -153,12 +156,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   };
   const actions: ActionsView =
     loopbackOnly || token || options.openActions
-      ? { enabled: true, token: Boolean(token) }
+      ? { enabled: true, token: Boolean(token), park: Boolean(options.git) }
       : {
           enabled: false,
           reason:
             'Actions are off: the web UI is reachable from other hosts and no ui.token is set. Set one, or set ui.actions to "open" if access to the UI is controlled in front of it',
           token: false,
+          park: false,
         };
   const status = (): StatusView => ({ ...project.status(), actions });
   const push = options.push?.enabled ? options.push : undefined;
@@ -292,7 +296,21 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/actions/stop') {
       const parsed = StopSchema.safeParse(body);
       if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration", "now" or "park"');
+      const { mode } = parsed.data;
       const run = project.status().run;
+      if (!run?.live && mode === 'park' && options.git) {
+        const parked = await parkIdle({
+          projectRoot: options.projectRoot,
+          ralphDir: options.ralphDir,
+          records: options.records ?? 'end',
+          remote: options.git.remote,
+          pushTimeoutMs: options.git.pushTimeoutMs,
+          ...(run ? { runId: run.runId } : {}),
+        });
+        options.logger.info('web UI action', { action: 'park', idle: true, ok: parked.ok });
+        if (!parked.ok) throw new RequestError(502, parked.lines.join(' '));
+        return sendJson(res, 200, { message: parked.lines.join(' ') });
+      }
       if (!run?.live) throw new RequestError(409, 'No run is in progress');
       requestStop(project.ralphRoot, parsed.data.mode, 'ui');
       options.logger.info('web UI action', { action: 'stop', mode: parsed.data.mode, run: run.runId });

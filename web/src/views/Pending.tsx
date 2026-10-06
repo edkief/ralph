@@ -198,36 +198,81 @@ export function Pending({ status }: { status: StatusView }) {
 /**
  * Ask a run in progress to stop: after its iteration, at once, or parked (the
  * agent hands off, then the work is committed and pushed, to carry on
- * elsewhere). Under a daemon, that pauses it.
+ * elsewhere). Under a daemon, that pauses it. With nothing running, Park
+ * still hands the project over: Ralph's records are committed and the branch
+ * pushed.
  */
 export function StopButtons({ status }: { status: StatusView }) {
   const [state, setState] = useState<{ message: string; bad: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Once asked for, the token field stays until an action goes through: hiding it
+  // as soon as a token is held would take it away at the first character typed.
+  const [needsToken, setNeedsToken] = useState(() => !hasToken());
   const run = status.run;
-  if (!run?.live || run.status === 'waiting' || !status.actions?.enabled) return null;
+  const actions = status.actions;
+  if (!actions?.enabled || run?.status === 'waiting') return null;
+  const live = run?.live === true;
+  if (!live && !actions.park) return null;
   const daemon = status.daemon?.live === true;
+  // An idle daemon's Run controls, just below, already ask for the token.
+  const runAsks = !live && daemon && status.daemon?.status === 'idle';
+  const askToken = actions.token && needsToken && !runAsks;
 
   const stop = async (mode: 'after-iteration' | 'now' | 'park') => {
     if (mode === 'now' && !window.confirm(`${daemon ? 'Pause' : 'Stop'} now? The iteration in progress is interrupted and its uncommitted work is left as it is.`)) return;
-    if (mode === 'park' && !window.confirm('Park the run? The agent hands off at once, then its work is committed and pushed so the run can carry on elsewhere.')) return;
+    if (mode === 'park' && !window.confirm(
+      live
+        ? 'Park the run? The agent hands off at once, then its work is committed and pushed so the run can carry on elsewhere.'
+        : "Park the project? Ralph's records are committed and the branch is pushed, so it can carry on elsewhere. Other uncommitted work stays as it is.",
+    )) return;
+    setBusy(true);
     try {
       const result = await postJson<{ message: string }>('/api/actions/stop', { mode });
       setState({ message: result.message, bad: false });
+      setNeedsToken(false);
     } catch (cause) {
-      setState({ message: (cause as Error).message, bad: true });
+      const failure = cause as Error & { status?: number };
+      if (failure.status === 401) {
+        forgetToken();
+        setNeedsToken(true);
+      }
+      setState({ message: failure.message, bad: true });
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div className="stop-buttons">
-      <button type="button" className="button small" onClick={() => void stop('after-iteration')}>
-        {daemon ? 'Pause after this iteration' : 'Stop after this iteration'}
-      </button>
-      <button type="button" className="button small" onClick={() => void stop('park')}>
+      {askToken ? (
+        <input
+          className="run-token"
+          type="password"
+          autoComplete="off"
+          placeholder="ui.token"
+          aria-label="Web UI token (ui.token)"
+          onChange={(event) => rememberToken(event.target.value)}
+        />
+      ) : null}
+      {live ? (
+        <button type="button" className="button small" disabled={busy} onClick={() => void stop('after-iteration')}>
+          {daemon ? 'Pause after this iteration' : 'Stop after this iteration'}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="button small"
+        disabled={busy}
+        title={live ? undefined : "Commit Ralph's records and push, to carry on from another machine"}
+        onClick={() => void stop('park')}
+      >
         Park
       </button>
-      <button type="button" className="button small danger" onClick={() => void stop('now')}>
-        {daemon ? 'Pause now' : 'Stop now'}
-      </button>
+      {live ? (
+        <button type="button" className="button small danger" disabled={busy} onClick={() => void stop('now')}>
+          {daemon ? 'Pause now' : 'Stop now'}
+        </button>
+      ) : null}
       {state ? (
         <span className={state.bad ? 'stop-note bad' : 'stop-note'} role="status">
           {state.message}
