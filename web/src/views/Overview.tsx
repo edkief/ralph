@@ -50,6 +50,7 @@ export function Overview({ status }: { status: StatusView }) {
   return (
     <div className="stack">
       <Pending status={status} />
+      {status.planState !== 'written' ? <Unplanned status={status} /> : null}
       <section className="cards">
         <div className="card">
           <div className="card-label">
@@ -73,7 +74,7 @@ export function Overview({ status }: { status: StatusView }) {
               <span className="muted">none</span>
             )}
           </div>
-          <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : status.daemon?.live ? 'Run a batch below' : 'Start one with `ralph`'}</div>
+          <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : status.daemon?.live ? (status.daemon.status === 'planning' ? 'The daemon is planning' : 'Run a batch below') : 'Start one with `ralph`'}</div>
           <DaemonLine status={status} />
           <StopButtons status={status} />
           <RunButtons key={run?.runId ?? 'none'} status={status} />
@@ -105,7 +106,7 @@ export function Overview({ status }: { status: StatusView }) {
         </div>
       </section>
 
-      {tasks.error ? <div className="banner bad">{tasks.error}</div> : null}
+      {tasks.error && status.planState === 'written' ? <div className="banner bad">{tasks.error}</div> : null}
       {run?.message && !run.live && !status.pending ? (
         <div className={`banner ${badge!.tone === 'bad' ? 'bad' : badge!.tone === 'good' ? 'good' : 'warn'}`}>
           {run.message}
@@ -301,5 +302,26 @@ function DaemonLine({ status }: { status: StatusView }) {
       <span className="muted">pid {daemon.pid}</span>
       {last ? <div className="stop-note bad">Last batch failed: {last}</div> : null}
     </div>
+  );
+}
+
+/** A project with no plan yet: where to make one. */
+function Unplanned({ status }: { status: StatusView }) {
+  const plan = status.plan;
+  // A question from the planner has its own banner, above every view.
+  if (plan?.live && plan.status === 'asking' && plan.by === 'daemon') return null;
+  return (
+    <a className="banner warn needs-you" href={href('plan')}>
+      <strong>{plan?.live ? 'The project is being planned.' : 'This project has no plan yet.'}</strong>{' '}
+      {plan?.live
+        ? 'Follow the interview in the Plan tab →'
+        : status.daemon?.live
+          ? 'Plan it with the agent in the Plan tab →'
+          : (
+            <>
+              Plan it with <code>ralph init</code> in a terminal, or start <code>ralph daemon</code> and plan it in the Plan tab →
+            </>
+          )}
+    </a>
   );
 }

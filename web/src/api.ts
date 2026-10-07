@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { LiveEvents, LogLine, StatusView, TranscriptEntry } from '../../src/ui/types.js';
+import type { LiveEvents, LogLine, PlanLineView, StatusView, TranscriptEntry } from '../../src/ui/types.js';
 
 export type * from '../../src/ui/types.js';
 
@@ -119,13 +119,16 @@ export interface LiveState {
   log: { runId: string; lines: LogLine[] } | null;
   /** The session followed: an iteration, with `split` the turn splitting that task, or with `escalation` that escalation turn. */
   transcript: { runId: string; iteration: number; split?: string; escalation?: number; entries: TranscriptEntry[] } | null;
+  /** The conversation of the latest planning session. */
+  plan: { id: string; lines: PlanLineView[] } | null;
 }
 
 type LiveAction =
   | { type: 'connected'; value: boolean }
   | { type: 'status'; data: LiveEvents['status'] }
   | { type: 'log'; data: LiveEvents['log'] }
-  | { type: 'transcript'; data: LiveEvents['transcript'] };
+  | { type: 'transcript'; data: LiveEvents['transcript'] }
+  | { type: 'plan'; data: LiveEvents['plan'] };
 
 function reduce(state: LiveState, action: LiveAction): LiveState {
   switch (action.type) {
@@ -133,6 +136,11 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
       return { ...state, connected: action.value };
     case 'status':
       return { ...state, status: action.data };
+    case 'plan': {
+      const { id, reset, lines } = action.data;
+      const previous = !reset && state.plan?.id === id ? state.plan.lines : [];
+      return { ...state, plan: { id, lines: [...previous, ...lines] } };
+    }
     case 'log': {
       const { runId, reset, lines } = action.data;
       const previous = !reset && state.log?.runId === runId ? state.log.lines : [];
@@ -163,18 +171,18 @@ function reduce(state: LiveState, action: LiveAction): LiveState {
 }
 
 /**
- * Follow `/api/live`: the status, the latest run's log and the transcript of
- * its session in progress. EventSource reconnects on its own, and the
+ * Follow `/api/live`: the status, the latest run's log, the transcript of
+ * its session in progress, and the latest planning session's conversation. EventSource reconnects on its own, and the
  * server starts every connection with a full snapshot.
  */
 export function useLive(): LiveState {
-  const [state, dispatch] = useReducer(reduce, { connected: false, status: null, log: null, transcript: null });
+  const [state, dispatch] = useReducer(reduce, { connected: false, status: null, log: null, transcript: null, plan: null });
 
   useEffect(() => {
     const source = new EventSource(apiUrl('/api/live'));
     source.onopen = () => dispatch({ type: 'connected', value: true });
     source.onerror = () => dispatch({ type: 'connected', value: false });
-    for (const name of ['status', 'log', 'transcript'] as const) {
+    for (const name of ['status', 'log', 'transcript', 'plan'] as const) {
       source.addEventListener(name, (event) => {
         dispatch({ type: name, data: JSON.parse((event as MessageEvent<string>).data) } as LiveAction);
       });
