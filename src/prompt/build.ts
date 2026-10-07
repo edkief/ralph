@@ -57,6 +57,8 @@ export function buildPrompt(context: PromptContext): string {
         `You have about ${minutes} minutes, until ${formatClock(context.timeBudget.until)} (check with \`date\`).`,
         `When the time is up you will be asked to stop and hand off, so commit working checkpoints`,
         `as you go: anything committed survives.`,
+        `Ending your turn ends this session: nothing resumes you when a background job finishes. Wait for`,
+        `long commands (tests, builds) in the foreground, or poll their output, before you end your turn.`,
       ].join('\n'),
     );
   }

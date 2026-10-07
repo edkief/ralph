@@ -117,6 +117,7 @@ describe('buildPrompt', () => {
 
     expect(prompt).toContain('You have about 45 minutes, until 14:03:00');
     expect(prompt).toContain('commit working checkpoints');
+    expect(prompt).toContain('nothing resumes you when a background job finishes');
   });
 
   it('hands the next attempt the handoff an earlier one left', () => {
