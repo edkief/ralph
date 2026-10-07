@@ -55,6 +55,15 @@ also compares `git status` before and after and lists any file changed outside `
 
 Review the plan, commit `.ralph/`, then run `ralph doctor` and `ralph`.
 
+Without a terminal, plan from the [web UI](#web-ui) instead: start [`ralph daemon`](#daemon-mode)
+in the project, even an empty one, and open the **Plan** tab. The daemon scaffolds the
+project the same way, then holds the same interview there. Every interview, whether in a
+terminal or from the web UI, is recorded under `.ralph/history/plans/`, so the web UI shows
+it too.
+
+`ralph init` will not plan while a daemon is up or a run is in progress in the project; plan
+from the daemon's web UI then, or stop it first. Scaffolding alone is still allowed.
+
 Once a plan exists, `ralph init` leaves it alone; `ralph init --replan` revises it with the
 agent, keeping completed tasks and existing ids. `ralph init --no-interview` only scaffolds,
 as does any run outside a terminal. Then write the PRD, tasks and specs by hand.
@@ -118,6 +127,13 @@ passes the request on.
 A web UI shows what the loop is doing, and lets you answer it when it needs a person, at
 <http://127.0.0.1:4280> by default:
 
+- **Plan**: plan the project with the agent, through the [daemon](#daemon-mode): describe it
+  (or, once there is a plan, say what should change) and start. The conversation shows as it
+  happens, with the agent's current tool activity; when the agent asks, reply, **Write the
+  plan now** (the terminal's `/done`) or **Stop**. The outcome follows: the tasks written, the
+  problems left, or why it failed, and any file the agent changed outside `.ralph/`. Review
+  `.ralph/` and commit it, as in a terminal. Without a live daemon the tab says how to plan
+  instead. An interview `ralph init` holds in a terminal shows here too, to follow
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
   buttons to answer; buttons to stop the run (to pause it, under a [daemon](#daemon-mode)),
   and to have an idle daemon run a batch; the run's status, then each iteration's outcome,
@@ -166,7 +182,7 @@ contain secrets from the repository or the environment, so it listens on `127.0.
 refuses requests addressed to any other host name. Binding it elsewhere logs a warning. From a
 Kubernetes pod, prefer `kubectl port-forward pod/<pod> 4280` over exposing it.
 
-Actions (answering Ralph, stopping a run) are held to more than reading, because an answer
+Actions (answering Ralph, stopping a run, planning) are held to more than reading, because an answer
 ends up in the prompt of an agent that runs shell commands:
 
 - They are taken only when the UI listens on loopback, or when a token is set with `ui.token`
@@ -195,7 +211,8 @@ whether or not a page is open. Open **Notify me** in the header, choose what to 
 and **Turn on**:
 
 - **Ralph needs me**: a request reached a person (after any [escalation agent](#the-escalation-agent)
-  passed it on). On by default.
+  passed it on), or the planner asks a question in an interview held from the web UI. On by
+  default.
 - **A run ends**: it finished, failed, stalled or stopped. A run that ended over a request is
   told once, as the request. On by default.
 - **An iteration ends**, with its outcome, and **a task passes**: off unless you tick them.
@@ -360,7 +377,7 @@ ralph daemon                 # in the foreground, for systemd, nohup or a pod; i
 ralph daemon --detach        # in the background; returns once it is up
 ralph daemon --start -n 20   # run a first batch of 20 at once, then go idle
 ralph daemon run -n 5        # have the daemon run 5 iterations (default: its -n, then maxIterations)
-ralph daemon pause           # stop the batch after the current iteration
+ralph daemon pause           # stop the batch after the current iteration, or stop an interview
 ralph daemon pause --now     # stop it now, interrupting the iteration
 ralph daemon pause --park    # park it: hand off, commit and push
 ralph daemon status          # what the daemon and its latest run are doing
@@ -376,6 +393,13 @@ ralph daemon shutdown        # stop any batch now, and exit
   idle or running, has a **Run** button with the number of iterations while it is idle, and
   **Pause** buttons while a batch runs. These are actions, so they are guarded like the others.
   A batch whose preflight fails is shown there too, and the daemon stays idle.
+- It also holds [planning interviews](#getting-started) asked for from the web UI's **Plan**
+  tab, on its own opencode server, with `plan.model` as in a terminal. It does one thing at a
+  time: while it plans, its status is `planning` and run and plan requests are refused, and
+  it plans only while idle. The interview waits for your replies as long as it takes; **Stop**
+  in the Plan tab, `ralph daemon pause` (with any option) or a shutdown ends it, and anything
+  the agent wrote stays in `.ralph/`. An interview cut off this way, or by the daemon going
+  away, ends as stopped: **Revise the plan** carries on from the files.
 - `--detach` sends the daemon's output to `.ralph/history/daemon.log`.
 - One daemon per project: a second one refuses to start, and so does `ralph` itself while a
   daemon is up. Steer the daemon instead.
@@ -892,6 +916,12 @@ in git is in the [journal](#carrying-on-from-another-machine). Beside the runs,
 `history/answer.json` and `history/stop.json` carry an answer or a stop request to the loop.
 `history/push.json` holds the web UI's notification key pair and subscriptions, and what it
 has already told them.
+
+Planning interviews are kept apart from the runs, in `history/plans/<id>/`: `state.json`
+(where the interview stands, the question asked and its number, the outcome),
+`conversation.jsonl` (what the owner, the agent and Ralph said), `turn-NNN.events.jsonl`
+(every event of each turn), and while it runs, `reply.json` and `stop.json` carry the owner's
+reply or a stop request to it.
 
 ## Notes on the opencode API
 
