@@ -468,6 +468,7 @@ See `templates/ralph.config.json` for a complete file.
   "retries": {
     "providerRetriesPerIteration": 3,
     "iterationRetries": 1,         // retries of a turn the provider failed or that outgrew the context window
+    "earlyStopResumes": 2,         // times an agent that ends its turn early is told to carry on; 0 = never
     "backoffMs": 15000
   },
   "stall": {
@@ -650,6 +651,27 @@ changes alone do not count as progress. A task that runs out of time
 `stall.maxTimeoutsPerTask` times (default 2) has stalled: it is probably too big for one
 iteration and needs splitting (see below). Set `wrapUpMs: 0` to interrupt outright as before;
 the handoff is still written.
+
+### Ending a turn early
+
+Sometimes an agent starts a long job in the background, such as a test suite, then ends its
+turn expecting to be woken when the job lands. Under Ralph nothing wakes it: once the turn
+ends, the session is over. The prompt says so, and asks the agent to wait for long commands
+before it ends its turn.
+
+When the agent ends its turn anyway, with working time left, no promise tag and its task not
+passing, Ralph sends a prompt into the same session. It tells the agent that nothing will
+resume it, to wait for the jobs it started (poll their output, or run them again in the
+foreground), and then to finish the task or hand off. The resumed turn keeps the session's
+context and its handle on the background job, and it only gets the iteration's remaining
+working time. Ralph does this up to `retries.earlyStopResumes` times per iteration
+(default 2; 0 turns it off), and not with less than a minute left or once a stop or park
+was requested. The iteration record counts the resumes (`result.resumes`).
+
+If the agent still ends early after the last resume, the task gets a handoff just as when it
+runs out of time: the agent's own, or one Ralph writes from what it saw, including the agent's
+last messages. The next iteration then knows where things stand. An early stop is not a sign
+that the task is too big, so it does not count toward `stall.maxTimeoutsPerTask`.
 
 ### Running out of context
 
