@@ -47,8 +47,9 @@ function config(root: string, overrides: Record<string, unknown> = {}): Config {
   return ConfigSchema.parse({
     projectRoot: root,
     pauseBetweenIterationsMs: 0,
-    retries: { backoffMs: 0, iterationRetries: 0 },
     ...overrides,
+    // No resuming an agent that ends its turn early unless a test asks for it.
+    retries: { backoffMs: 0, iterationRetries: 0, earlyStopResumes: 0, ...(overrides['retries'] as object | undefined) },
   });
 }
 
@@ -566,6 +567,111 @@ describe('runLoop', () => {
       expect(result.iterations).toBe(1);
       expect(result.message).toBe('TASK-1 ran out of context 2 times; split it into smaller tasks (handoff: .ralph/handoff/TASK-1.md)');
       expect(readFileSync(handoff(root), 'utf8')).toContain('Written by Ralph: the agent ran out of context');
+    });
+  });
+
+  describe('an agent that ends its turn early', () => {
+    const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
+    const waiting = say('Tests are running in the background. Ending here; I will be resumed when they complete.');
+    const records = (historyDir: string) =>
+      readFileSync(resolve(historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const resuming = (overrides: Record<string, unknown> = {}) => ({
+      timeouts: { iterationMs: 10 * 60_000, inactivityMs: 60_000, wrapUpMs: 5_000 },
+      retries: { backoffMs: 0, iterationRetries: 0, earlyStopResumes: 2 },
+      ...overrides,
+    });
+
+    it('is resumed in the same session, told nothing else will wake it', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(root, config(root, { maxIterations: 1, ...resuming() }), {
+        onPrompt: (count) => {
+          if (count === 2) markPassing(root, 'TASK-1');
+        },
+        script: (count) => (count === 1 ? waiting : say('Tests pass. <promise>TASK-1:DONE</promise>')),
+      });
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(1);
+      expect(server?.sessionsCreated).toBe(1);
+      const resume = String(server?.prompts[1]?.['text']);
+      expect(resume).toContain('## Carry on with TASK-1');
+      expect(resume).toContain('Nothing resumes you when a background job finishes');
+      expect(resume).toContain('`.ralph/handoff/TASK-1.md`');
+      expect(existsSync(handoff(root))).toBe(false);
+      const [record] = records(result.historyDir);
+      expect(record).toMatchObject({ result: { status: 'progressed', resumes: 1 } });
+      expect(record.result.text).toContain('running in the background');
+      expect(record.result.text).toContain('Tests pass.');
+    });
+
+    it('leaves a handoff for the next iteration once its resumes are spent', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const config_ = config(root, {
+        maxIterations: 3,
+        ...resuming({ retries: { backoffMs: 0, iterationRetries: 0, earlyStopResumes: 1 } }),
+      });
+
+      const result = await loop(root, config_, {
+        onPrompt: (count) => {
+          if (count === 3) markPassing(root, 'TASK-1');
+        },
+        script: (count) => (count < 3 ? waiting : say('<promise>TASK-1:DONE</promise>')),
+      });
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      expect(server?.sessionsCreated).toBe(2);
+      const [first, resume, next] = (server?.prompts ?? []).map((prompt) => String(prompt['text']));
+      expect(first).not.toContain('## Resuming TASK-1');
+      expect(resume).toContain('## Carry on with TASK-1');
+      expect(next).toContain('## Resuming TASK-1');
+      expect(next).toContain('the agent ended its turn before finishing the task');
+      expect(next).toContain('I will be resumed when they complete');
+      expect(records(result.historyDir)[0]).toMatchObject({ handoff: 'fallback', result: { resumes: 1 } });
+    });
+
+    it('is not resumed when it gave a promise tag, has too little time left, or resuming is off', async () => {
+      for (const overrides of [
+        {},
+        { timeouts: { iterationMs: 30_000, inactivityMs: 60_000, wrapUpMs: 5_000 } },
+        { retries: { backoffMs: 0, iterationRetries: 0, earlyStopResumes: 0 } },
+      ]) {
+        const root = project([{ id: 'TASK-1', passes: false }]);
+        const tagged = Object.keys(overrides).length === 0;
+        await loop(root, config(root, { maxIterations: 1, ...resuming(overrides) }), {
+          script: tagged ? say('<promise>TASK-1:DONE</promise>') : waiting,
+        });
+        expect(server?.prompts).toHaveLength(1);
+        // A claimed task is not an early stop, so it gets no handoff either.
+        expect(existsSync(handoff(root))).toBe(!tagged);
+        await server?.close();
+        server = undefined;
+      }
+    });
+
+    it('does not count toward the task running out of time', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 3,
+          stall: { maxTimeoutsPerTask: 1, onRepeatedTimeout: 'stop' },
+          ...resuming({ retries: { backoffMs: 0, iterationRetries: 0, earlyStopResumes: 0 } }),
+        }),
+        {
+          onPrompt: (count) => {
+            writeFileSync(resolve(root, 'work.txt'), `step ${count}`);
+            execFileSync('git', ['add', 'work.txt'], { cwd: root });
+            execFileSync('git', ['commit', '-qm', `wip: step ${count}`], { cwd: root });
+          },
+          script: waiting,
+        },
+      );
+
+      expect(result.status).toBe('max-iterations');
+      expect(result.iterations).toBe(3);
     });
   });
 

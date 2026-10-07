@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
-import { runIteration, type IterationResult } from './iteration.js';
+import { joinTurns, runIteration, type IterationResult } from './iteration.js';
 import { ensureHandoff, handoffDir, handoffPath, readHandoff } from './handoff.js';
 import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { runEscalation, type EscalationOutcome, type EscalationRequest } from './escalate.js';
@@ -14,6 +14,7 @@ import { TaskStore, type Task } from '../tasks/store.js';
 import { readSplitRecords, splitLineage } from '../tasks/splits.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
+import { buildResumePrompt } from '../prompt/resume.js';
 import { recentDecisions } from '../human/decisions.js';
 import { recordAnswer } from '../human/respond.js';
 import {
@@ -490,6 +491,7 @@ async function loop(
       handoffFile,
       sinceHead: before.head,
       cutShortLeft: config.stall.maxTimeoutsPerTask - (cutShortByTask.get(taskId)?.length ?? 0),
+      taskPasses: () => taskPasses(tasks, taskId),
     });
     lastAgentText = { taskId, text: result.text };
     if (cutShort.length > 0) cutShortByTask.set(taskId, [...(cutShortByTask.get(taskId) ?? []), ...cutShort]);
@@ -710,6 +712,8 @@ async function attemptIteration(context: {
   sinceHead: string | null;
   /** Attempts that may still run out of time or context before the task is given up on. */
   cutShortLeft: number;
+  /** Whether the task is marked passing, read afresh. */
+  taskPasses: () => boolean;
 }): Promise<{ result: IterationResult; cutShort: StallCause[]; handoff?: 'agent' | 'fallback' }> {
   const { client, config, logger, reporter, signal, stop, park } = context.args;
   const handoffShown = display(config, context.handoffFile);
@@ -718,15 +722,16 @@ async function attemptIteration(context: {
   let result: IterationResult;
   let handoff: 'agent' | 'fallback' | undefined;
 
-  for (;;) {
-    const since = Date.now();
-    result = await runIteration({
+  // One turn of the attempt: its first, or one resuming the agent in the same session.
+  const turn = (prompt: string, resume?: { sessionId: string; iterationMs: number }) =>
+    runIteration({
       client,
       config,
       logger,
       signal,
-      prompt: context.prompt(),
+      prompt,
       title: `ralph ${context.iteration} · ${context.taskId}`,
+      ...(resume ?? {}),
       ...(config.timeouts.wrapUpMs > 0
         ? {
             wrapUp: {
@@ -750,12 +755,48 @@ async function attemptIteration(context: {
       },
     });
 
+  for (;;) {
+    const since = Date.now();
+    result = await turn(context.prompt());
+
+    // An agent that ends its turn with the task unfinished, often to wait for a
+    // background job it expects to be woken by, is told nothing will wake it and
+    // asked to carry on, in the same session and within the time left.
+    let resumes = 0;
+    for (;;) {
+      const leftMs = config.timeouts.iterationMs - (Date.now() - since);
+      if (
+        !endedEarly(result) ||
+        context.taskPasses() ||
+        resumes >= config.retries.earlyStopResumes ||
+        leftMs < MIN_RESUME_MS ||
+        signal.aborted ||
+        stop.aborted
+      ) {
+        break;
+      }
+      resumes += 1;
+      logger.warn('the agent ended its turn with the task unfinished; resuming it', {
+        task: context.taskId,
+        resume: resumes,
+        minutesLeft: Math.round(leftMs / 60_000),
+      });
+      reporter.status(`resuming ${context.taskId} (${resumes}/${config.retries.earlyStopResumes})`);
+      const next = await turn(buildResumePrompt({ taskId: context.taskId, handoffPath: handoffShown, leftMs }), {
+        sessionId: result.sessionId,
+        iterationMs: leftMs,
+      });
+      result = { ...joinTurns(result, next), resumes };
+    }
+
     handoff = undefined;
     // Parked by a person: handed off, but not a sign the task is too big.
     const parked = result.wrapUp?.trigger === 'park';
     const cause = stallCause(result);
     if (cause) cutShort.push(cause);
-    if (cause || parked) {
+    // Not a sign the task is too big either, but the next attempt needs to know where it stands.
+    const stoppedEarly = !cause && !parked && endedEarly(result) && !context.taskPasses();
+    if (cause || parked || stoppedEarly) {
       handoff = await ensureHandoff({
         path: context.handoffFile,
         projectRoot: config.projectRoot,
@@ -763,8 +804,8 @@ async function attemptIteration(context: {
         iteration: context.iteration,
         since,
         sinceHead: context.sinceHead,
-        reason: result.error ?? result.status,
-        cutShortBy: cause ? ranOutOf(cause) : 'park',
+        reason: result.error ?? (stoppedEarly ? 'the agent ended its turn before finishing the task' : result.status),
+        cutShortBy: cause ? ranOutOf(cause) : parked ? 'park' : 'early-stop',
         agentText: result.text,
       });
       logger.info(handoff === 'agent' ? 'agent left a handoff' : 'agent left no handoff; wrote one from what the loop saw', {
@@ -795,6 +836,24 @@ async function attemptIteration(context: {
     await sleep(config.retries.backoffMs, AbortSignal.any([signal, stop]));
     if (stop.aborted) return done;
   }
+}
+
+/** Working time below which an agent that ended its turn early is not resumed. */
+const MIN_RESUME_MS = 60_000;
+
+/**
+ * A turn that ended cleanly with no promise tag at all. Whether the task is
+ * unfinished is for the caller, which can read the task list.
+ */
+function endedEarly(result: IterationResult): boolean {
+  const { tags } = result;
+  return (
+    result.status === 'progressed' &&
+    !tags.complete &&
+    tags.completedTaskIds.length === 0 &&
+    !tags.blockedReason &&
+    !tags.decideQuestion
+  );
 }
 
 /** What cut an attempt short before it finished its task, if anything did. */

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
 import { OpencodeClient } from '../src/opencode/client.js';
-import { runIteration } from '../src/loop/iteration.js';
+import { joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
@@ -22,7 +22,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park' | 'hooks'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -130,6 +130,17 @@ describe('runIteration', () => {
     expect(result.status).toBe('timeout');
     expect(result.error).toMatch(/No activity/);
     expect(server?.interrupts).toBe(1);
+  });
+
+  it('gives a turn the working time it is given, rather than a whole iteration', async () => {
+    const result = await iterate(
+      { script: [{ after: 30_000, type: 'session.execution.succeeded' }] },
+      config({ timeouts: { inactivityMs: 60_000, iterationMs: 60 * 60_000, wrapUpMs: 0 } }),
+      { iterationMs: 1_200 },
+    );
+
+    expect(result.status).toBe('timeout');
+    expect(result.error).toMatch(/1s budget/);
   });
 
   it('waits out a compaction that is quieter than the inactivity window', async () => {
@@ -642,5 +653,36 @@ describe('runIteration', () => {
       expect(result.wrapUp).toBeUndefined();
       expect(server?.prompts).toHaveLength(1);
     });
+  });
+});
+
+describe('joinTurns', () => {
+  const turn = (overrides: Partial<IterationResult>): IterationResult => ({
+    sessionId: 'ses_1',
+    status: 'progressed',
+    text: '',
+    tags: { complete: false, completedTaskIds: [] },
+    usage: { input: 10, output: 1, reasoning: 0, cacheRead: 100, cacheWrite: 0, cost: 0.5 },
+    toolCalls: 2,
+    filesTouched: ['a.ts'],
+    providerRetries: 0,
+    compactions: 0,
+    durationMs: 1_000,
+    ...overrides,
+  });
+
+  it('adds up what the turns did and ends as the second one did', () => {
+    const joined = joinTurns(
+      turn({ text: 'waiting on the tests' }),
+      turn({ text: '<promise>TASK-1:DONE</promise>', tags: { complete: false, completedTaskIds: ['TASK-1'] }, filesTouched: ['a.ts', 'b.ts'], compactions: 1 }),
+    );
+
+    expect(joined.text).toBe('waiting on the tests\n<promise>TASK-1:DONE</promise>');
+    expect(joined.tags.completedTaskIds).toEqual(['TASK-1']);
+    expect(joined.usage).toMatchObject({ input: 20, output: 2, cacheRead: 200, cost: 1 });
+    expect(joined.toolCalls).toBe(4);
+    expect(joined.filesTouched).toEqual(['a.ts', 'b.ts']);
+    expect(joined.compactions).toBe(1);
+    expect(joined.durationMs).toBe(2_000);
   });
 });

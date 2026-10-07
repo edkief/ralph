@@ -55,6 +55,8 @@ export interface IterationResult {
   wrapUp?: WrapUpRecord;
   /** The watchdog budget that ended the turn, if one did. */
   trip?: WatchdogTrip;
+  /** Times the agent ended its turn early and was prompted to carry on in the same session. */
+  resumes?: number;
   durationMs: number;
 }
 
@@ -104,6 +106,8 @@ export async function runIteration(args: {
   wrapUp?: { prompt: (trigger: WrapUpTrigger) => string };
   /** Once aborted, ask for the wrap-up at once: a person is parking the run. Needs `wrapUp`. */
   park?: AbortSignal;
+  /** Working time for this turn, when it is less than a whole iteration's, e.g. a resumed turn. */
+  iterationMs?: number;
   logger: Logger;
   hooks?: IterationHooks;
   signal: AbortSignal;
@@ -113,7 +117,7 @@ export async function runIteration(args: {
   const startedAt = Date.now();
 
   const watchdogOptions = {
-    iterationMs: config.timeouts.iterationMs,
+    iterationMs: args.iterationMs ?? config.timeouts.iterationMs,
     inactivityMs: config.timeouts.inactivityMs,
     maxProviderRetries: config.retries.providerRetriesPerIteration,
     wrapUpMs: config.timeouts.wrapUpMs,
@@ -408,6 +412,30 @@ export async function runIteration(args: {
         }
       : {}),
     durationMs: Date.now() - startedAt,
+  };
+}
+
+/**
+ * One result for two turns of the same iteration, the second resuming the
+ * first in its session: what the agent did adds up, and how it ended is the
+ * second turn's.
+ */
+export function joinTurns(first: IterationResult, second: IterationResult): IterationResult {
+  const usage = { ...first.usage };
+  for (const key of Object.keys(usage) as Array<keyof IterationUsage>) usage[key] += second.usage[key];
+  return {
+    ...second,
+    sessionId: second.sessionId || first.sessionId,
+    text: [first.text, second.text].filter(Boolean).join('\n'),
+    usage,
+    toolCalls: first.toolCalls + second.toolCalls,
+    filesTouched: [...new Set([...first.filesTouched, ...second.filesTouched])],
+    providerRetries: first.providerRetries + second.providerRetries,
+    ...(second.lastProviderError ?? first.lastProviderError
+      ? { lastProviderError: second.lastProviderError ?? first.lastProviderError }
+      : {}),
+    compactions: first.compactions + second.compactions,
+    durationMs: first.durationMs + second.durationMs,
   };
 }
 
