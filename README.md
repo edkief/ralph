@@ -123,7 +123,8 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   and to have an idle daemon run a batch; the run's status, then each iteration's outcome,
   duration, tool calls, tokens and changes, with a row for every split turn, assessment or
   [escalation](#the-escalation-agent) and its outcome,
-  then the task in progress and the few that come next
+  then the task in progress, in the Tasks tab's order: the few finished just before it and the
+  few that come next
 - **Tasks**: the whole backlog in order, with what passes and each task's spec. A task that
   was split heads the tasks it was split into, with its title and its spec from before the
   split, and is not counted
