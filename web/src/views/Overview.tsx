@@ -5,7 +5,9 @@ import { href } from '../route';
 import { TaskRow, activeTaskId } from './TaskRow';
 import { Pending, RunButtons, StopButtons } from './Pending';
 
-/** Tasks listed under the iterations; the Tasks tab has them all. */
+/** Tasks listed before the one in progress: those just finished, as a rule. */
+const DONE_BEFORE = 3;
+/** Tasks listed from the one in progress on; the Tasks tab has them all. */
 const UP_NEXT = 5;
 
 export function Overview({ status }: { status: StatusView }) {
@@ -21,8 +23,11 @@ export function Overview({ status }: { status: StatusView }) {
   const escalating = run?.live && !waiting ? escalations.find((turn) => turn.status === 'running') : undefined;
   const active = activeTaskId(status);
   const remaining = tasks.items.filter((task) => !task.passes);
-  // The task in progress first, even when the agent picked one further down the list.
-  const upNext = [...remaining.filter((task) => task.id === active), ...remaining.filter((task) => task.id !== active)].slice(0, UP_NEXT);
+  // A stretch of the Tasks tab's order around the task in progress: what came
+  // just before it, then what comes next. With the backlog complete, its end.
+  const at = [active, tasks.next].map((id) => tasks.items.findIndex((task) => task.id === id)).find((index) => index >= 0) ?? tasks.items.length;
+  const upNext = tasks.items.slice(Math.max(0, at - DONE_BEFORE), at + UP_NEXT);
+  const hidden = remaining.filter((task) => !upNext.includes(task)).length;
   const totalTokens = iterations.reduce((sum, iteration) => sum + (iteration.tokens ?? 0), 0);
   const badge = run ? runBadge(run) : null;
   /** Rows for these split turns, newest first. */
@@ -188,19 +193,19 @@ export function Overview({ status }: { status: StatusView }) {
         </h2>
         {tasks.items.length === 0 ? (
           <div className="empty small">No tasks in tasks.json</div>
-        ) : upNext.length === 0 ? (
-          <div className="empty small">Backlog complete</div>
         ) : (
           <ul className="task-list">
             {upNext.map((task) => (
               <TaskRow key={task.id} task={task} active={task.id === active} />
             ))}
-            {remaining.length > upNext.length ? (
+            {hidden > 0 ? (
               <li className="task more">
                 <a href={href('tasks')}>
-                  {remaining.length - upNext.length} more to do
+                  {hidden} more to do
                 </a>
               </li>
+            ) : remaining.length === 0 ? (
+              <li className="task more muted">Backlog complete</li>
             ) : null}
           </ul>
         )}
