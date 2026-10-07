@@ -136,14 +136,65 @@ export interface StatusView {
   pending: PendingView | null;
   /** The project's daemon, if one has ever run here; `live` says whether it still does. */
   daemon: DaemonView | null;
+  /** The latest planning session, while it goes on and for a day after; null otherwise. */
+  plan: PlanSummary | null;
+  /** `template` while the PRD and task list are still the scaffold's (or missing), `written` once there is a plan. */
+  planState: 'template' | 'written';
   /** Absent from a server that takes no actions at all. */
   actions?: ActionsView;
+}
+
+/** A line of a planning interview: the owner, the agent, or a notice from Ralph. */
+export interface PlanLineView {
+  role: 'owner' | 'agent' | 'ralph';
+  text: string;
+  at: string;
+}
+
+/** A planning interview: a daemon's, held from the web UI, or one `ralph init` held in a terminal. */
+export interface PlanSummary {
+  id: string;
+  /** A plan for a project that had none, or a revision. */
+  mode: 'new' | 'replan';
+  /** Who holds it: a daemon, or `ralph init` in a terminal. */
+  by: 'daemon' | 'cli';
+  /**
+   * `starting`, the agent `working`, `asking` the owner, or how it ended:
+   * `planned`, `invalid`, `aborted` (stopped, or its process gone) or `failed`.
+   */
+  status: 'starting' | 'working' | 'asking' | 'planned' | 'invalid' | 'aborted' | 'failed';
+  /** Its process is at it still. */
+  live: boolean;
+  /** Numbers the question asked; a reply names the one it answers. */
+  seq: number;
+  /** The question, while `asking`. */
+  prompt: string | null;
+  /** The agent's latest tool activity, while `working`. */
+  activity: string | null;
+  turn: number;
+  maxTurns: number | null;
+  model: string | null;
+  startedAt: string;
+  outcome?: {
+    /** The tasks of the plan written. */
+    tasks?: Array<{ id: string; title: string }>;
+    /** What is still wrong with the plan, when it stayed invalid. */
+    problems?: string[];
+    /** Why it failed. */
+    reason?: string;
+    /** Files the agent changed outside the Ralph folder; null when that could not be checked. */
+    outsideChanges: string[] | null;
+  };
+}
+
+export interface PlanView extends PlanSummary {
+  conversation: PlanLineView[];
 }
 
 /** A `ralph daemon` that holds the loop and runs batches of iterations on request. */
 export interface DaemonView {
   live: boolean;
-  /** `idle` between batches, `running` one, `stopping`, or `stopped` once gone. */
+  /** `idle` between batches, `running` one, `planning` an interview, `stopping`, or `stopped` once gone. */
   status: string;
   pid: number;
   hostname: string;
@@ -295,6 +346,8 @@ export interface LiveEvents {
   status: StatusView;
   log: { runId: string; reset: boolean; lines: LogLine[] };
   transcript: LiveTranscript;
+  /** The latest planning session's conversation: whole with `reset`, else the lines added. */
+  plan: { id: string; reset: boolean; lines: PlanLineView[] };
 }
 
 /** A file that differs from the last commit. */

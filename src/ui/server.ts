@@ -10,7 +10,8 @@ import { costEstimator, energyEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { parkIdle } from '../human/stop.js';
-import { DaemonRequestError, requestRun } from '../daemon/control.js';
+import { DaemonRequestError, requestPlan, requestRun } from '../daemon/control.js';
+import { conversationPath, MAX_PLAN_TEXT, PLAN_MODES, PlanRequestError, readConversation, requestPlanStop, writePlanReply } from '../init/record.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
 import { LOG_TAIL_BYTES, MAX_LOG_LINES, NotFoundError, RalphProject } from './project.js';
 import { LineTailer, parseJsonLines } from './tail.js';
@@ -31,7 +32,17 @@ import {
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
 import type { OpencodeEvent } from '../opencode/events.js';
-import type { ActionsView, LiveEvents, LiveTranscript, LogLine, PushPayload, PushView, StatusView, TranscriptEntry } from './types.js';
+import type {
+  ActionsView,
+  LiveEvents,
+  LiveTranscript,
+  LogLine,
+  PlanLineView,
+  PushPayload,
+  PushView,
+  StatusView,
+  TranscriptEntry,
+} from './types.js';
 
 /** The built React app, next to the compiled server: dist/ui → dist/web. */
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
@@ -51,6 +62,9 @@ const ACTION_PATHS = new Set([
   '/api/actions/respond',
   '/api/actions/stop',
   '/api/actions/run',
+  '/api/actions/plan/start',
+  '/api/actions/plan/reply',
+  '/api/actions/plan/stop',
   '/api/actions/push/subscribe',
   '/api/actions/push/unsubscribe',
   '/api/actions/push/test',
@@ -58,6 +72,12 @@ const ACTION_PATHS = new Set([
 
 const StopSchema = z.object({ mode: z.enum(STOP_MODES) });
 const RunSchema = z.object({ iterations: z.number().int().min(1).max(10_000).optional() });
+const PlanStartSchema = z.object({ mode: z.enum(PLAN_MODES), description: z.string().trim().min(1).max(MAX_PLAN_TEXT) });
+const PlanReplySchema = z.union([
+  z.object({ id: z.string().min(1), seq: z.number().int().positive(), text: z.string().trim().min(1).max(MAX_PLAN_TEXT) }),
+  z.object({ id: z.string().min(1), seq: z.number().int().positive(), done: z.literal(true) }),
+]);
+const PlanStopSchema = z.object({ id: z.string().min(1) });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -224,6 +244,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     if (path === '/api/file/raw') return sendImage(res, project.imageFile(url.searchParams.get('path') ?? ''));
     if (path === '/api/runs') return sendJson(res, 200, project.listRuns());
     if (path === '/api/metrics') return sendJson(res, 200, project.metrics(cost));
+    if (path === '/api/plans') return sendJson(res, 200, project.plans());
     if (path === '/api/push') return sendJson(res, 200, pushView());
     if (path === '/api/live') return live(req, res);
     if (path === '/api/git') return gitStatus(options.projectRoot).then((view) => sendJson(res, 200, view));
@@ -234,6 +255,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       if (!COMMIT_HASH.test(hash)) throw new RequestError(400, 'A commit is named by its hash');
       return gitCommit(options.projectRoot, hash).then((detail) => sendJson(res, 200, detail));
     }
+
+    const plan = /^\/api\/plans\/([^/]+)$/.exec(path);
+    if (plan) return sendJson(res, 200, project.plan(decodeURIComponent(plan[1]!)));
 
     const run = /^\/api\/runs\/([^/]+)(\/log|\/iterations\/(\d+)\/transcript|\/splits\/([^/]+)\/transcript|\/escalations\/(\d+)\/transcript)?$/.exec(path);
     if (run) {
@@ -293,6 +317,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       }
     }
 
+    if (path.startsWith('/api/actions/plan/')) return planAction(res, path, body);
+
     if (path === '/api/actions/stop') {
       const parsed = StopSchema.safeParse(body);
       if (!parsed.success) throw new RequestError(400, 'mode must be "after-iteration", "now" or "park"');
@@ -331,6 +357,37 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return sendJson(res, 200, result);
     } catch (cause) {
       if (cause instanceof RespondError) throw new RequestError(cause.code === 'conflict' ? 409 : 400, cause.message);
+      throw cause;
+    }
+  };
+
+  /** Have the daemon plan the project, answer the planner, or stop it. */
+  const planAction = (res: ServerResponse, path: string, body: unknown): void => {
+    try {
+      if (path === '/api/actions/plan/start') {
+        const parsed = PlanStartSchema.safeParse(body);
+        if (!parsed.success) throw new RequestError(400, `mode must be "new" or "replan", with a description of up to ${MAX_PLAN_TEXT} characters`);
+        const { mode, description } = parsed.data;
+        const { daemon, id } = requestPlan({ projectRoot: options.projectRoot, ralphDir: options.ralphDir }, mode, description, 'ui');
+        options.logger.info('web UI action', { action: 'plan-start', mode, plan: id, daemon: daemon.pid });
+        return sendJson(res, 200, { id, message: mode === 'new' ? 'Ralph is planning the project.' : 'Ralph is revising the plan.' });
+      }
+      if (path === '/api/actions/plan/reply') {
+        const parsed = PlanReplySchema.safeParse(body);
+        if (!parsed.success) throw new RequestError(400, `A reply needs the session, the question's number, and text of up to ${MAX_PLAN_TEXT} characters or done`);
+        const reply = parsed.data;
+        writePlanReply(project.ralphRoot, reply.id, 'done' in reply ? { seq: reply.seq, done: true } : { seq: reply.seq, text: reply.text }, 'ui');
+        options.logger.info('web UI action', { action: 'plan-reply', plan: reply.id, seq: reply.seq, done: 'done' in reply });
+        return sendJson(res, 200, { message: 'done' in reply ? 'The agent writes the plan now.' : 'Reply sent.' });
+      }
+      const parsed = PlanStopSchema.safeParse(body);
+      if (!parsed.success) throw new RequestError(400, 'Name the planning session to stop');
+      requestPlanStop(project.ralphRoot, parsed.data.id, 'ui');
+      options.logger.info('web UI action', { action: 'plan-stop', plan: parsed.data.id });
+      return sendJson(res, 200, { message: 'The interview stops now.' });
+    } catch (cause) {
+      if (cause instanceof DaemonRequestError) throw new RequestError(409, cause.message);
+      if (cause instanceof PlanRequestError) throw new RequestError(cause.code === 'conflict' ? 409 : 400, cause.message);
       throw cause;
     }
   };
@@ -423,6 +480,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   let heartbeat: NodeJS.Timeout | undefined;
   let lastStatus: { view: StatusView; serialized: string } | null = null;
   let logFeed: { runId: string; tailer: LineTailer } | null = null;
+  let planFeed: { id: string; tailer: LineTailer } | null = null;
   let transcriptFeed: {
     runId: string;
     iteration: number;
@@ -452,7 +510,25 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     entries,
   });
 
-  /** Bring the feed up to date and tell the clients. True when the event file has more to read. */
+  /** Follow the latest planning session's conversation. True when it has more to read. */
+  const followPlan = (view: StatusView): boolean => {
+    const id = view.plan?.id;
+    if (!id) {
+      planFeed = null;
+      return false;
+    }
+    let reset = false;
+    if (planFeed?.id !== id) {
+      planFeed = { id, tailer: new LineTailer(conversationPath(project.ralphRoot, id)) };
+      reset = true;
+    }
+    const read = planFeed.tailer.read();
+    const lines = parseJsonLines<PlanLineView>(read.lines);
+    if (reset || read.reset || lines.length > 0) broadcast('plan', { id, reset: reset || read.reset, lines });
+    return read.more;
+  };
+
+  /** Bring the feed up to date and tell the clients. True when an event file has more to read. */
   const tick = (): boolean => {
     const view = status();
     const serialized = JSON.stringify(view);
@@ -461,6 +537,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       broadcast('status', view);
     }
 
+    // Before the run's: a project being planned may have no run at all.
+    const planMore = followPlan(view);
+    const runMore = followRun(view);
+    return planMore || runMore;
+  };
+
+  /** The latest run's log and the transcript of its session in progress. */
+  const followRun = (view: StatusView): boolean => {
     const runId = view.run?.runId;
     if (!runId) return false;
 
@@ -581,7 +665,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         clearInterval(heartbeat);
         timer = heartbeat = undefined;
         // Nobody is watching: the transcript need not be kept.
-        lastStatus = logFeed = transcriptFeed = null;
+        lastStatus = logFeed = transcriptFeed = planFeed = null;
       },
     };
     req.on('close', client.stop);
@@ -594,6 +678,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     clients.add(client);
     if (lastStatus) send('status', lastStatus.view);
     if (logFeed) send('log', { runId: logFeed.runId, reset: true, lines: project.log(logFeed.runId) });
+    if (planFeed) send('plan', { id: planFeed.id, reset: true, lines: readConversation(project.ralphRoot, planFeed.id) });
     if (transcriptFeed?.announced) {
       send('transcript', transcriptMessage(transcriptFeed, true, transcriptFeed.builder.all));
     }
