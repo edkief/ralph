@@ -162,11 +162,13 @@ export function planLive(state: PlanState, now: number = Date.now()): boolean {
   return now - Date.parse(state.updatedAt) < STALE_MS;
 }
 
-/** The session's state, or why it takes no reply or stop. */
+/** The session's state, or why it takes no reply or stop from afar. */
 function liveState(ralphRoot: string, id: string): PlanState {
   const state = readPlanState(ralphRoot, id);
   if (!state) throw new PlanRequestError(`No plan session ${id}`, 'conflict');
   if (!planLive(state)) throw new PlanRequestError('That planning session has ended', 'conflict');
+  // `ralph init` reads its terminal, not these files.
+  if (state.by === 'cli') throw new PlanRequestError('That interview is held in a terminal: answer or stop it there', 'conflict');
   return state;
 }
 

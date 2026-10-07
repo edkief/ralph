@@ -127,4 +127,16 @@ describe('the file-backed interview IO', () => {
     expect(failure(() => requestPlanStop(ralphRoot, 'nope', 'ui')).code).toBe('conflict');
     expect(livePlan(ralphRoot)).toBeUndefined();
   });
+
+  it('leaves an interview held in a terminal to the terminal', () => {
+    const ralphRoot = mkdtempSync(resolve(tmpdir(), 'ralph-plan-'));
+    const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'cli' });
+    try {
+      recorder.asking('you');
+      expect(failure(() => writePlanReply(ralphRoot, recorder.id, { seq: 1, text: 'hi' }, 'ui')).message).toMatch(/held in a terminal/);
+      expect(failure(() => requestPlanStop(ralphRoot, recorder.id, 'ui')).code).toBe('conflict');
+    } finally {
+      recorder.close();
+    }
+  });
 });

@@ -265,7 +265,7 @@ export async function controlDaemon(args: {
       case 'pause': {
         const run = new RalphProject(config.projectRoot, config.ralphDir).status().run;
         const plan = run?.live ? undefined : livePlan(ralphRoot);
-        if (plan) {
+        if (plan?.by === 'daemon') {
           // An interview has no iteration to finish or work to park: it stops.
           requestPlanStop(ralphRoot, plan.id, 'cli');
           process.stdout.write('The planning interview stops now.\n');
