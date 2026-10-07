@@ -19,7 +19,10 @@ import {
   requestShutdown,
   type DaemonState,
 } from './control.js';
-import { daemonLoop, markStopped, type BatchOutcome } from './daemon.js';
+import { daemonLoop, markStopped, type BatchOutcome, type PlanRequest } from './daemon.js';
+import { FileInterviewIO } from '../init/file-io.js';
+import { livePlan, PlanRecorder, requestPlanStop } from '../init/record.js';
+import { planWith, preparePlan } from '../init/session.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -36,7 +39,8 @@ export function ownerOf(config: Config): string | undefined {
  * `ralph daemon`: hold the opencode server and the web UI, and run a batch of
  * iterations whenever asked, until shut down. Each batch is a run of the loop
  * with a fresh budget and the configuration as it is then; however it ends,
- * the daemon goes back to idle.
+ * the daemon goes back to idle. Planning interviews asked for from the web UI
+ * run here too, on the same server.
  */
 export async function runDaemon(args: {
   config: Config;
@@ -107,12 +111,51 @@ export async function runDaemon(args: {
     return { status: result.status, message: result.message };
   };
 
+  const runPlan = async (request: PlanRequest, interrupt: AbortSignal): Promise<void> => {
+    const recorder = new PlanRecorder(ralphRoot, { id: request.id, mode: request.mode, by: 'daemon' });
+    const stop = new AbortController();
+    const signal = AbortSignal.any([interrupt, stop.signal]);
+    // The description came with the request: it answers the interview's first question.
+    const io = new FileInterviewIO(recorder, { signal, onStop: () => stop.abort(), seed: request.description });
+    try {
+      let planConfig: Config;
+      try {
+        // Scaffolded here, by the process that owns the project, then read as the scaffold left it.
+        planConfig = preparePlan(config.projectRoot, args.reload, request.mode);
+      } catch (cause) {
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        logger.warn('planning refused', { id: request.id, reason });
+        recorder.fail(reason);
+        return;
+      }
+      const outcome = await planWith({
+        client: server.client,
+        config: planConfig,
+        logger,
+        io,
+        signal,
+        replan: request.mode === 'replan',
+      });
+      logger.info('planning ended', {
+        id: request.id,
+        status: outcome.status,
+        turns: outcome.turns,
+        ...(outcome.status === 'planned' ? { tasks: outcome.tasks.length } : {}),
+        ...(outcome.status === 'failed' ? { reason: outcome.reason } : {}),
+      });
+    } finally {
+      io.close();
+      recorder.close();
+    }
+  };
+
   try {
     await daemonLoop({
       ralphRoot,
       logger,
       signal: shutdown.signal,
       runBatch,
+      runPlan,
       defaultIterations: config.maxIterations,
       ...(args.start ? { start: config.maxIterations } : {}),
       ...(ui ? { uiUrl: ui.url } : {}),
@@ -221,6 +264,13 @@ export async function controlDaemon(args: {
       }
       case 'pause': {
         const run = new RalphProject(config.projectRoot, config.ralphDir).status().run;
+        const plan = run?.live ? undefined : livePlan(ralphRoot);
+        if (plan) {
+          // An interview has no iteration to finish or work to park: it stops.
+          requestPlanStop(ralphRoot, plan.id, 'cli');
+          process.stdout.write('The planning interview stops now.\n');
+          return 0;
+        }
         if (!run?.live) {
           process.stderr.write('Nothing is running to pause.\n');
           return ExitCode.ConfigError;
@@ -265,6 +315,8 @@ function describe(config: Config, state: DaemonState | undefined): string {
     if (state.uiUrl) lines.push(`  web UI ${state.uiUrl}`);
     if (state.lastBatch && !state.batch) lines.push(`  last batch: ${state.lastBatch.status} — ${state.lastBatch.message}`);
   }
+  const plan = livePlan(ralphRootOf(config));
+  if (plan) lines.push(`Planning session ${plan.id} (${plan.mode === 'new' ? 'a new plan' : 'revising the plan'}): ${plan.status}`);
   if (run) {
     lines.push(
       `Latest run ${run.runId}: ${run.status}${run.live ? `, iteration ${run.iteration}/${run.maxIterations ?? '?'}` : ''}`,
