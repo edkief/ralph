@@ -9,6 +9,7 @@
   "retries": {
     "providerRetriesPerIteration": 3,
     "iterationRetries": 1,
+    "earlyStopResumes": 2,
     "backoffMs": 15000
   },
   "stall": {

@@ -24,14 +24,24 @@ const MAX_PROMPT_BYTES = 8_000;
 /** The most of an earlier handoff, or of the agent's last words, kept in a fallback. */
 const MAX_QUOTED_CHARS = 3_000;
 
-/** What an attempt ran out of, or `park` when a person parked the run. */
-export type CutShortBy = 'time' | 'context' | 'park';
+/**
+ * What an attempt ran out of, `park` when a person parked the run, or
+ * `early-stop` when the agent ended its turn with time left and the task not done.
+ */
+export type CutShortBy = 'time' | 'context' | 'park' | 'early-stop';
 
 /** For the attempt after one whose conversation outgrew the model's context window. */
 const CONTEXT_ADVICE = [
   `The last attempt filled the model's context window. Keep this one lean: read files in`,
   `ranges rather than whole, trim command output (\`| tail -n 50\`, quiet test reporters), avoid`,
   `re-reading what you already know, and commit each working step so little rides on one session.`,
+].join('\n');
+
+/** For the attempt after one whose agent ended its turn with the task unfinished. */
+const EARLY_STOP_ADVICE = [
+  `The last attempt ended its turn with work left, often to wait for a background job such as a test`,
+  `run. Nothing resumes a session once its turn ends: if the last messages mention a job that was still`,
+  `running, run it again, and wait for long commands in the foreground before ending your turn.`,
 ].join('\n');
 
 export function handoffDir(ralphDir: string): string {
@@ -98,7 +108,9 @@ export async function ensureHandoff(args: {
     ``,
     args.cutShortBy === 'park'
       ? `Written by Ralph: the run was parked before the agent left a complete handoff,`
-      : `Written by Ralph: the agent ran out of ${args.cutShortBy ?? 'time'} without leaving a complete handoff,`,
+      : args.cutShortBy === 'early-stop'
+        ? `Written by Ralph: the agent ended its turn before finishing the task, without leaving a complete handoff,`
+        : `Written by Ralph: the agent ran out of ${args.cutShortBy ?? 'time'} without leaving a complete handoff,`,
     `so this records what the loop could see.`,
     ``,
     `## Status`,
@@ -117,6 +129,7 @@ export async function ensureHandoff(args: {
     ``,
     `Read the agent's last messages below and any uncommitted changes, decide what is worth`,
     `keeping, then continue the task.`,
+    ...(args.cutShortBy === 'early-stop' ? [``, EARLY_STOP_ADVICE] : []),
     ...(args.cutShortBy === 'context' ? [``, CONTEXT_ADVICE] : []),
     ``,
     `## Dead ends`,

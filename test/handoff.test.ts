@@ -11,6 +11,7 @@ import {
   readHandoff,
 } from '../src/loop/handoff.js';
 import { buildWrapUpPrompt } from '../src/prompt/wrapup.js';
+import { buildResumePrompt } from '../src/prompt/resume.js';
 import { handoffCheck } from '../src/opencode/preflight.js';
 import { ConfigSchema } from '../src/config/schema.js';
 
@@ -109,6 +110,39 @@ describe('handoff', () => {
     expect(text).toContain('## An earlier handoff');
     expect(text).toContain('## Working tree\n\nClean.');
     expect(text).toContain('> From attempt one.');
+  });
+  it('says when the agent ended its turn early rather than running out of time', async () => {
+    const { root, head } = repo();
+    const path = handoffPath(root, '.ralph', 'TASK-1');
+
+    await ensureHandoff({
+      path, projectRoot: root, taskId: 'TASK-1', iteration: 2, since: Date.now(), sinceHead: head(),
+      reason: 'the agent ended its turn before finishing the task', cutShortBy: 'early-stop',
+      agentText: 'Both jobs are still running. Ending here.',
+    });
+
+    const text = readFileSync(path, 'utf8');
+    expect(missingHeadings(text)).toEqual([]);
+    expect(text).toContain('the agent ended its turn before finishing the task, without leaving a complete handoff');
+    expect(text).not.toContain('ran out of');
+    expect(text).toContain('Nothing resumes a session once its turn ends');
+    expect(text).toContain('> Both jobs are still running. Ending here.');
+  });
+});
+
+describe('buildResumePrompt', () => {
+  it('tells the agent nothing will wake it, to wait for its jobs and finish, or hand off', () => {
+    const prompt = buildResumePrompt({ taskId: 'TASK-7', handoffPath: '.ralph/handoff/TASK-7.md', leftMs: 12 * 60_000 });
+
+    expect(prompt).toContain('## Carry on with TASK-7');
+    expect(prompt).toContain('Nothing resumes you when a background job finishes');
+    expect(prompt).toContain('wait for it now');
+    expect(prompt).toContain('<promise>TASK-7:DONE</promise>');
+    expect(prompt).toContain('about 12 minutes');
+    expect(prompt).toContain('`.ralph/handoff/TASK-7.md`');
+    for (const heading of HANDOFF_HEADINGS) expect(prompt).toContain(heading);
+    expect(prompt).toContain('wip(TASK-7)');
+    expect(prompt).not.toContain('BLOCKED');
   });
 });
 

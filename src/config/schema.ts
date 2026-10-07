@@ -28,6 +28,12 @@ const RetriesSchema = z.object({
   providerRetriesPerIteration: z.number().int().min(0).default(3),
   /** Whole-iteration retries after a provider or timeout failure. */
   iterationRetries: z.number().int().min(0).default(1),
+  /**
+   * Times an agent that ends its turn with working time left, no promise tag
+   * and its task not passing is prompted to carry on in the same session,
+   * e.g. to wait for a background job. 0 moves on at once.
+   */
+  earlyStopResumes: z.number().int().min(0).default(2),
   backoffMs: z.number().int().min(0).default(10_000),
 });
 
