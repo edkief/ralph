@@ -130,7 +130,7 @@ export async function runDaemon(args: {
 }
 
 /** A loop already running here outside any daemon, as the web UI sees it. */
-function runInProgress(config: Config): string | undefined {
+export function runInProgress(config: Config): string | undefined {
   const run = new RalphProject(config.projectRoot, config.ralphDir).status().run;
   return run?.live ? `run ${run.runId} is in progress here; stop it first` : undefined;
 }

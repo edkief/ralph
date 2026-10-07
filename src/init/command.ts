@@ -5,8 +5,11 @@ import { ConsoleReporter } from '../report/console.js';
 import { ExitCode } from '../exit.js';
 import { scaffold, type ScaffoldResult } from './scaffold.js';
 import { planState } from './plan.js';
-import { DONE_COMMAND, runInterview, type InterviewOutcome } from './interview.js';
+import { DONE_COMMAND, type InterviewOutcome } from './interview.js';
 import { TerminalIO } from './terminal.js';
+import { PlanRecorder, RecordingIO } from './record.js';
+import { planningProblem, planWith } from './session.js';
+import { ownerOf, runInProgress } from '../daemon/command.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -42,10 +45,15 @@ export async function runInit(args: {
   }
 
   const { config, logger } = args.load();
-  if (resolve(config.projectRoot, config.ralphDir) !== resolve(config.projectRoot, RALPH_DIR)) {
-    process.stderr.write(
-      `ralphDir is set to ${config.ralphDir}, but init plans in ${RALPH_DIR}/. Unset ralphDir to plan with the agent.\n`,
-    );
+  const problem = planningProblem(config);
+  if (problem) {
+    process.stderr.write(`${problem}\n`);
+    return ExitCode.ConfigError;
+  }
+  // One process at a time holds the project; a daemon plans from the web UI.
+  const owner = ownerOf(config) ?? runInProgress(config);
+  if (owner) {
+    process.stderr.write(`Not planning: ${owner}\n`);
     return ExitCode.ConfigError;
   }
 
@@ -58,7 +66,9 @@ export async function runInit(args: {
   const reporter = new ConsoleReporter(out);
   const controller = new AbortController();
   const server = await startServer(config.server, { cwd: config.projectRoot, logger });
-  const io = new TerminalIO(out, process.stdin, () => controller.abort());
+  const terminal = new TerminalIO(out, process.stdin, () => controller.abort());
+  // Recorded under history/plans/, so the web UI shows the interview too.
+  const io = new RecordingIO(terminal, new PlanRecorder(resolve(config.projectRoot, config.ralphDir), { mode: existing ? 'replan' : 'new', by: 'cli' }));
 
   try {
     reporter.banner([
@@ -66,7 +76,7 @@ export async function runInit(args: {
       existing ? '  Say what should change; the agent will ask about the rest.' : '  Describe the project, then answer the agent\'s questions.',
       `  End a message with an empty line · ${DONE_COMMAND} to have it write the plan now · Ctrl-C to stop`,
     ]);
-    const outcome = await runInterview({
+    const outcome = await planWith({
       client: server.client,
       config,
       logger,
@@ -75,10 +85,11 @@ export async function runInit(args: {
       replan: existing,
     });
     // Leave raw mode before printing the summary.
-    io.close();
+    terminal.close();
     return report(outcome, reporter);
   } finally {
-    io.close();
+    terminal.close();
+    io.recorder.close();
     await server.stop();
   }
 }

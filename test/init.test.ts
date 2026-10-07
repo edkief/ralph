@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { relative, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { hostname } from 'node:os';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runInit } from '../src/init/command.js';
+import { writeDaemonState } from '../src/daemon/control.js';
+import { Logger } from '../src/report/logger.js';
+import { ExitCode } from '../src/exit.js';
 import { scaffold, TEMPLATES_DIR } from '../src/init/scaffold.js';
 import { loadConfig } from '../src/config/load.js';
 import { TaskStore } from '../src/tasks/store.js';
@@ -162,5 +167,55 @@ describe('scaffold', () => {
     mkdirSync(resolve(root, '.ralph'));
 
     expect(scaffold(root).status).toBe('scaffolded');
+  });
+});
+
+describe('ralph init beside a daemon', () => {
+  const tty = (stream: NodeJS.ReadStream | NodeJS.WriteStream, value: boolean | undefined) =>
+    Object.defineProperty(stream, 'isTTY', { value, configurable: true, writable: true });
+  const before = { stdin: process.stdin.isTTY, stdout: process.stdout.isTTY };
+  afterEach(() => {
+    vi.restoreAllMocks();
+    tty(process.stdin, before.stdin);
+    tty(process.stdout, before.stdout);
+  });
+
+  it('refuses to plan while a daemon holds the project, and records nothing', async () => {
+    const root = project();
+    scaffold(root);
+    const ralphRoot = resolve(root, '.ralph');
+    const now = new Date().toISOString();
+    writeDaemonState(ralphRoot, {
+      pid: process.pid,
+      hostname: hostname(),
+      startedAt: now,
+      updatedAt: now,
+      status: 'idle',
+      defaultIterations: 10,
+      batch: null,
+    });
+    // A terminal on both ends, so init would go on to the interview.
+    tty(process.stdin, true);
+    tty(process.stdout, true);
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const errors: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk));
+      return true;
+    });
+
+    const code = await runInit({
+      projectRoot: root,
+      interview: true,
+      replan: false,
+      load: () => ({
+        config: loadConfig({ projectRoot: root, env: {} }),
+        logger: new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WritableStream }),
+      }),
+    });
+
+    expect(code).toBe(ExitCode.ConfigError);
+    expect(errors.join('')).toMatch(/^Not planning: a daemon \(pid \d+\) runs this project/);
+    expect(existsSync(resolve(ralphRoot, 'history', 'plans'))).toBe(false);
   });
 });

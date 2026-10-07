@@ -9,6 +9,7 @@ import { TaskStore, type Task } from '../tasks/store.js';
 import { validatePlan } from './plan.js';
 import { TEMPLATES_DIR } from './scaffold.js';
 import type { OpencodeClient } from '../opencode/client.js';
+import type { OpencodeEvent } from '../opencode/events.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -40,6 +41,8 @@ export interface InterviewIO {
   note(text: string): void;
   /** The user's reply, or null when they quit. */
   ask(prompt: string): Promise<string | null>;
+  /** Turn `n` begins: the agent is at work. */
+  turn?(n: number): void;
 }
 
 export type InterviewOutcome = { turns: number; outsideChanges: string[] | null } & (
@@ -70,6 +73,8 @@ export async function runInterview(args: {
   signal: AbortSignal;
   replan?: boolean;
   templatesDir?: string;
+  /** Each turn's raw opencode events, for its record. */
+  onEvent?: (event: OpencodeEvent) => void;
 }): Promise<InterviewOutcome> {
   const { client, config, logger, io, signal, replan = false } = args;
   const templatesDir = args.templatesDir ?? TEMPLATES_DIR;
@@ -98,6 +103,7 @@ export async function runInterview(args: {
 
   while (turns < config.plan.maxTurns) {
     turns += 1;
+    io.turn?.(turns);
     const result = await runIteration({
       client,
       config: planConfig,
@@ -112,6 +118,7 @@ export async function runInterview(args: {
           if (shown) io.say(shown);
         },
         onTool: (tool, detail) => io.status(`${tool} ${detail}`.trim()),
+        ...(args.onEvent ? { onEvent: args.onEvent } : {}),
       },
       signal,
     });

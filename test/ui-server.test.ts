@@ -175,7 +175,10 @@ describe('web UI server', () => {
   });
 
   it('lists runs newest first, older ones from their summary', async () => {
-    await start(project());
+    const root = project();
+    // Planning sessions are kept beside the runs, and are not runs.
+    mkdirSync(resolve(root, '.ralph', 'history', 'plans', '20261001-120000'), { recursive: true });
+    await start(root);
     const { body } = await get<RunView[]>('/api/runs');
     expect(body.map((run) => run.runId)).toEqual([LIVE_RUN, OLD_RUN]);
     expect(body[1]).toMatchObject({ status: 'stalled', live: false, iteration: 3 });
