@@ -117,6 +117,7 @@ upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
 | 4 | Bad configuration or failed preflight |
 | 5 | Model provider or opencode server unusable |
 | 6 | Stalled: iterations stopped changing anything, or a task kept running out of time |
+| 7 | Push rejected: the remote branch has commits the local one does not (see [pushing](#configuration)) |
 | 130 | Interrupted, or stopped on request |
 
 Codes 1, 2, 3 and 6 mean a person is needed. A run that [waits for one](#when-ralph-needs-a-person)
@@ -523,6 +524,7 @@ See `templates/ralph.config.json` for a complete file.
   },
   "git": {
     "push": "never",               // never | iteration (after each commit) | end (once, when the run finishes)
+    "forcePush": false,            // overwrite a diverged remote branch, keeping a backup; false = stop the run
     "records": "end",              // when Ralph commits its records: end (of a run) | iteration | never
     "remote": "origin"
   },
@@ -554,7 +556,7 @@ server's default until you choose one.
 
 The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_ESCALATION`, `RALPH_ESCALATION_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
-`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
+`RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_FORCE_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
 `RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`,
 `RALPH_UI_PUSH`, `RALPH_UI_PUSH_SUBJECT`, `RALPH_UI_PUSH_URL`,
 `RALPH_COST_WATTS`, `RALPH_COST_PRICE_PER_KWH`, `RALPH_COST_CURRENCY`.
@@ -564,9 +566,35 @@ time zone. Containers usually run in UTC; set `TZ` (e.g. `TZ=Europe/Paris`) to s
 JSON logs always carry UTC ISO timestamps.
 
 The agent can never push: `git push` stays denied, so it cannot force-push or touch remotes.
-With `git.push` set, Ralph itself runs `git push <remote> HEAD` (never forced, never
-prompting for credentials). A failed push is logged and retried at the next opportunity;
-it does not stop the run.
+With `git.push` set, Ralph itself runs `git push <remote> HEAD`, never prompting for
+credentials. A push that fails (no network, no credentials, a timeout) is logged and retried
+at the next opportunity; it does not stop the run.
+
+The agent can still rewrite history locally, with an amend, a rebase or a reset over commits
+that were already pushed. Someone else may also push to the branch. Either way the remote
+branch then has commits the local one does not, and every push is rejected. Ralph fetches the
+remote branch to tell this apart from other failures, and then:
+
+- **By default** (`git.forcePush: false`) it stops the run as `push-rejected` (exit code 7),
+  even one that finished the backlog. The log and the run's message name the remote and local
+  tips and each commit only the remote has, marked by whether an equivalent patch (an amended
+  or rebased version of it) is in the local branch. Reconcile the two by hand, then run again.
+- **With `git.forcePush: true`** it overwrites the remote branch, for runs nobody watches. It
+  first keeps the old remote tip as a local ref, `refs/ralph/overwritten/<branch>/<timestamp>`,
+  and as a branch on the remote, `ralph/overwritten/<branch>-<timestamp>`, which survives
+  losing the machine. If the backup cannot be pushed, nothing is forced. The force-push carries
+  a lease on the tip it just fetched, so a commit pushed in the meantime is not lost either.
+  The warning lists each overwritten commit, flagging those `NOT in the new history`, and how
+  to get them back:
+
+  ```sh
+  git fetch origin ralph/overwritten/main-20261008T233000Z
+  git cherry-pick <sha>          # one commit
+  ```
+
+  Ralph never deletes the backup branches; remove them once you are done with them.
+
+`ralph stop --park` and **Park** with nothing running follow the same rule.
 
 ### Estimating cost
 
@@ -913,7 +941,8 @@ Git LFS is the way to keep more.
    and new files in the Ralph folder. Untracked files elsewhere (a stray `.env`, say) are left
    alone and listed in the log.
 3. Ralph's records are committed and the branch is pushed, whatever `git.push` says. A failed
-   push is logged; the run still ends `stopped`.
+   push is logged; the run still ends `stopped`, unless the remote branch has diverged (see
+   [pushing](#configuration)).
 
 With nothing running, `ralph stop --park`, or **Park** on the web UI's Overview, commits
 Ralph's records and pushes; work left uncommitted outside them stays as it is.
