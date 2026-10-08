@@ -99,6 +99,20 @@ export const PermissionRequestSchema = z.looseObject({
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 
 /**
+ * A form waiting on an answer: what opencode's `question` tool and an MCP
+ * server's request for input open. The asker waits until it is replied to or
+ * cancelled.
+ */
+export const FormCreatedSchema = z.looseObject({
+  form: z.looseObject({
+    id: z.string(),
+    sessionID: z.string(),
+    title: z.string().optional(),
+    metadata: z.looseObject({ kind: z.string().optional() }).optional(),
+  }),
+});
+
+/**
  * Not opencode's: Ralph records this in a turn's event file when the turn
  * starts work in a session, before any of the session's own events. It names
  * the turn's own sessions, which the event stream does not: `session.created`
@@ -183,10 +197,11 @@ function parseFrame(frame: string): OpencodeEvent | null {
   }
 }
 
-/** The session a session-scoped event belongs to. */
+/** The session a session-scoped event belongs to; a form event names it on the form. */
 export function sessionIdOf(event: OpencodeEvent): string | undefined {
-  const data = event.data as { sessionID?: unknown } | undefined;
-  return typeof data?.sessionID === 'string' ? data.sessionID : undefined;
+  const data = event.data as { sessionID?: unknown; form?: { sessionID?: unknown } } | undefined;
+  if (typeof data?.sessionID === 'string') return data.sessionID;
+  return typeof data?.form?.sessionID === 'string' ? data.form.sessionID : undefined;
 }
 
 /** A tool's name where the event carries one, else a generic `tool`. */

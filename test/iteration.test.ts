@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
 import { OpencodeClient } from '../src/opencode/client.js';
-import { joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
+import { FORM_CANCEL_MESSAGE, joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
@@ -22,7 +22,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'formMessage' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -352,6 +352,92 @@ describe('runIteration', () => {
 
     expect(result.status).toBe('progressed');
     expect(server?.interrupts).toBe(0);
+  });
+
+  describe('forms', () => {
+    // As opencode sends it: the session is named on the form, not on the event.
+    const form = (id: string, sessionID: string, kind = 'question') => ({
+      type: 'form.created',
+      raw: true,
+      data: { form: { id, sessionID, title: 'Questions', metadata: { kind }, fields: [] } },
+    });
+
+    it('cancels a form with a message and carries on', async () => {
+      const result = await iterate(
+        {
+          script: [
+            form('frm_1', 'ses_fake_1'),
+            { type: 'session.text.ended', data: { text: 'Two questions: …' } },
+            { type: 'session.execution.succeeded' },
+          ],
+        },
+        config(),
+      );
+
+      expect(result.status).toBe('progressed');
+      expect(server?.formCancels).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', message: FORM_CANCEL_MESSAGE }]);
+      expect(server?.interrupts).toBe(0);
+    });
+
+    it("cancels any kind of form, a subagent's too, but not another session's", async () => {
+      const result = await iterate(
+        {
+          script: [
+            { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_fake_1' } },
+            form('frm_mcp', 'ses_fake_1', 'mcp'),
+            form('frm_child', 'ses_child'),
+            form('frm_stranger', 'ses_stranger'),
+            { type: 'session.execution.succeeded' },
+          ],
+        },
+        config(),
+      );
+
+      expect(result.status).toBe('progressed');
+      expect(server?.formCancels.map((cancel) => cancel.formID)).toEqual(['frm_mcp', 'frm_child']);
+    });
+
+    it("sends the caller's message", async () => {
+      await iterate(
+        { script: [form('frm_1', 'ses_fake_1'), { type: 'session.execution.succeeded' }] },
+        config(),
+        { formMessage: 'Ask in your reply.' },
+      );
+
+      expect(server?.formCancels[0]?.message).toBe('Ask in your reply.');
+    });
+
+    it.each([404, 409])('carries on when the form is already settled (%i)', async (status) => {
+      const result = await iterate(
+        {
+          formCancelStatus: status,
+          script: [form('frm_1', 'ses_fake_1'), { type: 'session.execution.succeeded' }],
+        },
+        config(),
+      );
+
+      expect(result.status).toBe('progressed');
+      expect(server?.formCancelAttempts).toBe(1);
+    });
+
+    it('retries a cancel the server failed to take, then ends the turn', async () => {
+      const result = await iterate(
+        {
+          formCancelStatus: 500,
+          script: [
+            form('frm_1', 'ses_fake_1'),
+            // The agent is blocked on the form and never gets this far.
+            { after: 5_000, type: 'session.execution.succeeded' },
+          ],
+        },
+        config(),
+      );
+
+      expect(result.status).toBe('failed');
+      expect(result.error).toBe('Cancel of a question form was rejected by the server (500): cancel refused');
+      expect(server?.formCancelAttempts).toBe(2);
+      expect(server?.interrupts).toBe(1);
+    });
   });
 
   it('ignores events belonging to other sessions', async () => {

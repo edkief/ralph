@@ -150,6 +150,14 @@ export class OpencodeClient {
   }
 
   /**
+   * Cancel a form waiting on an answer. The asker gets `message` as the
+   * reason; without one, the question tool fails the tool call outright.
+   */
+  async cancelForm(sessionID: string, formID: string, message: string): Promise<void> {
+    await this.json('DELETE', `/api/session/${sessionID}/form/${formID}?message=${encodeURIComponent(message)}`);
+  }
+
+  /**
    * Subscribe to the server event stream.
    *
    * Connecting is awaited here rather than inside the generator: an async
