@@ -6,6 +6,8 @@ export interface ScriptedEvent {
   after?: number;
   type: string;
   data?: Record<string, unknown>;
+  /** Emit `data` as given, without the session id: a form event names it on the form. */
+  raw?: boolean;
 }
 
 export interface FakeServerOptions {
@@ -22,6 +24,8 @@ export interface FakeServerOptions {
   replyStatus?: number;
   /** Describe the permission reply body with this field in the spec; `decision` on the real server. */
   replyField?: string;
+  /** Answer form cancels with this status instead of accepting them. */
+  formCancelStatus?: number;
 }
 
 export interface FakeServer {
@@ -31,6 +35,10 @@ export interface FakeServer {
   replies: Array<{ requestID: string; reply: string }>;
   /** Reply requests received, accepted or not. */
   replyAttempts: number;
+  /** Forms the loop cancelled, in order. */
+  formCancels: Array<{ sessionID: string; formID: string; message: string | null }>;
+  /** Cancel requests received, accepted or not. */
+  formCancelAttempts: number;
   interrupts: number;
   /** The session each interrupt was for, in order. */
   interrupted: string[];
@@ -48,6 +56,8 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
   const state = {
     replies: [] as Array<{ requestID: string; reply: string }>,
     replyAttempts: 0,
+    formCancels: [] as Array<{ sessionID: string; formID: string; message: string | null }>,
+    formCancelAttempts: 0,
     interrupts: 0,
     interrupted: [] as string[],
     sessionsCreated: 0,
@@ -147,6 +157,19 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
       return json(res, {});
     }
 
+    const formMatch = /^\/api\/session\/([^/]+)\/form\/([^/]+)$/.exec(path);
+    if (formMatch && req.method === 'DELETE') {
+      state.formCancelAttempts += 1;
+      if (options.formCancelStatus) {
+        res.writeHead(options.formCancelStatus, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ _tag: 'FakeError', message: 'cancel refused' }));
+        return;
+      }
+      state.formCancels.push({ sessionID: formMatch[1]!, formID: formMatch[2]!, message: url.searchParams.get('message') });
+      res.writeHead(204).end();
+      return;
+    }
+
     res.writeHead(404).end('not found');
   });
 
@@ -165,7 +188,7 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
   function broadcast(event: ScriptedEvent): void {
     const payload = JSON.stringify({
       type: event.type,
-      data: { sessionID: state.sessionId, ...(event.data ?? {}) },
+      data: event.raw ? (event.data ?? {}) : { sessionID: state.sessionId, ...(event.data ?? {}) },
     });
     for (const listener of state.listeners) listener.write(`data: ${payload}\n\n`);
   }
@@ -181,6 +204,12 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     },
     get replyAttempts() {
       return state.replyAttempts;
+    },
+    get formCancels() {
+      return state.formCancels;
+    },
+    get formCancelAttempts() {
+      return state.formCancelAttempts;
     },
     get interrupts() {
       return state.interrupts;

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ExecutionEndedSchema,
+  FormCreatedSchema,
   PermissionRequestSchema,
   RetryScheduledSchema,
   StepEndedSchema,
@@ -90,6 +91,14 @@ export class TranscriptBuilder {
       if (!request) return [];
       const what = [request.action, ...request.resources].join(' ');
       return this.add({ ...base, id: this.nextId('permission'), kind: 'notice', level: 'info', text: `permission asked: ${what}` });
+    }
+
+    // Ralph cancels every form: nobody is there to answer it.
+    if (event.type === 'form.created') {
+      const form = readData(event, FormCreatedSchema)?.form;
+      if (!form) return [];
+      const what = [form.title, `(${form.metadata?.kind ?? 'form'})`].filter(Boolean).join(' ');
+      return this.add({ ...base, id: this.nextId('form'), kind: 'notice', level: 'info', text: `form cancelled: ${what}` });
     }
 
     switch (event.type) {

@@ -2,6 +2,7 @@ import { OpencodeApiError, type OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
   ExecutionEndedSchema,
+  FormCreatedSchema,
   PermissionRequestSchema,
   RetryScheduledSchema,
   SessionCreatedSchema,
@@ -82,6 +83,15 @@ export interface IterationHooks {
 export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;
 
 /**
+ * Why a form is cancelled: nobody is there to answer one during a turn. The
+ * agent gets this as its tool call's error.
+ */
+export const FORM_CANCEL_MESSAGE =
+  'Nobody can answer this: the session runs unattended, so never use the question tool. ' +
+  'Carry on with a sensible default and record the assumption, or, for a decision only a ' +
+  'person can make, output <promise>DECIDE:your question</promise> and stop.';
+
+/**
  * Run one agent turn: open a session (or continue `sessionId`), send the
  * prompt, and consume the event stream until the execution finishes or a
  * watchdog trips.
@@ -98,6 +108,8 @@ export async function runIteration(args: {
   sessionId?: string;
   /** Answers permission requests; defaults to the configured policy. */
   permissions?: PermissionPolicy;
+  /** Why a form opened during the turn is cancelled; defaults to `FORM_CANCEL_MESSAGE`. */
+  formMessage?: string;
   /**
    * When the iteration runs out of time or goes quiet, send this prompt into
    * the same session and give the agent `timeouts.wrapUpMs` to act on it,
@@ -270,6 +282,16 @@ export async function runIteration(args: {
         permissionFailure = await handlePermission(event, client, policy, logger);
         if (permissionFailure) {
           executionError = permissionFailure;
+          break;
+        }
+        watchdog.recordActivity();
+        continue;
+      }
+
+      if (event.type === 'form.created') {
+        const formFailure = await cancelForm(event, client, args.formMessage ?? FORM_CANCEL_MESSAGE, logger);
+        if (formFailure) {
+          executionError = formFailure;
           break;
         }
         watchdog.recordActivity();
@@ -493,8 +515,8 @@ function classify(args: {
   return 'progressed';
 }
 
-/** Tries at delivering a permission reply before the turn is given up on. */
-const PERMISSION_REPLY_ATTEMPTS = 2;
+/** Tries at delivering a permission reply or a form's cancel before the turn is given up on. */
+const REPLY_ATTEMPTS = 2;
 
 /**
  * The event payload is not documented to carry `parentID`, but the session
@@ -554,16 +576,56 @@ async function handlePermission(
         // The server says which field it rejected; without it a 400 is opaque.
         ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
       });
-      if (rejected || attempt >= PERMISSION_REPLY_ATTEMPTS) {
-        return describeReplyFailure(request.action, cause);
+      if (rejected || attempt >= REPLY_ATTEMPTS) {
+        return describeReplyFailure(`Permission reply for ${request.action}`, cause);
       }
     }
   }
 }
 
-function describeReplyFailure(action: string, cause: unknown): string {
+/**
+ * Cancel a form, which nobody can answer during a turn: its asker would wait
+ * on it for good. Returns why the cancel could not be delivered, if it could
+ * not, so the caller ends the turn rather than wait for the watchdog.
+ */
+async function cancelForm(
+  event: OpencodeEvent,
+  client: OpencodeClient,
+  message: string,
+  logger: Logger,
+): Promise<string | undefined> {
+  const form = readData(event, FormCreatedSchema)?.form;
+  if (!form) return undefined;
+  const kind = form.metadata?.kind ?? 'form';
+  logger.info('form cancelled', { kind, ...(form.title ? { title: form.title } : {}) });
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await client.cancelForm(form.sessionID, form.id, message);
+      return undefined;
+    } catch (cause) {
+      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      // Gone or already settled, by a person or an earlier attempt: nothing is waiting.
+      if (status === 404 || status === 409) {
+        logger.debug('form already settled', { id: form.id });
+        return undefined;
+      }
+      const rejected = status !== undefined && status >= 400 && status < 500;
+      logger.warn('form cancel failed', {
+        error: (cause as Error).message,
+        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+      });
+      if (rejected || attempt >= REPLY_ATTEMPTS) {
+        return describeReplyFailure(`Cancel of a ${kind} form`, cause);
+      }
+    }
+  }
+}
+
+/** `what` names the reply, e.g. `Permission reply for shell`. */
+function describeReplyFailure(what: string, cause: unknown): string {
   if (!(cause instanceof OpencodeApiError)) {
-    return `Permission reply for ${action} could not be delivered: ${(cause as Error).message}`;
+    return `${what} could not be delivered: ${(cause as Error).message}`;
   }
   let detail = cause.body;
   try {
@@ -572,7 +634,7 @@ function describeReplyFailure(action: string, cause: unknown): string {
     // Not JSON; the raw body is the best there is.
   }
   detail = detail.replace(/\s+/g, ' ').trim().slice(0, 200);
-  return `Permission reply for ${action} was rejected by the server (${cause.status})${detail ? `: ${detail}` : ''}`;
+  return `${what} was rejected by the server (${cause.status})${detail ? `: ${detail}` : ''}`;
 }
 
 function addUsage(
