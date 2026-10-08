@@ -27,6 +27,11 @@ function displayText(text: string): string {
 /** Typed by the user to have the agent stop asking and write the plan. */
 export const DONE_COMMAND = '/done';
 
+/** Why a form the planner opens is cancelled: its questions belong in its reply, which the owner answers. */
+export const PLAN_FORM_MESSAGE =
+  'Nobody can answer this form. Never use the question tool: ask your questions in your reply ' +
+  'text and end your turn, and the owner will answer them.';
+
 const WRITE_NOW =
   'Stop asking questions. Write the plan now, recording anything still open under Assumptions ' +
   'in the PRD, then summarise it and emit <promise>PLAN:DONE</promise>.';
@@ -111,6 +116,7 @@ export async function runInterview(args: {
       title: replan ? 'ralph init: replan' : 'ralph init: plan',
       ...(sessionId ? { sessionId } : {}),
       permissions,
+      formMessage: PLAN_FORM_MESSAGE,
       logger,
       hooks: {
         onText: (text) => {

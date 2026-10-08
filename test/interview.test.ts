@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
 import { writePlan } from './helpers/plan.js';
 import { OpencodeClient } from '../src/opencode/client.js';
-import { runInterview, type InterviewIO } from '../src/init/interview.js';
+import { PLAN_FORM_MESSAGE, runInterview, type InterviewIO } from '../src/init/interview.js';
 import { scaffold } from '../src/init/scaffold.js';
 import { PlanRecorder, readConversation, readPlanState, RecordingIO } from '../src/init/record.js';
 import { planWith } from '../src/init/session.js';
@@ -111,6 +111,25 @@ describe('runInterview', () => {
     expect(server?.prompts[0]?.['model']).toEqual({ providerID: 'big', modelID: 'planner' });
 
     expect(user.said).toEqual(['1. Which stack? (default: Node)', 'Plan: TASK-1 setup, TASK-2 todos.']);
+  });
+
+  it('cancels a question form with a message to ask in the reply, which is then relayed', async () => {
+    const root = project();
+    const user = new ScriptedUser(['A todo app for my team.']);
+
+    await interview(root, config(root), user, {
+      script: [
+        {
+          type: 'form.created',
+          raw: true,
+          data: { form: { id: 'frm_1', sessionID: 'ses_fake_1', title: 'Questions', metadata: { kind: 'question' } } },
+        },
+        ...say('1. Which stack? (default: Node)'),
+      ],
+    });
+
+    expect(server?.formCancels).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', message: PLAN_FORM_MESSAGE }]);
+    expect(user.said).toEqual(['1. Which stack? (default: Node)']);
   });
 
   it('falls back to the loop model when no planning model is set', async () => {
