@@ -94,6 +94,7 @@ function project(): string {
       taskId: 'TASK-1',
       result: { status: 'progressed', durationMs: 60_000, toolCalls: 4, usage: { input: 900, output: 100 }, compactions: 0 },
       delta: { productive: true, committed: true, tasksPassedDelta: 1 },
+      confirm: { verdict: 'confirmed', doubt: 'the attempt ran out of time', durationMs: 20_000 },
       startedAt: '2026-09-30T12:00:00.000Z',
       endedAt: '2026-09-30T12:01:00.000Z',
     }),
@@ -262,7 +263,15 @@ describe('web UI server', () => {
     await start(project());
     const { body } = await get<RunDetail>(`/api/runs/${LIVE_RUN}`);
     expect(body.iterations).toMatchObject([
-      { iteration: 1, taskId: 'TASK-1', status: 'progressed', tokens: 1000, committed: true, tasksPassedDelta: 1 },
+      {
+        iteration: 1,
+        taskId: 'TASK-1',
+        status: 'progressed',
+        tokens: 1000,
+        committed: true,
+        tasksPassedDelta: 1,
+        confirm: { verdict: 'confirmed', doubt: 'the attempt ran out of time' },
+      },
       { iteration: 2, taskId: 'TASK-2', status: 'running' },
     ]);
   });

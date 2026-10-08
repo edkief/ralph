@@ -699,6 +699,15 @@ function iterationView(record: IterationRecord): IterationView {
     tasksPassedDelta: delta.tasksPassedDelta,
     compactions: result.compactions ?? 0,
     ...(record.handoff ? { handoff: record.handoff } : {}),
+    ...(record.confirm
+      ? {
+          confirm: {
+            verdict: record.confirm.verdict,
+            doubt: record.confirm.doubt,
+            ...(record.confirm.reason ? { reason: record.confirm.reason } : {}),
+          },
+        }
+      : {}),
     ...(result.error ? { error: result.error } : {}),
   };
 }

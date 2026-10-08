@@ -170,6 +170,14 @@ export function Overview({ status }: { status: StatusView }) {
                       {iteration.tasksPassedDelta > 0 ? <span className="pill good">+{iteration.tasksPassedDelta} task</span> : null}
                       {iteration.compactions > 0 ? <span className="pill">compacted ×{iteration.compactions}</span> : null}
                       {iteration.handoff ? <span className="pill warn">handoff</span> : null}
+                      {iteration.confirm ? (
+                        <span
+                          className={`pill ${iteration.confirm.verdict === 'confirmed' ? 'good' : 'warn'}`}
+                          title={`Marked passing, but ${iteration.confirm.doubt}${iteration.confirm.reason ? `; reopened: ${iteration.confirm.reason}` : ''}`}
+                        >
+                          {iteration.confirm.verdict}
+                        </span>
+                      ) : null}
                       </div>
                     </td>
                   </tr>
