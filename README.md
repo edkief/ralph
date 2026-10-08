@@ -40,6 +40,8 @@ Then, in a terminal, it starts an interview with the configured opencode agent:
 1. You describe the project in a few sentences.
 2. The agent reads the repository and asks what it still needs to know: goals, scope,
    stack, what done looks like. It asks a few questions at a time and suggests defaults.
+   It asks in its message, not with opencode's question tool: Ralph cancels that tool's
+   form and tells the agent to ask in its reply instead.
 3. It writes `prd/PRD.md`, `tasks.json` and one spec per task in `tasks/`, sized so each
    task fits one loop iteration.
 4. Ralph checks the result: task ids the loop can recognise, a spec with acceptance criteria
@@ -608,7 +610,7 @@ Ralph spawns `opencode serve` (or attaches to one with `server.url`), then per i
 1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
 2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.
 3. Opens a session, subscribes to `/api/event`, and sends the prompt.
-4. Consumes the SSE stream, answering permission requests from policy.
+4. Consumes the SSE stream, answering permission requests from policy and cancelling forms.
 5. Snapshots git and the task list before and after, and compares.
 
 Pinning the task matters for smaller self-hosted models: "work on TASK-7" is a far more
@@ -787,6 +789,13 @@ server will not take an answer, the agent would wait on its tool call for good, 
 interrupts the session and ends the iteration as `failed`, with the server's reason in the log.
 A failure that is not an outright rejection is retried once first; a request that is already
 gone (answered elsewhere) is ignored.
+
+Forms are cancelled. opencode's `question` tool and an MCP server asking for input open a form
+and wait for an answer, which nobody gives during a turn, so Ralph cancels each one, in the
+session or a subagent's, with a message the agent gets as the tool's error. In the loop it says
+to carry on with a sensible default or, for a decision only a person can make, to emit
+`DECIDE`. While planning it says to ask in the reply. The transcript shows a notice for each.
+A cancel the server will not take ends the iteration as `failed`, like a permission reply.
 
 ### Assessing a task before it starts
 
