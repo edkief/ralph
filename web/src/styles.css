@@ -830,6 +830,71 @@ button.button {
   margin-top: 6px;
 }
 
+/* ── Planning ───────────────────────────────────────────────────────── */
+
+.plan-session .panel-title {
+  flex-wrap: wrap;
+}
+
+.plan-session .panel-title > span:not(.badge, .panel-subtitle) {
+  white-space: nowrap;
+}
+
+.plan-chat {
+  list-style: none;
+  margin: 0;
+  padding: 4px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-line {
+  max-width: min(720px, 92%);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.plan-line.owner {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  white-space: pre-wrap;
+}
+
+.plan-line.agent {
+  align-self: flex-start;
+  background: var(--code-bg);
+}
+
+.plan-line.ralph {
+  align-self: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-line.activity {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-problems {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--bad);
+}
+
 /* ── Transcript ─────────────────────────────────────────────────────── */
 
 .transcript-view {

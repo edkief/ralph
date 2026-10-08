@@ -211,6 +211,8 @@ export function StopButtons({ status }: { status: StatusView }) {
   const run = status.run;
   const actions = status.actions;
   if (!actions?.enabled || run?.status === 'waiting') return null;
+  // An interview has nothing to park: it is stopped from the Plan tab.
+  if (status.daemon?.live && status.daemon.status === 'planning') return null;
   const live = run?.live === true;
   if (!live && !actions.park) return null;
   const daemon = status.daemon?.live === true;

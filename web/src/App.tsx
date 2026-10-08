@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useLive, useNow, type StatusView } from './api';
 import { formatDuration, runBadge, statusLabel } from './format';
 import { Overview } from './views/Overview';
+import { Plan } from './views/Plan';
 import { pendingTitle } from './views/Pending';
 import { Tasks } from './views/Tasks';
 import { Metrics } from './views/Metrics';
@@ -17,9 +18,12 @@ export function App() {
   const route = useRoute();
   const status = live.status;
 
+  // The planner's question, when the owner answers it here.
+  const planAsks = status?.plan?.live === true && status.plan.status === 'asking' && status.plan.by === 'daemon';
+
   useEffect(() => {
     const run = status?.run;
-    const state = status?.pending?.waiting
+    const state = status?.pending?.waiting || planAsks
       ? '⏸ needs you'
       : run?.live
         ? `▶ ${run.iteration}/${run.maxIterations ?? '?'}`
@@ -27,7 +31,7 @@ export function App() {
           ? statusLabel(run.status)
           : '';
     document.title = status ? `${status.project} · ${state || 'ralph'}` : 'Ralph';
-  }, [status]);
+  }, [status, planAsks]);
 
   // The header wraps on narrow screens; views that fill the window need its height.
   const top = useRef<HTMLDivElement>(null);
@@ -56,6 +60,8 @@ export function App() {
               >
                 {tab.label}
                 {tab.id === 'overview' && status?.pending ? <span className="needs-dot" aria-label="needs you" /> : null}
+                {tab.id === 'plan' && planAsks ? <span className="needs-dot" aria-label="needs you" /> : null}
+                {tab.id === 'plan' && status?.plan?.live && !planAsks ? <span className="live-dot" aria-label="live" /> : null}
                 {tab.id === 'transcript' && status?.run?.live && status.run.status !== 'waiting' ? <span className="live-dot" aria-label="live" /> : null}
               </a>
             ))}
@@ -67,11 +73,17 @@ export function App() {
           <a className="banner warn needs-you" href={href('overview')}>
             <strong>Ralph needs you.</strong> {pendingTitle(status.pending)} →
           </a>
+        ) : planAsks && route.tab !== 'plan' ? (
+          <a className="banner warn needs-you" href={href('plan')}>
+            <strong>Ralph needs you.</strong> The planner has a question →
+          </a>
         ) : null}
         {!status ? (
           <div className="empty">{live.connected ? 'Loading…' : 'Connecting to Ralph…'}</div>
         ) : route.tab === 'overview' ? (
           <Overview status={status} />
+        ) : route.tab === 'plan' ? (
+          <Plan status={status} live={live.plan} />
         ) : route.tab === 'tasks' ? (
           <Tasks status={status} />
         ) : route.tab === 'metrics' ? (

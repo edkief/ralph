@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,8 @@ import { writePlan } from './helpers/plan.js';
 import { OpencodeClient } from '../src/opencode/client.js';
 import { runInterview, type InterviewIO } from '../src/init/interview.js';
 import { scaffold } from '../src/init/scaffold.js';
+import { PlanRecorder, readConversation, readPlanState, RecordingIO } from '../src/init/record.js';
+import { planWith } from '../src/init/session.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 
@@ -48,6 +50,7 @@ class ScriptedUser implements InterviewIO {
   readonly said: string[] = [];
   readonly notes: string[] = [];
   readonly asked: string[] = [];
+  turn?: (n: number) => void;
 
   constructor(private readonly answers: Array<string | null>) {}
 
@@ -264,5 +267,57 @@ describe('runInterview', () => {
     expect(user.asked[0]).toBe('What should change in the plan?');
     expect(promptText(0)).toContain('Revising an existing plan.');
     expect(promptText(0)).toContain('Add a search task.');
+  });
+
+  it('numbers its turns and passes their events on', async () => {
+    const root = project();
+    const turns: number[] = [];
+    const events: string[] = [];
+    const user = new ScriptedUser(['An app.', 'Node.']);
+    user.turn = (n) => turns.push(n);
+    server = await startFakeServer({
+      onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),
+      script: (count) => (count === 1 ? say('Which stack?') : say(DONE)),
+    });
+    const client = new OpencodeClient({ baseUrl: server.url });
+    await runInterview({ client, config: config(root), logger, io: user, signal: new AbortController().signal, onEvent: (event) => events.push(event.type) });
+
+    expect(turns).toEqual([1, 2]);
+    expect(events.filter((type) => type === 'session.text.ended')).toHaveLength(2);
+  });
+});
+
+describe('a recorded interview', () => {
+  it('keeps the conversation, each turn\'s events and the outcome under history/plans/', async () => {
+    const root = project();
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'cli' });
+    const io = new RecordingIO(new ScriptedUser(['An app.', '/done']), recorder);
+    server = await startFakeServer({
+      onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),
+      script: (count) => (count === 1 ? say('Which stack?') : say(DONE)),
+    });
+    const client = new OpencodeClient({ baseUrl: server.url });
+    const outcome = await planWith({ client, config: config(root, { model: 'm/x' }), logger, io, signal: new AbortController().signal, replan: false });
+    expect(outcome.status).toBe('planned');
+
+    const ralphRoot = resolve(root, '.ralph');
+    expect(readConversation(ralphRoot, recorder.id).map(({ role, text }) => [role, text])).toEqual([
+      ['owner', 'An app.'],
+      ['agent', 'Which stack?'],
+      ['owner', '/done'],
+      ['agent', 'Plan: TASK-1 setup, TASK-2 todos.'],
+    ]);
+    expect(readPlanState(ralphRoot, recorder.id)).toMatchObject({
+      status: 'planned',
+      by: 'cli',
+      seq: 2,
+      turn: 2,
+      model: 'm/x',
+      prompt: null,
+      outcome: { tasks: [{ id: 'TASK-1' }, { id: 'TASK-2' }], outsideChanges: [] },
+    });
+    const events = readFileSync(resolve(recorder.dir, 'turn-001.events.jsonl'), 'utf8');
+    expect(events).toContain('session.text.ended');
+    expect(existsSync(resolve(recorder.dir, 'turn-002.events.jsonl'))).toBe(true);
   });
 });

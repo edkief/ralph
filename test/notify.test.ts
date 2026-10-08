@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { detect, type Seen } from '../src/ui/notify.js';
-import type { IterationView, PendingView, RunDetail, RunView, StatusView, TaskView } from '../src/ui/types.js';
+import type { IterationView, PendingView, PlanSummary, RunDetail, RunView, StatusView, TaskView } from '../src/ui/types.js';
 
 const RUN = '20261005-100000';
 
@@ -24,7 +24,7 @@ const run = (patch: Partial<RunView> = {}): RunView => ({
 
 const task = (id: string, passes: boolean): TaskView => ({ id, title: `Do ${id}`, passes });
 
-function status(patch: { run?: RunView | null; pending?: PendingView | null; tasks?: TaskView[] } = {}): StatusView {
+function status(patch: { run?: RunView | null; pending?: PendingView | null; tasks?: TaskView[]; plan?: PlanSummary | null } = {}): StatusView {
   const items = patch.tasks ?? [task('TASK-1', true), task('TASK-2', false), task('TASK-3', false)];
   return {
     project: 'shop',
@@ -34,6 +34,8 @@ function status(patch: { run?: RunView | null; pending?: PendingView | null; tas
     run: patch.run === undefined ? run() : patch.run,
     pending: patch.pending ?? null,
     daemon: null,
+    plan: patch.plan ?? null,
+    planState: 'written',
   };
 }
 
@@ -74,7 +76,7 @@ describe('detecting what to notify', () => {
   it('takes the watermark from the present the first time, and sends nothing', () => {
     const first = detect(null, status({ pending: pending(), run: run({ live: false, status: 'complete' }) }), detail([iteration(1)]));
     expect(first.notifications).toEqual([]);
-    expect(first.seen).toEqual({ pending: `${RUN}-1`, runEnded: RUN, iteration: { runId: RUN, n: 1 }, passed: ['TASK-1'] });
+    expect(first.seen).toEqual({ pending: `${RUN}-1`, runEnded: RUN, iteration: { runId: RUN, n: 1 }, passed: ['TASK-1'], plan: null });
   });
 
   it('tells a person about a new request once', () => {
@@ -144,5 +146,49 @@ describe('detecting what to notify', () => {
     const unread = detect(now(), broken, null);
     expect(unread.notifications).toEqual([]);
     expect(unread.seen.passed).toEqual(['TASK-1']);
+  });
+});
+
+describe('the planner asking', () => {
+  const plan = (patch: Partial<PlanSummary> = {}): PlanSummary => ({
+    id: '20261007-120000',
+    mode: 'new',
+    by: 'daemon',
+    status: 'asking',
+    live: true,
+    seq: 1,
+    prompt: 'you',
+    activity: null,
+    turn: 1,
+    maxTurns: 30,
+    model: null,
+    startedAt: '2026-10-07T12:00:00.000Z',
+    ...patch,
+  });
+  const quiet = (view: Partial<Parameters<typeof status>[0]> = {}) => status({ run: null, ...view });
+
+  it('tells each question once, as a request', () => {
+    const before = detect(null, quiet(), null).seen;
+    const asked = detect(before, quiet({ plan: plan() }), null);
+    expect(asked.notifications).toEqual([
+      { event: 'request', payload: { title: 'shop: Ralph needs you', body: 'The planner has a question', tag: 'plan-20261007-120000', path: '#/plan' } },
+    ]);
+    expect(detect(asked.seen, quiet({ plan: plan() }), null).notifications).toEqual([]);
+    // Working on the reply, then the next question.
+    const working = detect(asked.seen, quiet({ plan: plan({ status: 'working', prompt: null }) }), null);
+    expect(working.notifications).toEqual([]);
+    expect(detect(working.seen, quiet({ plan: plan({ seq: 2 }) }), null).notifications).toHaveLength(1);
+  });
+
+  it('says nothing of a question asked in a terminal, or of one asked before', () => {
+    expect(detect(detect(null, quiet(), null).seen, quiet({ plan: plan({ by: 'cli' }) }), null).notifications).toEqual([]);
+    const start = detect(null, quiet({ plan: plan() }), null);
+    expect(start.notifications).toEqual([]);
+    expect(detect(start.seen, quiet({ plan: plan() }), null).notifications).toEqual([]);
+  });
+
+  it('reads a watermark written before planning was', () => {
+    const old: Seen = { pending: null, runEnded: null, iteration: null, passed: ['TASK-1'] };
+    expect(detect(old, quiet({ plan: plan() }), null).notifications).toHaveLength(1);
   });
 });

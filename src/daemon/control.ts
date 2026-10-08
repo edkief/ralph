@@ -3,6 +3,8 @@ import { hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { readAs, writeAtomic } from '../human/request.js';
+import { planState } from '../init/plan.js';
+import { MAX_PLAN_TEXT, newPlanId, PLAN_MODES, type PlanMode } from '../init/record.js';
 
 /**
  * How a daemon and whoever steers it talk: the daemon keeps where it stands
@@ -10,9 +12,10 @@ import { readAs, writeAtomic } from '../human/request.js';
  * from `history/daemon-request.json`. Files, as for stop and respond, so the
  * web UI or `ralph daemon run` may be another process or container that shares
  * only the Ralph folder. Pausing a batch is the stop request a run already takes.
+ * It also holds planning interviews for the web UI, one thing at a time.
  */
 
-export const DAEMON_STATUSES = ['idle', 'running', 'stopping', 'stopped'] as const;
+export const DAEMON_STATUSES = ['idle', 'running', 'planning', 'stopping', 'stopped'] as const;
 export type DaemonStatus = (typeof DAEMON_STATUSES)[number];
 
 const DaemonStateSchema = z.object({
@@ -22,7 +25,7 @@ const DaemonStateSchema = z.object({
   startedAt: z.string(),
   /** Rewritten every few seconds while the daemon is up. */
   updatedAt: z.string(),
-  /** `idle` between batches, `running` a batch, `stopping` on its way out, `stopped` once gone. */
+  /** `idle` between batches, `running` a batch, `planning` an interview, `stopping` on its way out, `stopped` once gone. */
   status: z.enum(DAEMON_STATUSES),
   /** Iterations a run request without a number gets. */
   defaultIterations: z.number().int().positive(),
@@ -37,6 +40,14 @@ export type DaemonState = z.infer<typeof DaemonStateSchema>;
 const DaemonRequestSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('run'), iterations: z.number().int().positive().max(10_000).optional() }),
   z.object({ kind: z.literal('shutdown') }),
+  z.object({
+    kind: z.literal('plan'),
+    /** The planning session's id, known to whoever asked before the daemon takes it up. */
+    id: z.string().regex(/^[\w.-]+$/),
+    mode: z.enum(PLAN_MODES),
+    /** The project's description, or what should change in the plan. */
+    description: z.string().min(1).max(MAX_PLAN_TEXT),
+  }),
 ]);
 export type DaemonRequest = z.infer<typeof DaemonRequestSchema>;
 
@@ -99,11 +110,39 @@ export class DaemonRequestError extends Error {}
 export function requestRun(ralphRoot: string, iterations: number | undefined, by: 'ui' | 'cli'): DaemonState {
   const state = liveDaemon(ralphRoot);
   if (!state) throw new DaemonRequestError('No daemon is running for this project: start one with `ralph daemon`');
-  if (state.status !== 'idle') {
-    throw new DaemonRequestError('The daemon is already running a batch: pause it first, or wait for it to end');
-  }
+  if (state.status !== 'idle') throw new DaemonRequestError(busy(state));
   writeDaemonRequest(ralphRoot, { kind: 'run', ...(iterations !== undefined ? { iterations } : {}) }, by);
   return state;
+}
+
+/**
+ * Ask the project's daemon to plan the project with the owner: a new plan
+ * where there is none yet, or a revision of the one there is. Refused unless
+ * a daemon is up and idle. Returns the session's id.
+ */
+export function requestPlan(
+  project: { projectRoot: string; ralphDir: string },
+  mode: PlanMode,
+  description: string,
+  by: 'ui' | 'cli',
+): { daemon: DaemonState; id: string } {
+  const ralphRoot = resolve(project.projectRoot, project.ralphDir);
+  const state = liveDaemon(ralphRoot);
+  if (!state) throw new DaemonRequestError('No daemon is running for this project: start one with `ralph daemon`, or plan with `ralph init` in a terminal');
+  if (state.status !== 'idle') throw new DaemonRequestError(busy(state));
+  if (!description.trim()) throw new DaemonRequestError(mode === 'new' ? 'Describe the project first' : 'Say what should change first');
+  const written = planState(project.projectRoot, project.ralphDir) === 'written';
+  if (mode === 'new' && written) throw new DaemonRequestError('The project has a plan already: revise it instead');
+  if (mode === 'replan' && !written) throw new DaemonRequestError('There is no plan to revise yet: plan the project first');
+  const id = newPlanId(ralphRoot);
+  writeDaemonRequest(ralphRoot, { kind: 'plan', id, mode, description }, by);
+  return { daemon: state, id };
+}
+
+function busy(state: DaemonState): string {
+  return state.status === 'planning'
+    ? 'The daemon is planning the project: finish or stop the interview first'
+    : 'The daemon is already running a batch: pause it first, or wait for it to end';
 }
 
 /** Ask the project's daemon to stop whatever it runs and exit. */

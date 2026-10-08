@@ -38,6 +38,7 @@ const StoreSchema = z.object({
       runEnded: z.string().nullable(),
       iteration: z.object({ runId: z.string(), n: z.number() }).nullable(),
       passed: z.array(z.string()),
+      plan: z.string().nullable().optional(),
     })
     .nullable(),
 });

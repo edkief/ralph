@@ -3,7 +3,8 @@ import { hostname } from 'node:os';
 import { basename, extname, relative, resolve, sep } from 'node:path';
 import { TaskStore } from '../tasks/store.js';
 import { readSplitRecords } from '../tasks/splits.js';
-import { TASK_ID } from '../init/plan.js';
+import { planState, TASK_ID } from '../init/plan.js';
+import { listPlanIds, planEnded, planLive, readConversation, readPlanState, type PlanState } from '../init/record.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
 import { daemonLive, readDaemonState } from '../daemon/control.js';
 import { LineTailer, parseJsonLines } from './tail.js';
@@ -22,6 +23,8 @@ import type {
   LogLine,
   MetricsView,
   PendingView,
+  PlanSummary,
+  PlanView,
   RunDetail,
   RunView,
   SplitView,
@@ -57,8 +60,12 @@ export const LOG_TAIL_BYTES = 4 * 1024 * 1024;
  * events for at most the inactivity timeout, which defaults to 3 minutes.
  */
 const STALE_MS = 15 * 60_000;
+/** How long a finished planning session stays on the status, for its outcome to be seen. */
+const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
+/** Where planning sessions are kept in the history, as `history/plans/<id>/`. */
+const PLANS_DIR = 'plans';
 /** A run id as `newRunId` makes it: the start in the local time of the machine that ran it. */
 const RUN_ID_TIME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
 const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
@@ -104,7 +111,38 @@ export class RalphProject {
       run: latest ? this.run(latest) : null,
       pending: this.pendingView(),
       daemon: this.daemon(),
+      plan: this.currentPlan(),
+      planState: planState(this.projectRoot, this.ralphDir),
     };
+  }
+
+  /** The latest planning session, while it goes on or for a day after it ended. */
+  private currentPlan(): PlanSummary | null {
+    const id = listPlanIds(this.ralphRoot)[0];
+    const state = id ? readPlanState(this.ralphRoot, id) : undefined;
+    if (!state) return null;
+    const summary = planSummary(state);
+    return summary.live || Date.now() - Date.parse(state.updatedAt) < PLAN_SHOWN_MS ? summary : null;
+  }
+
+  /** Planning sessions, newest first. */
+  plans(): PlanSummary[] {
+    return listPlanIds(this.ralphRoot).flatMap((id) => {
+      const state = readPlanState(this.ralphRoot, id);
+      return state ? [planSummary(state)] : [];
+    });
+  }
+
+  /** A planning session with its conversation. */
+  plan(id: string): PlanView {
+    let state: PlanState | undefined;
+    try {
+      state = readPlanState(this.ralphRoot, id);
+    } catch {
+      // Not an id.
+    }
+    if (!state) throw new NotFoundError(`No planning session ${id}`);
+    return { ...planSummary(state), conversation: readConversation(this.ralphRoot, id) };
   }
 
   /** The project's daemon, without its heartbeat, so a live view changes only when it does. */
@@ -203,7 +241,8 @@ export class RalphProject {
     for (const root of [this.historyRoot, this.journalRoot]) {
       if (!existsSync(root)) continue;
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory() && RUN_ID.test(entry.name)) ids.add(entry.name);
+        // Planning sessions keep a folder of their own beside the runs.
+        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && entry.name === PLANS_DIR)) ids.add(entry.name);
       }
     }
     // By when they started, not by id: an id is in the local time of the
@@ -617,6 +656,32 @@ export class RalphProject {
     const touched = safeReaddir(dir).map((name) => statSync(resolve(dir, name), { throwIfNoEntry: false })?.mtimeMs ?? 0);
     return Date.now() - Math.max(0, ...touched) < STALE_MS;
   }
+}
+
+/**
+ * A planning session as the UI shows it, without its heartbeat, so a live
+ * view changes only when it does. One whose process is gone mid-way ended
+ * as `aborted`, as a stopped one does.
+ */
+function planSummary(state: PlanState): PlanSummary {
+  const live = planLive(state);
+  const ended = live || planEnded(state.status) ? state.status : 'aborted';
+  return {
+    id: state.id,
+    mode: state.mode,
+    by: state.by,
+    status: ended,
+    live,
+    seq: state.seq,
+    prompt: live ? state.prompt : null,
+    activity: live ? state.activity : null,
+    turn: state.turn,
+    maxTurns: state.maxTurns,
+    model: state.model,
+    startedAt: state.startedAt,
+    // As written: optional fields are left out, never undefined.
+    ...(state.outcome ? { outcome: state.outcome as NonNullable<PlanSummary['outcome']> } : {}),
+  };
 }
 
 function iterationView(record: IterationRecord): IterationView {

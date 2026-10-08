@@ -53,7 +53,8 @@ Daemon options:
   -n, --max-iterations <n>  Iterations in a batch when a run request names none;
                             with \`ralph daemon run\`, the iterations to run
       --no-ui               Serve no web UI (it is on by default)
-      --now                 With \`ralph daemon pause\`: interrupt the iteration in progress
+      --now                 With \`ralph daemon pause\`: interrupt the iteration in progress.
+                            Pausing during a planning interview stops it, whatever the option
       --park                With \`ralph daemon pause\`: park the run (see Stop options)
 
 Stop options:

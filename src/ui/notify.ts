@@ -13,6 +13,8 @@ export interface Seen {
   iteration: { runId: string; n: number } | null;
   /** Tasks known to pass. */
   passed: string[];
+  /** The last planner's question told, as `<session>:<seq>`; absent from stores written before planning was. */
+  plan?: string | null | undefined;
 }
 
 export interface Notification {
@@ -36,10 +38,13 @@ export function detect(
   const passed = status.tasks.error ? (seen?.passed ?? []) : status.tasks.items.filter((task) => task.passes).map((task) => task.id);
   const iteration = lastEnded(detail);
   const ended = run && !run.live ? run.runId : null;
+  // Only a daemon's interview is answered from the UI; `ralph init` asks in its terminal.
+  const plan = status.plan;
+  const question = plan?.live && plan.status === 'asking' && plan.by === 'daemon' ? `${plan.id}:${plan.seq}` : null;
 
   if (!seen) {
     return {
-      seen: { pending: pending?.id ?? null, runEnded: ended, iteration, passed },
+      seen: { pending: pending?.id ?? null, runEnded: ended, iteration, passed, plan: question },
       notifications: [],
     };
   }
@@ -51,6 +56,18 @@ export function detect(
     notifications.push({
       event: 'request',
       payload: { title: `${project}: Ralph needs you`, body: requestBody(pending), tag: `request-${pending.id}`, path: '#/overview' },
+    });
+  }
+
+  if (question && question !== seen.plan) {
+    notifications.push({
+      event: 'request',
+      payload: {
+        title: `${project}: Ralph needs you`,
+        body: plan!.prompt && plan!.prompt !== 'you' ? truncate(`The planner asks: ${plan!.prompt}`, 200) : 'The planner has a question',
+        tag: `plan-${plan!.id}`,
+        path: '#/plan',
+      },
     });
   }
 
@@ -104,6 +121,7 @@ export function detect(
       runEnded: ended ?? seen.runEnded,
       iteration: iteration ?? seen.iteration,
       passed,
+      plan: question ?? seen.plan ?? null,
     },
     notifications,
   };

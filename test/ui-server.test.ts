@@ -10,7 +10,21 @@ import { readAnswer, readPending, readStopRequest, writePending } from '../src/h
 import { Logger } from '../src/report/logger.js';
 import { loadPushStore, type PushSender } from '../src/ui/push.js';
 import { readDaemonRequest, writeDaemonState, type DaemonState } from '../src/daemon/control.js';
-import type { FileContent, GitCommitDetail, GitView, LiveEvents, MetricsView, PushPayload, PushView, RunDetail, RunView, StatusView } from '../src/ui/types.js';
+import { PlanRecorder, planStopRequested, readPlanReply } from '../src/init/record.js';
+import type {
+  FileContent,
+  GitCommitDetail,
+  GitView,
+  LiveEvents,
+  MetricsView,
+  PlanSummary,
+  PlanView,
+  PushPayload,
+  PushView,
+  RunDetail,
+  RunView,
+  StatusView,
+} from '../src/ui/types.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });
 const LIVE_RUN = '20260930-120000';
@@ -175,7 +189,10 @@ describe('web UI server', () => {
   });
 
   it('lists runs newest first, older ones from their summary', async () => {
-    await start(project());
+    const root = project();
+    // Planning sessions are kept beside the runs, and are not runs.
+    mkdirSync(resolve(root, '.ralph', 'history', 'plans', '20261001-120000'), { recursive: true });
+    await start(root);
     const { body } = await get<RunView[]>('/api/runs');
     expect(body.map((run) => run.runId)).toEqual([LIVE_RUN, OLD_RUN]);
     expect(body[1]).toMatchObject({ status: 'stalled', live: false, iteration: 3 });
@@ -509,6 +526,27 @@ describe('web UI server', () => {
     const { status, body } = await get<string>('/');
     expect(status).toBe(503);
     expect(body).toContain('npm run build');
+  });
+
+  it('streams the planning conversation, with no run to follow', async () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'ralph-ui-plan-'));
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'daemon' });
+    recorder.line('owner', 'A todo app.');
+    await start(root);
+    const live = subscribe('/api/live');
+    try {
+      await live.until(() => live.of('plan').length > 0);
+      expect(live.of('plan')[0]).toMatchObject({ id: recorder.id, reset: true, lines: [{ role: 'owner', text: 'A todo app.' }] });
+      expect(live.of('status')[0]).toMatchObject({ run: null, plan: { id: recorder.id, status: 'starting' } });
+
+      recorder.line('agent', 'Which stack?');
+      recorder.asking('you');
+      await live.until(() => live.of('plan').length > 1 && live.of('status').some((view) => view.plan?.status === 'asking'));
+      expect(live.of('plan')[1]).toMatchObject({ reset: false, lines: [{ role: 'agent', text: 'Which stack?' }] });
+    } finally {
+      live.close();
+      recorder.close();
+    }
   });
 
   it('streams the status, new log lines and the transcript of the iteration in progress', async () => {
@@ -1026,6 +1064,7 @@ describe('web UI actions', () => {
     expect((await post('/api/actions/stop', { mode: 'now' })).status).toBe(403);
     writeDaemonState(resolve(root, '.ralph'), daemon());
     expect((await post('/api/actions/run', { iterations: 1 })).status).toBe(403);
+    expect((await post('/api/actions/plan/start', { mode: 'replan', description: 'More tests.' })).status).toBe(403);
     expect(readDaemonRequest(resolve(root, '.ralph'))).toBeUndefined();
     expect((await get<StatusView>('/api/status')).body.actions).toMatchObject({ enabled: false, token: false });
     expect(existsSync(resolve(root, '.ralph', 'history', 'answer.json'))).toBe(false);
@@ -1064,6 +1103,80 @@ describe('web UI actions', () => {
     expect(missing.headers.get('www-authenticate')).toBe('Bearer');
     expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer wrong!' })).status).toBe(401);
     expect((await post('/api/actions/respond', reply, { Authorization: 'Bearer s3cret' })).status).toBe(200);
+  });
+
+  it('has an idle daemon plan a project that has no plan yet', async () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'ralph-ui-plan-'));
+    const ralph = resolve(root, '.ralph');
+    await start(root);
+    expect((await get<StatusView>('/api/status')).body).toMatchObject({ planState: 'template', plan: null });
+
+    const none = await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.' });
+    expect(none.status).toBe(409);
+    expect(none.body.error).toContain('ralph init');
+
+    writeDaemonState(ralph, daemon());
+    expect((await post('/api/actions/plan/start', { mode: 'new', description: '  ' })).status).toBe(400);
+    expect((await post('/api/actions/plan/start', { mode: 'later', description: 'An app.' })).status).toBe(400);
+    expect((await post('/api/actions/plan/start', { mode: 'replan', description: 'More.' })).status).toBe(409);
+    const asked = await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.' });
+    expect(asked).toMatchObject({ status: 200, body: { message: 'Ralph is planning the project.' } });
+    expect(readDaemonRequest(ralph)).toEqual({ kind: 'plan', id: (asked.body as { id: string }).id, mode: 'new', description: 'A todo app.' });
+
+    writeDaemonState(ralph, daemon({ status: 'planning' }));
+    expect((await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.' })).status).toBe(409);
+    expect((await post('/api/actions/run', { iterations: 3 })).status).toBe(409);
+  });
+
+  it('answers the planner by the number of its question, once, and stops it', async () => {
+    const root = project();
+    const ralph = resolve(root, '.ralph');
+    const recorder = new PlanRecorder(ralph, { mode: 'replan', by: 'daemon' });
+    try {
+      recorder.line('owner', 'Add search.');
+      recorder.line('agent', 'Which fields?');
+      recorder.asking('you');
+      await start(root);
+      const { id } = recorder;
+      expect((await get<StatusView>('/api/status')).body).toMatchObject({
+        planState: 'written',
+        plan: { id, mode: 'replan', status: 'asking', live: true, seq: 1, prompt: 'you' },
+      });
+
+      expect((await post('/api/actions/plan/reply', { id, seq: 2, text: 'Title.' })).status).toBe(409);
+      expect((await post('/api/actions/plan/reply', { id, seq: 1, text: ' ' })).status).toBe(400);
+      expect((await post('/api/actions/plan/reply', { id, seq: 1, done: false })).status).toBe(400);
+      expect((await post('/api/actions/plan/reply', { id: 'nope', seq: 1, text: 'Title.' })).status).toBe(409);
+      expect((await post('/api/actions/plan/reply', { id, seq: 1, text: 'Title.' })).status).toBe(200);
+      expect(readPlanReply(ralph, id)).toMatchObject({ seq: 1, text: 'Title.', by: 'ui' });
+      expect((await post('/api/actions/plan/reply', { id, seq: 1, done: true })).status).toBe(409);
+
+      expect((await get<PlanSummary[]>('/api/plans')).body.map((plan) => plan.id)).toEqual([id]);
+      const view = (await get<PlanView>(`/api/plans/${id}`)).body;
+      expect(view.conversation.map((entry) => [entry.role, entry.text])).toEqual([
+        ['owner', 'Add search.'],
+        ['agent', 'Which fields?'],
+      ]);
+      expect((await get('/api/plans/..%2Fsecret')).status).toBe(404);
+
+      expect((await post('/api/actions/plan/stop', { id })).status).toBe(200);
+      expect(planStopRequested(ralph, id)).toBe(true);
+      recorder.update({ status: 'aborted' });
+      expect((await post('/api/actions/plan/stop', { id })).status).toBe(409);
+    } finally {
+      recorder.close();
+    }
+  });
+
+  it('takes an interview whose process is gone as aborted', async () => {
+    const root = project();
+    const ralph = resolve(root, '.ralph');
+    const recorder = new PlanRecorder(ralph, { mode: 'new', by: 'cli' });
+    recorder.close();
+    recorder.update({ status: 'asking', prompt: 'you', seq: 1, pid: 2 ** 22 + 1 });
+    await start(root);
+    expect((await get<StatusView>('/api/status')).body.plan).toMatchObject({ status: 'aborted', live: false, prompt: null });
+    expect((await post('/api/actions/plan/reply', { id: recorder.id, seq: 1, text: 'Hi.' })).status).toBe(409);
   });
 
   it('keeps everything else read-only', async () => {
