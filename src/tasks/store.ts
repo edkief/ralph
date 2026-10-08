@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
@@ -78,6 +78,22 @@ export class TaskStore {
       );
     }
     return parsed.data;
+  }
+
+  /**
+   * Set one task's `passes` flag on disk, leaving everything else in the file
+   * as it was: the wrapper, if any, and fields Ralph does not know. Whether
+   * the task was found.
+   */
+  setPasses(taskId: string, passes: boolean): boolean {
+    this.readTasks();
+    const raw = JSON.parse(readFileSync(this.tasksFile, 'utf8')) as unknown;
+    const list = (Array.isArray(raw) ? raw : (raw as { tasks: unknown[] }).tasks) as Array<Record<string, unknown>>;
+    const task = list.find((entry) => entry['id'] === taskId);
+    if (!task) return false;
+    task['passes'] = passes;
+    writeFileSync(this.tasksFile, `${JSON.stringify(raw, null, 2)}\n`);
+    return true;
   }
 
   /** True when the agent's claimed task really is marked passing on disk. */
