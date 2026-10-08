@@ -570,6 +570,144 @@ describe('runLoop', () => {
     });
   });
 
+  describe('a task left marked passing by an attempt in doubt', () => {
+    const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
+    const headings = ['Status', 'Done', 'Working tree', 'Next steps', 'Dead ends', 'How to verify'];
+    const writeHandoff = (root: string, status: string) => {
+      mkdirSync(resolve(root, '.ralph', 'handoff'), { recursive: true });
+      writeFileSync(handoff(root), headings.map((h) => `## ${h}\n\n${h === 'Status' ? status : '-'}`).join('\n\n'));
+    };
+    const endless: ScriptedEvent[] = [{ after: 60_000, type: 'session.execution.succeeded' }];
+    const records = (historyDir: string) =>
+      readFileSync(resolve(historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const passes = (root: string, taskId: string) =>
+      (JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8')) as Array<{ id: string; passes: boolean }>)
+        .find((task) => task.id === taskId)?.passes;
+    const timeouts = { iterationMs: 1_000, inactivityMs: 60_000, wrapUpMs: 5_000 };
+    // The agent marks the task passing in the wrap-up, against its instructions, and hands off.
+    const wrapsUpPassing = (root: string) => (count: number) => {
+      if (count === 2) {
+        markPassing(root, 'TASK-1');
+        writeHandoff(root, 'Nearly there: the close-out is left.');
+      }
+    };
+
+    it('asks the agent to confirm it, then moves on without the stale handoff or a stall', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 3,
+          timeouts,
+          // One time-out would stall the task, were it not done.
+          stall: { maxTimeoutsPerTask: 1, onRepeatedTimeout: 'stop' },
+        }),
+        {
+          steer: true,
+          onPrompt: (count) => {
+            wrapsUpPassing(root)(count);
+            if (count === 4) markPassing(root, 'TASK-2');
+          },
+          script: (count) =>
+            count === 1 ? endless : say(count === 2 ? 'handed off' : count === 3 ? 'All checks pass. <promise>TASK-1:DONE</promise>' : '<promise>TASK-2:DONE</promise>'),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(2);
+      const texts = (server?.prompts ?? []).map((prompt) => String(prompt['text']));
+      expect(texts[2]).toContain('## Is TASK-1 done?');
+      expect(texts[2]).toContain('the attempt ran out of time');
+      expect(texts[3]).toContain('Work on **TASK-2**');
+      expect(texts[3]).not.toContain('## Resuming');
+      // The confirm turn continued the attempt's session.
+      expect(server?.sessionsCreated).toBe(2);
+      expect(existsSync(handoff(root))).toBe(false);
+      expect(records(result.historyDir)[0]).toMatchObject({
+        confirm: { verdict: 'confirmed', doubt: 'the attempt ran out of time' },
+        result: { status: 'progressed', wrapUp: { trigger: 'iteration-timeout' } },
+      });
+    });
+
+    it('reopens it when the agent does not confirm it, and resumes the same task from its handoff', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 2, timeouts }),
+        {
+          steer: true,
+          onPrompt: wrapsUpPassing(root),
+          script: (count) => (count === 1 ? endless : say(count === 3 ? 'The parser test still fails.' : 'handed off')),
+        },
+      );
+
+      const texts = (server?.prompts ?? []).map((prompt) => String(prompt['text']));
+      expect(texts[2]).toContain('## Is TASK-1 done?');
+      expect(texts[3]).toContain('Work on **TASK-1**');
+      expect(texts[3]).toContain('## Resuming TASK-1');
+      expect(texts[3]).toContain('Nearly there: the close-out is left.');
+      expect(records(result.historyDir)[0]).toMatchObject({
+        confirm: { verdict: 'reopened', reason: 'the agent did not confirm it' },
+        result: { status: 'wrapped-up' },
+      });
+      const log = execFileSync('git', ['log', '--format=%s'], { cwd: root, encoding: 'utf8' });
+      expect(log).toContain('chore(ralph): reopen TASK-1, not confirmed done');
+      const reopen = execFileSync('git', ['log', '--grep=reopen TASK-1', '--format=%H'], { cwd: root, encoding: 'utf8' }).trim();
+      const committed = JSON.parse(execFileSync('git', ['show', `${reopen}:.ralph/tasks.json`], { cwd: root, encoding: 'utf8' }));
+      expect(committed).toEqual([{ id: 'TASK-1', passes: false }, { id: 'TASK-2', passes: false }]);
+    });
+
+    it('reopens it when the confirm turn runs out of time, or when confirming is off', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const timedOut = await loop(
+        root,
+        config(root, { maxIterations: 1, timeouts: { ...timeouts, confirmMs: 1_000 } }),
+        { steer: true, onPrompt: wrapsUpPassing(root), script: (count) => (count === 2 ? say('handed off') : endless) },
+      );
+      expect(passes(root, 'TASK-1')).toBe(false);
+      expect(readFileSync(handoff(root), 'utf8')).toContain('Nearly there');
+      expect(records(timedOut.historyDir)[0].confirm).toMatchObject({ verdict: 'reopened' });
+      expect(records(timedOut.historyDir)[0].confirm.reason).toContain('the confirm turn ended timeout');
+      await server?.close();
+
+      const off = project([{ id: 'TASK-1', passes: false }]);
+      const result = await loop(
+        off,
+        config(off, { maxIterations: 1, timeouts: { ...timeouts, confirmMs: 0 } }),
+        { steer: true, onPrompt: wrapsUpPassing(off), script: (count) => (count === 2 ? say('handed off') : endless) },
+      );
+      expect(server?.prompts).toHaveLength(2);
+      expect(passes(off, 'TASK-1')).toBe(false);
+      expect(records(result.historyDir)[0].confirm).toMatchObject({ verdict: 'reopened', reason: expect.stringContaining('turned off') });
+    });
+
+    it('needs no confirming after a clean finish, and removes a handoff an earlier attempt left', async () => {
+      const root = project([
+        { id: 'TASK-1', passes: false },
+        { id: 'TASK-2', passes: false },
+      ]);
+      writeHandoff(root, 'An earlier attempt ran out of time.');
+
+      const result = await loop(root, config(root, { maxIterations: 3 }), {
+        onPrompt: (count) => markPassing(root, `TASK-${count}`),
+        script: (count) => say(`<promise>TASK-${count}:DONE</promise>`),
+      });
+
+      expect(result.status).toBe('complete');
+      expect(server?.prompts).toHaveLength(2);
+      expect(existsSync(handoff(root))).toBe(false);
+      expect(records(result.historyDir).map((record: { confirm?: unknown }) => record.confirm)).toEqual([undefined, undefined]);
+    });
+  });
+
   describe('an agent that ends its turn early', () => {
     const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
     const waiting = say('Tests are running in the background. Ending here; I will be resumed when they complete.');

@@ -15,6 +15,19 @@ export interface IterationRecord {
   /** Who wrote the handoff when the iteration ran out of time or context. */
   handoff?: 'agent' | 'fallback';
   /**
+   * A task left marked passing by an attempt that was cut short, and how the
+   * confirm pass settled it.
+   */
+  confirm?: {
+    verdict: 'confirmed' | 'reopened';
+    /** Why the task's state was in doubt. */
+    doubt: string;
+    /** Why it was reopened. */
+    reason?: string;
+    /** How long the confirm turn took, when one ran. */
+    durationMs?: number;
+  };
+  /**
    * The iteration's usage by model, every attempt, wrap-up and subagent
    * included. Absent from records written before it was metered.
    */
