@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { commitRecords, type RecordsMode } from '../loop/records.js';
-import { pushBranch } from '../loop/push.js';
+import { describeDivergence, describeOverwrite, pushBranch } from '../loop/push.js';
 import { RalphProject } from '../ui/project.js';
 import { requestStop, STOP_MESSAGES, type StopMode } from './request.js';
 import { ExitCode } from '../exit.js';
@@ -39,10 +39,11 @@ export async function runStop(args: {
     records: config.git.records,
     remote: config.git.remote,
     pushTimeoutMs: config.git.pushTimeoutMs,
+    forcePush: config.git.forcePush,
     ...(run ? { runId: run.runId } : {}),
   });
   for (const line of parked.lines) output.write(`${line}\n`);
-  return parked.ok ? 0 : ExitCode.ConfigError;
+  return parked.ok ? 0 : parked.diverged ? ExitCode.PushRejected : ExitCode.ConfigError;
 }
 
 /**
@@ -56,9 +57,11 @@ export async function parkIdle(args: {
   records: RecordsMode;
   remote: string;
   pushTimeoutMs: number;
+  /** Overwrite a remote branch that has diverged, keeping a backup of it. */
+  forcePush?: boolean;
   /** The latest run, whose journal is brought up to date. */
   runId?: string;
-}): Promise<{ ok: boolean; lines: string[] }> {
+}): Promise<{ ok: boolean; lines: string[]; /** The push was rejected: the remote branch has diverged. */ diverged?: boolean }> {
   const lines: string[] = [];
   if (args.records !== 'never') {
     const records = await commitRecords({
@@ -70,11 +73,16 @@ export async function parkIdle(args: {
     if (records.error) lines.push(`Could not commit Ralph's records: ${records.error}`);
     else if (records.committed) lines.push(`Committed Ralph's records (${records.files.length} file${records.files.length === 1 ? '' : 's'}).`);
   }
-  const pushed = await pushBranch(args.projectRoot, args.remote, args.pushTimeoutMs);
+  const pushed = await pushBranch(args.projectRoot, args.remote, args.pushTimeoutMs, { force: args.forcePush ?? false });
   if (!pushed.ok) {
-    lines.push(`Could not push to ${args.remote}: ${pushed.error}`);
-    return { ok: false, lines };
+    if (!pushed.diverged) {
+      lines.push(`Could not push to ${args.remote}: ${pushed.error}`);
+      return { ok: false, lines };
+    }
+    lines.push(...describeDivergence(pushed.diverged));
+    return { ok: false, lines, diverged: true };
   }
+  if (pushed.overwritten) lines.push(...describeOverwrite(pushed.overwritten));
   lines.push(`Pushed to ${args.remote}. Nothing was running; uncommitted work outside Ralph's records stays as it is.`);
   return { ok: true, lines };
 }

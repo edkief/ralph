@@ -6,7 +6,7 @@ import { assessDir, assessTask, shouldAssess } from './assess.js';
 import { runEscalation, type EscalationOutcome, type EscalationRequest } from './escalate.js';
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
-import { pushBranch } from './push.js';
+import { describeDivergence, describeOverwrite, pushBranch } from './push.js';
 import { changedFiles, commitParkedWork, commitPaths, commitRecords, journalDir, type RecordsCommit } from './records.js';
 import { settlePassing, withConfirm, type ConfirmOutcome } from './confirm.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
@@ -35,7 +35,7 @@ import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
 export interface RunResult {
-  status: IterationStatus | 'max-iterations' | 'stalled' | 'stopped';
+  status: IterationStatus | 'max-iterations' | 'stalled' | 'stopped' | 'push-rejected';
   iterations: number;
   runId: string;
   historyDir: string;
@@ -559,7 +559,13 @@ async function loop(
       unpushed = true;
     }
     if (config.git.push === 'iteration' && unpushed) {
-      unpushed = !(await publish(config, logger, { iteration }));
+      const pushed = await publish(config, logger, { iteration });
+      if (pushed.outcome === 'diverged') {
+        finalStatus = 'push-rejected';
+        message = pushed.message;
+        break;
+      }
+      unpushed = pushed.outcome !== 'ok';
     }
 
     if (TERMINAL_STATUSES.has(status)) {
@@ -670,8 +676,16 @@ async function loop(
     if (records.error) runResult.recordsError = records.error;
   }
   // A park is for picking the work up elsewhere: it pushes whatever git.push says.
-  if (((config.git.push !== 'never' && unpushed) || park.aborted) && !signal.aborted) {
-    await publish(config, logger, {});
+  // A push already rejected for diverged history would only be rejected again.
+  if (((config.git.push !== 'never' && unpushed) || park.aborted) && !signal.aborted && finalStatus !== 'push-rejected') {
+    const pushed = await publish(config, logger, {});
+    if (pushed.outcome === 'diverged') {
+      // Whatever the run did, the remote does not have it.
+      runResult.status = 'push-rejected';
+      runResult.message = `${runResult.message}; but ${pushed.message}`;
+      recorder.recordSummary(runResult);
+      saveState({ status: runResult.status, message: runResult.message });
+    }
   }
   return runResult;
 }
@@ -1269,20 +1283,58 @@ function display(config: Config, path: string): string {
   return relative(config.projectRoot, path).split(sep).join('/');
 }
 
-/** Push the branch, logging the outcome. A failed push never stops the run. */
+/**
+ * Push the branch, logging the outcome. A push that fails (no network, no
+ * credentials) is retried at the next one. A push rejected because the
+ * remote branch has commits the local one does not is `diverged`, which stops
+ * the run: pushing on would leave the remote further behind each time. With
+ * `git.forcePush` the remote branch is overwritten instead, keeping its old
+ * tip, and the warning says how to get any commit back.
+ */
 async function publish(
   config: Config,
   logger: Logger,
   context: { iteration?: number },
-): Promise<boolean> {
-  const { remote, pushTimeoutMs } = config.git;
-  const result = await pushBranch(config.projectRoot, remote, pushTimeoutMs);
+): Promise<{ outcome: 'ok' | 'failed' | 'diverged'; message: string }> {
+  const { remote, pushTimeoutMs, forcePush } = config.git;
+  const result = await pushBranch(config.projectRoot, remote, pushTimeoutMs, { force: forcePush });
+  if (result.ok && result.overwritten) {
+    const overwritten = result.overwritten;
+    logger.warn('force-pushed over diverged history', {
+      remote,
+      branch: overwritten.branch,
+      ...context,
+      from: overwritten.remoteSha,
+      to: overwritten.localSha,
+      backup: `${remote}/${overwritten.backupBranch}`,
+      ref: overwritten.localRef,
+    });
+    for (const line of describeOverwrite(overwritten)) logger.warn(line);
+    return { outcome: 'ok', message: 'force-pushed over diverged history' };
+  }
   if (result.ok) {
     logger.info('pushed commits', { remote, ...context });
-  } else {
-    logger.warn('push failed', { remote, ...context, error: result.error });
+    return { outcome: 'ok', message: 'pushed' };
   }
-  return result.ok;
+  if (result.diverged) {
+    const diverged = result.diverged;
+    logger.error('push rejected: the local branch and the remote one have diverged', {
+      remote,
+      branch: diverged.branch,
+      ...context,
+      local: diverged.localSha,
+      remoteTip: diverged.remoteSha,
+      error: result.error,
+    });
+    const lines = describeDivergence(diverged);
+    for (const line of lines) logger.error(line);
+    return {
+      outcome: 'diverged',
+      message: `the push to ${remote}/${diverged.branch} was rejected: ${lines[0]} Nothing was pushed; reconcile them, or set git.forcePush`,
+    };
+  }
+  logger.warn('push failed', { remote, ...context, error: result.error });
+  return { outcome: 'failed', message: result.error };
 }
 
 /** An iteration that ran cleanly but changed nothing is not progress. */

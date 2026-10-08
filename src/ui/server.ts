@@ -113,7 +113,7 @@ export interface UiServerOptions {
   /** `git.records`: whether answers given with no loop waiting are committed. */
   records?: RecordsMode;
   /** Where a park with nothing running pushes; without it, Park needs a run in progress. */
-  git?: { remote: string; pushTimeoutMs: number };
+  git?: { remote: string; pushTimeoutMs: number; forcePush?: boolean };
   /** `metrics.cost`: how the Metrics tab estimates what the work cost. */
   cost?: CostConfig;
   /** `ui.push`: Web Push notifications to the browsers that subscribed. Off when absent. */
@@ -331,6 +331,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           records: options.records ?? 'end',
           remote: options.git.remote,
           pushTimeoutMs: options.git.pushTimeoutMs,
+          forcePush: options.git.forcePush ?? false,
           ...(run ? { runId: run.runId } : {}),
         });
         options.logger.info('web UI action', { action: 'park', idle: true, ok: parked.ok });

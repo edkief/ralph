@@ -22,9 +22,9 @@ function project(): string {
   return root;
 }
 
-function stop(root: string, mode: 'after-iteration' | 'now' | 'park') {
+function stop(root: string, mode: 'after-iteration' | 'now' | 'park', git: Record<string, unknown> = {}) {
   let said = '';
-  const config = ConfigSchema.parse({ projectRoot: root });
+  const config = ConfigSchema.parse({ projectRoot: root, git });
   return runStop({ config, mode, output: { write: (text: string) => (said += text) } }).then((code) => ({ code, said }));
 }
 
@@ -63,6 +63,28 @@ describe('ralph stop', () => {
     expect(git(root, 'log', '-1', '--format=%s')).toBe('chore(ralph): record, parked');
     expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
     expect(git(root, 'status', '--porcelain')).toBe('?? draft.ts');
+  });
+
+  it('with nothing running, stops at a remote branch that has diverged, or overwrites it with a backup', async () => {
+    const root = project();
+    const remote = mkdtempSync(resolve(tmpdir(), 'ralph-remote-'));
+    git(remote, 'init', '-q', '--bare');
+    git(root, 'remote', 'add', 'origin', remote);
+    git(root, 'push', '-q', 'origin', 'HEAD');
+    // History rewritten after the push.
+    git(root, 'commit', '-q', '--amend', '-m', 'init, reworded');
+    const pushed = git(remote, 'rev-parse', 'HEAD');
+
+    const rejected = await stop(root, 'park');
+    expect(rejected.code).toBe(7);
+    expect(rejected.said).toContain('has 1 commit the local branch');
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(pushed);
+
+    const forced = await stop(root, 'park', { forcePush: true });
+    expect(forced.code).toBe(0);
+    expect(forced.said).toContain('Force-pushed');
+    expect(forced.said).toContain('init (kept: an equivalent patch is in the new history)');
+    expect(git(remote, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD'));
   });
 
   it('reports a push that fails', async () => {

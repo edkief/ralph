@@ -17,6 +17,8 @@ export const ExitCode = {
   ProviderError: 5,
   /** Iterations ran but stopped making progress. */
   Stalled: 6,
+  /** A push was rejected because the remote branch has commits the local one does not. */
+  PushRejected: 7,
   /** SIGINT/SIGTERM. */
   Interrupted: 130,
 } as const;

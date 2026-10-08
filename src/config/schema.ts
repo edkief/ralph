@@ -103,6 +103,11 @@ const EscalationSchema = z.object({
  * denied. `iteration` pushes after every iteration that committed; `end`
  * pushes once when the run finishes.
  *
+ * A push rejected because the remote branch has commits the local one does
+ * not (history rewritten here, or someone else pushed) stops the run.
+ * `forcePush` overwrites the remote branch instead, keeping its old tip as a
+ * local ref and a backup branch on the remote.
+ *
  * `records` is when Ralph commits its own records (decisions, handoffs,
  * assessments, split proposals, the run journal, kept artifacts), so a run can
  * resume from the repository on another machine: after each iteration, once
@@ -110,6 +115,7 @@ const EscalationSchema = z.object({
  */
 const GitSchema = z.object({
   push: z.enum(['never', 'iteration', 'end']).default('never'),
+  forcePush: z.boolean().default(false),
   records: z.enum(['iteration', 'end', 'never']).default('end'),
   remote: z.string().default('origin'),
   pushTimeoutMs: z.number().int().positive().default(120_000),
