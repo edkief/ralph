@@ -4,7 +4,8 @@
   "timeouts": {
     "iterationMs": 2700000,
     "inactivityMs": 300000,
-    "wrapUpMs": 600000
+    "wrapUpMs": 600000,
+    "confirmMs": 300000
   },
   "retries": {
     "providerRetriesPerIteration": 3,
