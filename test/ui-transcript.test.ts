@@ -85,6 +85,18 @@ describe('TranscriptBuilder', () => {
     expect(entries[1]).not.toHaveProperty('subagent');
   });
 
+  it('notes a cancelled form, a subagent\'s marked as such', () => {
+    const entries = build([
+      { type: 'ralph.turn.started', data: { sessionID: 'main' } },
+      { type: 'form.created', data: { form: { id: 'frm_1', sessionID: 'main', title: 'Questions', metadata: { kind: 'question' } } } },
+      { type: 'form.created', data: { form: { id: 'frm_2', sessionID: 'child', title: 'Sign in', metadata: { kind: 'mcp' } } } },
+    ]);
+
+    expect(entries[0]).toMatchObject({ kind: 'notice', level: 'info', text: 'form cancelled: Questions (question)' });
+    expect(entries[0]).not.toHaveProperty('subagent');
+    expect(entries[1]).toMatchObject({ kind: 'notice', text: 'form cancelled: Sign in (mcp)', subagent: true });
+  });
+
   it('shows a retry in a fresh session as a new attempt, not as a subagent', () => {
     const entries = build([
       { type: 'ralph.turn.started', created: 1, data: { sessionID: 'first' } },
