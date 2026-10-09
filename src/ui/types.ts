@@ -236,6 +236,8 @@ export interface IterationView {
   tasksPassedDelta: number;
   compactions: number;
   handoff?: 'agent' | 'fallback';
+  /** How a task left passing by an attempt that was cut short was settled. */
+  confirm?: { verdict: 'confirmed' | 'reopened'; doubt: string; reason?: string };
   error?: string;
 }
 

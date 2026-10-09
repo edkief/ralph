@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPrompt, PromptError } from '../src/prompt/build.js';
+import { buildConfirmPrompt } from '../src/prompt/confirm.js';
 
 function project(promptBody = '# Do the work', dir = '.ralph'): string {
   const root = mkdtempSync(resolve(tmpdir(), 'ralph-prompt-'));
@@ -213,5 +214,25 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('  ▶ TASK-4.1 — Model it (which TASK-4.1.2 is part of)\n  ○ TASK-4.2 — Render it');
     expect(prompt).not.toContain('Its spec');
     expect(prompt).not.toContain('Where its last attempt stopped');
+  });
+});
+
+describe('buildConfirmPrompt', () => {
+  it('asks the agent to check, not finish, and to confirm with DONE or reopen the task', () => {
+    const text = buildConfirmPrompt({
+      taskId: 'TASK-3',
+      specFilePath: '.ralph/tasks/TASK-3.json',
+      handoffPath: '.ralph/handoff/TASK-3.md',
+      tasksPath: '.ralph/tasks.json',
+      reason: 'the attempt ran out of time',
+      confirmMs: 5 * 60_000,
+    });
+    expect(text).toContain('## Is TASK-3 done?');
+    expect(text).toContain('the attempt ran out of time');
+    expect(text).toContain('`.ralph/tasks/TASK-3.json`');
+    expect(text).toContain('Do not implement anything');
+    expect(text).toContain('<promise>TASK-3:DONE</promise>');
+    expect(text).toContain('set `passes: false` for TASK-3');
+    expect(text).toContain('about 5 minutes');
   });
 });

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 import { joinTurns, runIteration, type IterationResult } from './iteration.js';
@@ -8,7 +7,8 @@ import { runEscalation, type EscalationOutcome, type EscalationRequest } from '.
 import { applySplit, describeIds, proposeSplit, readProposal, splitDir, type StallCause } from './split.js';
 import { diffSnapshots, snapshotRepo } from './progress.js';
 import { pushBranch } from './push.js';
-import { commitParkedWork, commitRecords, journalDir, type RecordsCommit } from './records.js';
+import { changedFiles, commitParkedWork, commitPaths, commitRecords, journalDir, type RecordsCommit } from './records.js';
+import { settlePassing, withConfirm, type ConfirmOutcome } from './confirm.js';
 import { TERMINAL_STATUSES, type IterationStatus } from './outcome.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { readSplitRecords, splitLineage } from '../tasks/splits.js';
@@ -27,7 +27,7 @@ import {
   type PendingRequest,
 } from '../human/request.js';
 import { sleep } from '../opencode/server.js';
-import { RunRecorder, newRunId, type RunState, type SplitRecord } from '../report/jsonl.js';
+import { RunRecorder, newRunId, type IterationRecord, type RunState, type SplitRecord } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
 import type { ConsoleReporter } from '../report/console.js';
 import type { OpencodeClient } from '../opencode/client.js';
@@ -460,7 +460,7 @@ async function loop(
 
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
 
-    const { result, cutShort, handoff } = await attemptIteration({
+    const attempt = await attemptIteration({
       args: { client, config, logger, reporter, signal, stop, park },
       recorder,
       iteration,
@@ -493,14 +493,44 @@ async function loop(
       cutShortLeft: config.stall.maxTimeoutsPerTask - (cutShortByTask.get(taskId)?.length ?? 0),
       taskPasses: () => taskPasses(tasks, taskId),
     });
-    lastAgentText = { taskId, text: result.text };
+    const { cutShort, handoff } = attempt;
+    let result = attempt.result;
     if (cutShort.length > 0) cutShortByTask.set(taskId, [...(cutShortByTask.get(taskId) ?? []), ...cutShort]);
+
+    // Marked passing, yet cut short: the two disagree, so the task is
+    // confirmed or reopened before the loop moves on.
+    const confirm = await settlePassing({
+      client,
+      config,
+      logger,
+      signal,
+      stopped: stop.aborted,
+      tasks,
+      iteration,
+      taskId,
+      specFilePath: next.specFilePath,
+      handoffFile,
+      sinceHead: before.head,
+      result,
+      hooks: {
+        onEvent: (event) => recorder.recordEvent(event),
+        onText: (text) => reporter.status(truncate(text, 100)),
+        onTool: (tool, detail) => reporter.status(`${tool} ${detail}`),
+      },
+      onStart: () => reporter.status(`confirming ${taskId}`),
+    });
+    if (confirm) {
+      result = withConfirm(result, confirm);
+      // Done: what it ran out of on the way no longer counts against it.
+      if (confirm.verdict === 'confirmed') cutShortByTask.delete(taskId);
+    }
+    lastAgentText = { taskId, text: result.text };
 
     const after = await snapshotRepo(config.projectRoot, tasks, notProgress);
     const delta = diffSnapshots(before, after);
     const status = refineStatus(result, delta);
 
-    if (result.tags.completedTaskIds.length > 0 && delta.tasksPassedDelta <= 0) {
+    if (result.tags.completedTaskIds.length > 0 && delta.tasksPassedDelta <= 0 && confirm?.verdict !== 'reopened') {
       logger.warn('agent claimed a task without marking it passing', {
         claimed: result.tags.completedTaskIds.join(','),
       });
@@ -513,16 +543,17 @@ async function loop(
       result,
       delta,
       ...(handoff ? { handoff } : {}),
+      ...(confirm ? { confirm: confirmRecord(confirm) } : {}),
       startedAt,
       endedAt: new Date().toISOString(),
     });
     saveState({ lastStatus: status, ...taskCounts(tasks) });
 
-    if (delta.tasksPassedDelta > 0 && existsSync(handoffFile) && taskPasses(tasks, taskId)) {
-      logger.warn('handoff left behind for a passing task', { path: display(config, handoffFile) });
-    }
-
     if (delta.committed) unpushed = true;
+    // After the snapshot, like Ralph's other commits: the reopened task travels with the branch.
+    if (confirm?.verdict === 'reopened' && config.git.records !== 'never' && (await commitReopened(config, logger, tasks, taskId, handoffFile))) {
+      unpushed = true;
+    }
     // After the snapshot, so Ralph's own commit is never taken for the agent's progress.
     if (config.git.records === 'iteration' && (await commitRunRecords(config, logger, runId, { iteration })).committed) {
       unpushed = true;
@@ -660,6 +691,34 @@ async function commitParked(config: Config, logger: Logger, taskId: string | nul
     });
   }
   return result.committed;
+}
+
+/** What the iteration record keeps of a confirm pass. */
+function confirmRecord(outcome: ConfirmOutcome): NonNullable<IterationRecord['confirm']> {
+  return {
+    verdict: outcome.verdict,
+    doubt: outcome.doubt,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
+    ...(outcome.turn ? { durationMs: outcome.turn.durationMs } : {}),
+  };
+}
+
+/** Commit a task reopened by the loop, with its handoff, logging the outcome. Whether a commit was made. */
+async function commitReopened(
+  config: Config,
+  logger: Logger,
+  tasks: TaskStore,
+  taskId: string,
+  handoffFile: string,
+): Promise<boolean> {
+  const paths = [display(config, tasks.path), display(config, handoffFile)];
+  if ((await changedFiles(config.projectRoot, paths)).length === 0) return false;
+  const error = await commitPaths(config.projectRoot, paths, `chore(ralph): reopen ${taskId}, not confirmed done`);
+  if (error) {
+    logger.warn('could not commit the reopened task', { task: taskId, error });
+    return false;
+  }
+  return true;
 }
 
 /** Commit Ralph's records for the run, logging the outcome. */

@@ -490,7 +490,8 @@ See `templates/ralph.config.json` for a complete file.
   "timeouts": {
     "iterationMs": 2700000,        // working time for one turn, then the agent is asked to wrap up
     "inactivityMs": 300000,        // no events for this long means the agent is wedged
-    "wrapUpMs": 600000             // time to hand off after either, on top of iterationMs; 0 = interrupt outright
+    "wrapUpMs": 600000,            // time to hand off after either, on top of iterationMs; 0 = interrupt outright
+    "confirmMs": 300000            // a turn to confirm a task left passing by a cut-short attempt; 0 = reopen it
   },
   "retries": {
     "providerRetriesPerIteration": 3,
@@ -666,7 +667,8 @@ its work over instead of losing it:
 If the agent leaves no complete handoff, Ralph writes one itself from what it saw: the commits
 made, the uncommitted changes, the agent's last messages and any earlier handoff. The next
 iteration on the task gets the handoff in its prompt, under "Resuming", and deletes it in the
-commit that completes the task. `ralph doctor` warns about handoffs left behind.
+commit that completes the task. A task that passes after a clean finish has its leftover
+handoff removed by Ralph, and `ralph doctor` warns about handoffs left behind.
 
 Every prompt also states the time budget and when it ends, and asks for checkpoint commits,
 so that running out of time costs little.
@@ -678,6 +680,30 @@ changes alone do not count as progress. A task that runs out of time
 `stall.maxTimeoutsPerTask` times (default 2) has stalled: it is probably too big for one
 iteration and needs splitting (see below). Set `wrapUpMs: 0` to interrupt outright as before;
 the handoff is still written.
+
+#### Confirming a task that was cut short
+
+Now and then an agent is all but done when its time runs out, and marks the task passing in the
+wrap-up, against its instructions, while the handoff it writes says the task is not done. The
+repository then says two things at once. Rather than move on to the next task with the first
+half-finished, Ralph settles it with a confirm turn whenever an attempt that was cut short (out
+of time, quiet, out of context or parked) leaves its task marked passing:
+
+- The turn runs in the attempt's session, so the agent remembers what it did. After a context
+  overflow it runs in a fresh one. It gets `timeouts.confirmMs` of working time (default
+  5 minutes).
+- The agent is told not to implement anything. It checks the task against its spec, runs the
+  checks, and either confirms it with `<promise>TASK-x:DONE</promise>` (log entry written,
+  handoff deleted, committed) or sets `passes: false`, updates the handoff and ends without a tag.
+- **Confirmed**: the task stays passing, the handoff goes, and running out of time on the way
+  no longer counts toward `stall.maxTimeoutsPerTask`. The iteration counts as `progressed`.
+- **Otherwise reopened**: when the agent does not confirm the task, its turn fails or runs out
+  of time, or a stop or park leaves no time for a turn, Ralph sets `passes` back to `false`,
+  keeps the handoff (or writes one) and commits both as `chore(ralph): reopen TASK-x, not
+  confirmed done` (unless `git.records` is `never`). The next iteration resumes the same task.
+
+`timeouts.confirmMs: 0` skips the turn and reopens every such task. The iteration record has
+the verdict under `confirm`, and the Overview's iterations show it.
 
 ### Ending a turn early
 

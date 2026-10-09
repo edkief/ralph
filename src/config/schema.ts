@@ -21,6 +21,12 @@ const TimeoutsSchema = z.object({
    * time or goes quiet, on top of `iterationMs`. 0 interrupts it outright.
    */
   wrapUpMs: z.number().int().min(0).default(10 * 60_000),
+  /**
+   * Working time for the turn that confirms a task left marked passing by an
+   * attempt that was cut short. 0 skips the turn: such a task is reopened for
+   * the next iteration.
+   */
+  confirmMs: z.number().int().min(0).default(5 * 60_000),
 });
 
 const RetriesSchema = z.object({
