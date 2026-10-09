@@ -271,6 +271,66 @@ describe('runLoop', () => {
       expect(remoteHead(remote)).toBe(localHead(root));
     });
 
+    describe('to a remote branch that has diverged', () => {
+      /** A project whose first commit is on the remote, then reworded here: the agent rewrote pushed history. */
+      function rewritten(tasks: Array<{ id: string; passes: boolean }>) {
+        const root = project(tasks);
+        const remote = withRemote(root);
+        commitWork(root)(0);
+        execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: root });
+        execFileSync('git', ['commit', '-q', '--amend', '-m', 'feat: work 0, reworded'], { cwd: root });
+        return { root, remote, pushed: remoteHead(remote) };
+      }
+
+      it('stops the run, leaving the remote as it was', async () => {
+        const { root, remote, pushed } = rewritten([{ id: 'TASK-1', passes: false }]);
+
+        const result = await loop(root, config(root, { maxIterations: 3, git: { push: 'iteration' } }), {
+          onPrompt: commitWork(root),
+          script: say('committed'),
+        });
+
+        expect(result.status).toBe('push-rejected');
+        expect(result.iterations).toBe(1);
+        expect(result.message).toContain('has 1 commit the local branch');
+        expect(result.message).toContain('git.forcePush');
+        expect(remoteHead(remote)).toBe(pushed);
+        expect(JSON.parse(readFileSync(resolve(result.historyDir, 'run.json'), 'utf8')).status).toBe('push-rejected');
+      });
+
+      it('reports a run that finished the backlog as rejected when its push at the end is', async () => {
+        const { root, remote, pushed } = rewritten([{ id: 'TASK-1', passes: false }]);
+
+        const result = await loop(root, config(root, { maxIterations: 3, git: { push: 'end' } }), {
+          onPrompt: (count) => {
+            markPassing(root, 'TASK-1');
+            commitWork(root)(count);
+          },
+          script: say('<promise>TASK-1:DONE</promise>'),
+        });
+
+        expect(result.status).toBe('push-rejected');
+        expect(result.message).toMatch(/^All 1 tasks pass; but the push to origin\/\S+ was rejected/);
+        expect(remoteHead(remote)).toBe(pushed);
+        expect(JSON.parse(readFileSync(resolve(result.historyDir, 'run.json'), 'utf8')).status).toBe('push-rejected');
+      });
+
+      it('force-pushes with git.forcePush, keeping the old tip on the remote, and carries on', async () => {
+        const { root, remote, pushed } = rewritten([{ id: 'TASK-1', passes: false }]);
+
+        const result = await loop(root, config(root, { maxIterations: 2, git: { push: 'iteration', forcePush: true } }), {
+          onPrompt: commitWork(root),
+          script: say('committed'),
+        });
+
+        expect(result.status).toBe('max-iterations');
+        expect(result.iterations).toBe(2);
+        expect(remoteHead(remote)).toBe(localHead(root));
+        const backups = execFileSync('git', ['for-each-ref', '--format=%(objectname)', 'refs/heads/ralph/overwritten/'], { cwd: remote, encoding: 'utf8' });
+        expect(backups.trim()).toBe(pushed);
+      });
+    });
+
     it('keeps running when a push fails', async () => {
       const root = project([{ id: 'TASK-1', passes: false }]);
 

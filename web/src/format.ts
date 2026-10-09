@@ -69,6 +69,7 @@ export function statusTone(status: string | null | undefined): Tone {
     case 'crashed':
     case 'failed':
     case 'provider-error':
+    case 'push-rejected':
       return 'bad';
     case 'decide':
     case 'declined':

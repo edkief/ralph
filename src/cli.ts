@@ -423,6 +423,8 @@ function summaryTitle(status: string): string {
       return '❓ Decision needed';
     case 'stalled':
       return '⚠️  Stalled — no progress';
+    case 'push-rejected':
+      return '⛔ Push rejected — the remote branch has diverged';
     case 'interrupted':
       return '■ Interrupted';
     case 'stopped':
@@ -434,7 +436,7 @@ function summaryTitle(status: string): string {
 
 function summaryTone(status: string): 'good' | 'warn' | 'bad' {
   if (status === 'complete') return 'good';
-  if (status === 'blocked' || status === 'stalled' || status === 'provider-error') return 'bad';
+  if (status === 'blocked' || status === 'stalled' || status === 'provider-error' || status === 'push-rejected') return 'bad';
   return 'warn';
 }
 
@@ -450,6 +452,8 @@ function exitCodeFor(status: string): number {
       return ExitCode.ProviderError;
     case 'stalled':
       return ExitCode.Stalled;
+    case 'push-rejected':
+      return ExitCode.PushRejected;
     case 'interrupted':
     case 'stopped':
       return ExitCode.Interrupted;

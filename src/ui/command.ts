@@ -14,7 +14,7 @@ export async function startUi(config: Config, logger: Logger): Promise<UiServer>
     ...(config.ui.token ? { token: config.ui.token } : {}),
     openActions: config.ui.actions === 'open',
     records: config.git.records,
-    git: { remote: config.git.remote, pushTimeoutMs: config.git.pushTimeoutMs },
+    git: { remote: config.git.remote, pushTimeoutMs: config.git.pushTimeoutMs, forcePush: config.git.forcePush },
     cost: config.metrics.cost,
     push: config.ui.push,
     logger,
