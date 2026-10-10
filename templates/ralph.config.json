@@ -1,4 +1,5 @@
 {
+  "harness": "opencode",
   "maxIterations": 20,
   "pinTask": true,
   "timeouts": {

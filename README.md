@@ -1,6 +1,8 @@
 # ralph
 
-A long-running agent loop that drives [opencode](https://opencode.ai) through its HTTP API.
+A long-running agent loop that drives a coding agent through a harness: [opencode](https://opencode.ai)
+through its HTTP API today, with [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
+planned (see [Harnesses](#harnesses)).
 
 Ralph picks the next unfinished task from a project's `.ralph/tasks.json`, runs one agent turn
 against it, verifies what actually changed in the repository, and repeats until the backlog is
@@ -35,13 +37,13 @@ project root, adds `.ralph/history/` and `.playwright-mcp/` to `.gitignore`, and
 record keep both sides' lines. Scaffolding never overwrites a file or removes a line, so
 running it again is harmless.
 
-Then, in a terminal, it starts an interview with the configured opencode agent:
+Then, in a terminal, it starts an interview with the configured agent:
 
 1. You describe the project in a few sentences.
 2. The agent reads the repository and asks what it still needs to know: goals, scope,
    stack, what done looks like. It asks a few questions at a time and suggests defaults.
-   It asks in its message, or with opencode's question tool, whose form Ralph asks you
-   field by field (type `/skip` to decline it).
+   It asks in its message, or with a tool that asks you directly (opencode's `question` tool),
+   whose form Ralph asks you field by field (type `/skip` to decline it).
 3. It writes `prd/PRD.md`, `tasks.json` and one spec per task in `tasks/`, sized so each
    task fits one loop iteration.
 4. Ralph checks the result: task ids the loop can recognise, a spec with acceptance criteria
@@ -52,7 +54,7 @@ End each message with an empty line, so pasted text arrives whole. Type `/done` 
 agent stop asking and write the plan with its assumptions noted in the PRD. Ctrl-C stops.
 
 The agent may write only inside `.ralph/`. Ralph rejects any write it is asked to approve
-elsewhere, but opencode asks only about what its own permission config marks `ask`, so Ralph
+elsewhere, but the harness asks only about what its own permission config marks `ask` (opencode does), so Ralph
 also compares `git status` before and after and lists any file changed outside `.ralph/`.
 
 Review the plan, commit `.ralph/`, then run `ralph doctor` and `ralph`.
@@ -72,7 +74,7 @@ as does any run outside a terminal. Then write the PRD, tasks and specs by hand.
 
 Planning is a one-off that rewards a stronger model than the loop may need. Set
 `plan.model` (or `RALPH_PLAN_MODEL`, or `-m` on `init`) to use one; it defaults to `model`,
-then the opencode server's default.
+then the harness's default model.
 
 ## Usage
 
@@ -114,8 +116,8 @@ upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
 | 1 | Iteration budget exhausted with work outstanding |
 | 2 | Agent raised `BLOCKED` |
 | 3 | Agent raised `DECIDE` |
-| 4 | Bad configuration or failed preflight |
-| 5 | Model provider or opencode server unusable |
+| 4 | Bad configuration or failed preflight, including a harness that is not yet available (`harness: "pi"`) |
+| 5 | Model provider or harness unusable: the opencode server (or the `pi` process) will not start or stay up. The message names the harness |
 | 6 | Stalled: iterations stopped changing anything, or a task kept running out of time |
 | 7 | Push rejected: the remote branch has commits the local one does not (see [pushing](#configuration)) |
 | 130 | Interrupted, or stopped on request |
@@ -286,8 +288,8 @@ and an answer given with no run waiting is committed straight away.
 
 #### Questions in the middle of a turn
 
-An agent can also stop mid-turn to ask: opencode's `question` tool and an MCP server's request
-for input open a form, and with `permissions.fallback: "ask"` a permission request no `allow`
+An agent can also stop mid-turn to ask: a question tool (opencode's `question`) and an MCP server's
+request for input open a form, and with `permissions.fallback: "ask"` a permission request no `allow`
 or `deny` rule matches waits for a person too. When a person can answer — the run waits for
 people (`--wait`, `ui.wait`, or `--ui`), or the planner's interview is held from the web UI or
 a terminal — Ralph puts it to them:
@@ -297,7 +299,7 @@ a terminal — Ralph puts it to them:
   choices (with an answer of your own where the form allows one), checkboxes, numbers, yes/no
   and links to follow, the fields a condition hides appearing as you answer. **Send answer**,
   or **Decline** with an optional note the agent reads. A permission is **Allow once**,
-  **Always allow** or **Reject**. Only the first answer stands; if opencode turns an answer
+  **Always allow** or **Reject**. Only the first answer stands; if the harness turns an answer
   down, the card says why and takes another.
 - **`ralph init` in a terminal.** The form is asked field by field (options by number,
   `y`/`n`, comma-separated lists; `/skip` declines it), and a permission as `o`nce, `a`lways or
@@ -507,6 +509,66 @@ runs out of time hands off and ends without a tag. A `BLOCKED` or `DECIDE` raise
 wrap-up is ignored, and the next iteration resumes from the handoff (see
 [Running out of time](#running-out-of-time)).
 
+## Harnesses
+
+Ralph drives its agent through a harness: the program that runs the model, its tools and its
+sessions. The loop, the planning interview, split, assess, confirm and the escalation agent all
+talk to one harness interface, so they behave the same whichever you pick.
+
+| Harness | Status | How Ralph drives it |
+| --- | --- | --- |
+| `opencode` | Default | Spawns `opencode serve` (or attaches to one with `server.url`) and speaks its HTTP API |
+| `pi` | Not yet available | Will spawn `pi --mode rpc` and speak its JSON protocol over stdin/stdout |
+
+Choose one with `harness` in `ralph.config.json`, `RALPH_HARNESS`, or `--harness` on the command
+line (flags beat the environment, which beats the file). Leave it out and you get `opencode`: a
+`ralph.config.json` written before the setting existed loads unchanged and runs opencode.
+
+```jsonc
+{
+  "harness": "opencode",
+  "model": "ollama/qwen3-coder",    // provider/model; both harnesses accept it
+  "agent": "build",                 // opencode only
+  "server": { "url": "http://opencode:4096" },  // opencode only
+  "pi": { "binary": "pi", "args": [], "thinking": "low" }  // pi only
+}
+```
+
+**Settings.** `model` and every other setting (timeouts, git, permissions, the web UI, ...) apply
+to any harness. Three belong to one harness alone:
+
+| Setting | Harness | What it does |
+| --- | --- | --- |
+| `agent` (`-a`, `RALPH_AGENT`) | opencode | The opencode agent profile to run as |
+| `server` (`--server`, `RALPH_SERVER_*`) | opencode | Attach to a server, or how to spawn one |
+| `pi.binary` (`RALPH_PI_BINARY`), `pi.args`, `pi.thinking` (`RALPH_PI_THINKING`) | pi | The executable, extra arguments for it, and the thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; unset leaves pi's own default) |
+
+A setting that does not apply to the chosen harness is ignored with a warning, never an error, so
+one file can carry both harnesses' settings and switch between them with `harness`.
+
+**What each supports.** The loop branches on what a harness can do, never on its name.
+
+| | opencode | pi (planned) |
+| --- | --- | --- |
+| Prompt to a busy session without stopping its tool (steering) | With a server that offers it | To be confirmed |
+| Forms the agent opens (a question tool, an MCP server's request for input) | Yes | Through an extension |
+| Permission requests put to a person | Yes | Through an extension |
+| Subagents | Yes | No |
+| Skills | Yes | To be confirmed |
+
+**pi caveats.** pi is minimal: four tools (read, write, edit, bash), a system prompt of around a
+thousand tokens, no subagents and no plan mode. That leaves more of a small context window to the
+task, which suits self-hosted models, but it has no built-in permission prompt or question tool;
+Ralph would supply those through extensions. Its adapter is not part of this version: selecting
+`pi` today stops with "not yet available" and exit code 4, before anything runs. Once it lands
+it will be experimental until it has been measured against opencode on the same models.
+
+**What names the harness.** `ralph doctor` and a run's banner say which harness is in use and
+show the harness's own checks, which run after Ralph's checks of the project (for opencode: the
+server, its API, the model, its skills). `ralph config` prints the resolved `harness`. Log lines
+about the provider carry a `harness` field, and [exit code 5](#exit-codes) is the harness or
+provider failing, which the message names.
+
 ## Configuration
 
 Resolution order is defaults < `ralph.config.json` < `RALPH_*` environment < CLI flags.
@@ -514,7 +576,8 @@ See `templates/ralph.config.json` for a complete file.
 
 ```jsonc
 {
-  "model": "ollama/qwen3-coder",   // provider/model, as opencode names it
+  "harness": "opencode",           // opencode | pi (not yet available); see Harnesses
+  "model": "ollama/qwen3-coder",   // provider/model, as the harness names it
   "ralphDir": ".ralph",            // project folder; omit to detect .ralph/ (or a legacy .agent/)
   "maxIterations": 20,
   "pinTask": true,                 // name the task in the prompt instead of letting the model choose
@@ -559,7 +622,8 @@ See `templates/ralph.config.json` for a complete file.
     "records": "end",              // when Ralph commits its records: end (of a run) | iteration | never
     "remote": "origin"
   },
-  "server": { "url": "http://opencode:4096" }, // attach instead of spawning
+  "server": { "url": "http://opencode:4096" }, // opencode: attach instead of spawning
+  "pi": { "binary": "pi", "args": [], "thinking": "low" }, // pi only
   "plan": {
     "model": "anthropic/claude-x", // for the `ralph init` interview; defaults to `model`
     "maxTurns": 30,                // agent turns before the interview gives up
@@ -582,10 +646,10 @@ See `templates/ralph.config.json` for a complete file.
 }
 ```
 
-The template leaves `model` unset, so both the loop and the interview use the opencode
-server's default until you choose one.
+The template leaves `model` unset, so both the loop and the interview use the harness's
+default model until you choose one.
 
-The env overrides worth setting from a k8s manifest: `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_ESCALATION`, `RALPH_ESCALATION_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
+The env overrides worth setting from a k8s manifest: `RALPH_HARNESS`, `RALPH_PI_BINARY`, `RALPH_PI_THINKING`, `RALPH_MODEL`, `RALPH_PLAN_MODEL`, `RALPH_ESCALATION`, `RALPH_ESCALATION_MODEL`, `RALPH_DIR`, `RALPH_MAX_ITERATIONS`,
 `RALPH_SERVER_URL`, `RALPH_SERVER_PASSWORD`, `RALPH_ITERATION_TIMEOUT_MS`,
 `RALPH_INACTIVITY_TIMEOUT_MS`, `RALPH_WRAP_UP_TIMEOUT_MS`, `RALPH_GIT_PUSH`, `RALPH_GIT_FORCE_PUSH`, `RALPH_GIT_RECORDS`, `RALPH_GIT_REMOTE`, `RALPH_LOG_FORMAT=json`,
 `RALPH_UI`, `RALPH_UI_HOST`, `RALPH_UI_PORT`, `RALPH_UI_BASE_PATH`, `RALPH_UI_WAIT`, `RALPH_UI_TOKEN`, `RALPH_UI_ACTIONS`,
@@ -665,7 +729,8 @@ inference time; the tab says how many turns that is.
 
 ## How it works
 
-Ralph spawns `opencode serve` (or attaches to one with `server.url`), then per iteration:
+With the opencode harness, Ralph spawns `opencode serve` (or attaches to one with `server.url`),
+then per iteration:
 
 1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
 2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.
@@ -878,7 +943,7 @@ A failure that is not an outright rejection is retried once first; a request tha
 gone (answered elsewhere) is ignored.
 
 Forms go to a person when one can answer ([above](#questions-in-the-middle-of-a-turn)), and
-are cancelled otherwise. opencode's `question` tool and an MCP server asking for input open a
+are cancelled otherwise. A question tool (opencode's `question`) and an MCP server asking for input open a
 form and wait for an answer; with nobody to give one, Ralph cancels each, in the session or a
 subagent's, with a message the agent gets as the tool's error. In the loop it says to carry on
 with a sensible default or, for a decision only a person can make, to emit `DECIDE`. While
