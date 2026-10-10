@@ -30,8 +30,8 @@ export const DONE_COMMAND = '/done';
 
 /** Why a form the planner opens is cancelled: its questions belong in its reply, which the owner answers. */
 export const PLAN_FORM_MESSAGE =
-  'Nobody can answer this form. Never use the question tool: ask your questions in your reply ' +
-  'text and end your turn, and the owner will answer them.';
+  'Nobody can answer this form. Do not use any tool that asks the user a question: ask your ' +
+  'questions in your reply text and end your turn, and the owner will answer them.';
 
 /** Why a form put to the owner is cancelled once nobody answered it in time. */
 export const PLAN_FORM_EXPIRED_MESSAGE =
@@ -72,7 +72,7 @@ export type FailureCause = 'provider' | 'server' | 'blocked' | 'turns';
  * session, and finish when the agent's plan passes validation.
  *
  * The agent may only write inside the Ralph folder. Permission requests are
- * answered accordingly, but opencode asks only for what its own config says
+ * answered accordingly, but the harness asks only for what its own config says
  * to ask about, so files changed elsewhere are also detected afterwards and
  * reported in `outsideChanges` (null when the project is not a git repo).
  */
@@ -84,7 +84,7 @@ export async function runInterview(args: {
   signal: AbortSignal;
   replan?: boolean;
   templatesDir?: string;
-  /** Each turn's raw opencode events, for its record. */
+  /** Each turn's events, for its record. */
   onEvent?: (event: HarnessEvent) => void;
   /** Puts the agent's forms and asked permissions to the owner; without it, forms are cancelled. */
   asks?: AskRelay;

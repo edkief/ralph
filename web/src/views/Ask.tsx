@@ -103,7 +103,7 @@ function AskCard({ ask, status }: { ask: AskView; status: StatusView }) {
 
         {ask.error ? (
           <div className="banner bad" role="alert">
-            opencode did not take the last answer: {ask.error}
+            The harness did not take the last answer: {ask.error}
           </div>
         ) : null}
 
