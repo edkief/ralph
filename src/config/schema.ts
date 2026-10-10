@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { REQUEST_KINDS } from '../human/request.js';
+import { HARNESS_NAMES } from './harness.js';
 
-/** Where Ralph finds the server: attach to a URL, or spawn its own. */
+/** The opencode harness: where Ralph finds the server, attaching to a URL or spawning its own. */
 const ServerSchema = z.object({
   url: z.string().url().optional(),
   password: z.string().optional(),
@@ -9,6 +10,16 @@ const ServerSchema = z.object({
   port: z.number().int().min(0).max(65535).default(0),
   startupTimeoutMs: z.number().int().positive().default(60_000),
   shutdownTimeoutMs: z.number().int().positive().default(10_000),
+});
+
+/** The pi harness: the process Ralph spawns. */
+const PiSchema = z.object({
+  /** The `pi` executable, by name on the PATH or by path. */
+  binary: z.string().min(1).default('pi'),
+  /** Extra arguments for the spawned process. */
+  args: z.array(z.string()).default([]),
+  /** Reasoning effort for models that have one; omitted means pi's own default. */
+  thinking: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
 });
 
 const TimeoutsSchema = z.object({
@@ -250,14 +261,19 @@ export const ConfigSchema = z.object({
   /** @deprecated Former name of ralphDir; loadConfig folds it in and drops it. */
   agentDir: z.string().optional(),
   maxIterations: z.number().int().positive().default(10),
-  /** `provider/model` as opencode names it; omitted means server default. */
+  /** The agent backend that runs the turns. */
+  harness: z.enum(HARNESS_NAMES).default('opencode'),
+  /** `provider/model`, which every harness accepts; omitted means the harness's default. */
   model: z.string().optional(),
-  /** opencode agent (subagent profile) to run as. */
+  /** opencode agent (subagent profile) to run as. opencode only. */
   agent: z.string().optional(),
   /** Name the next task explicitly in the prompt instead of letting the model choose. */
   pinTask: z.boolean().default(true),
   pauseBetweenIterationsMs: z.number().int().min(0).default(2_000),
+  /** The opencode harness's settings. */
   server: ServerSchema.prefault({}),
+  /** The pi harness's settings. */
+  pi: PiSchema.prefault({}),
   timeouts: TimeoutsSchema.prefault({}),
   retries: RetriesSchema.prefault({}),
   stall: StallSchema.prefault({}),
@@ -278,6 +294,7 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
+export type PiConfig = z.infer<typeof PiSchema>;
 export type PermissionsConfig = z.infer<typeof PermissionsSchema>;
 export type UiConfig = z.infer<typeof UiSchema>;
 export type PushConfig = z.infer<typeof PushSchema>;

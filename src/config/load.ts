@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { HARNESS_NAMES, HARNESS_SETTINGS, type HarnessName } from './harness.js';
 import { ConfigSchema, type Config } from './schema.js';
 
 export class ConfigError extends Error {}
@@ -41,6 +42,7 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
   return {
     ralphDir: env['RALPH_DIR'] || undefined,
     maxIterations: num(env['RALPH_MAX_ITERATIONS']),
+    harness: env['RALPH_HARNESS'] || undefined,
     model: env['RALPH_MODEL'],
     agent: env['RALPH_AGENT'],
     pinTask: bool(env['RALPH_PIN_TASK']),
@@ -49,6 +51,10 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
       password: env['RALPH_SERVER_PASSWORD'],
       hostname: env['RALPH_SERVER_HOSTNAME'],
       port: num(env['RALPH_SERVER_PORT']),
+    },
+    pi: {
+      binary: env['RALPH_PI_BINARY'] || undefined,
+      thinking: env['RALPH_PI_THINKING'] || undefined,
     },
     timeouts: {
       iterationMs: num(env['RALPH_ITERATION_TIMEOUT_MS']),
@@ -136,6 +142,30 @@ function resolveRalphDir(
   return RALPH_DIR;
 }
 
+/** Whether a setting has a value anywhere in it; env sections come with their keys present and undefined. */
+function isSet(value: unknown): boolean {
+  if (isPlainObject(value)) return Object.values(value).some(isSet);
+  return value !== undefined;
+}
+
+/**
+ * Warn about settings that belong to a harness other than the chosen one.
+ * They are ignored, not rejected: a file can carry both harnesses' settings
+ * and switch between them with `harness`.
+ */
+function warnInapplicable(merged: Record<string, unknown>, warn: (message: string) => void): void {
+  const chosen = merged['harness'] ?? 'opencode';
+  // An unknown name is the schema's to reject.
+  if (!HARNESS_NAMES.includes(chosen as HarnessName)) return;
+  for (const owner of HARNESS_NAMES) {
+    if (owner === chosen) continue;
+    for (const key of HARNESS_SETTINGS[owner]) {
+      if (HARNESS_SETTINGS[chosen as HarnessName].includes(key)) continue;
+      if (isSet(merged[key])) warn(`"${key}" only applies to the ${owner} harness; it is ignored with ${String(chosen)}`);
+    }
+  }
+}
+
 /**
  * Resolve config from defaults < ralph.config.json < RALPH_* env < CLI flags.
  * Throws ConfigError with a readable message when validation fails.
@@ -167,6 +197,7 @@ export function loadConfig(options: LoadOptions): Config {
 
   const warn = options.onWarning ?? ((message: string) => process.stderr.write(`warn ${message}\n`));
   const ralphDir = resolveRalphDir(projectRoot, merged, warn);
+  warnInapplicable(merged, warn);
 
   const parsed = ConfigSchema.safeParse({ ...merged, ralphDir });
   if (!parsed.success) {
