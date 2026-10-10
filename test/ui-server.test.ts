@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { startUiServer, type UiServer } from '../src/ui/server.js';
 import { readAnswer, readPending, readStopRequest, writePending } from '../src/human/request.js';
+import { readAsk, readAskAnswer, writeAsk } from '../src/human/asks.js';
 import { Logger } from '../src/report/logger.js';
 import { loadPushStore, type PushSender } from '../src/ui/push.js';
 import { readDaemonRequest, writeDaemonState, type DaemonState } from '../src/daemon/control.js';
@@ -867,6 +868,42 @@ describe('web UI actions', () => {
     await start(root);
     const { body } = await get<StatusView>('/api/status');
     expect(body.pending).toMatchObject({ analysis: 'A billing provider needs an account only you can open.' });
+  });
+
+  it("shows a live process's form, and takes one answer that fits it", async () => {
+    const root = project();
+    const ralphRoot = resolve(root, '.ralph');
+    const fields = [
+      { key: 'db', type: 'string', title: 'Database', required: true, options: [{ value: 'pg', label: 'Postgres' }] },
+      { key: 'seed', type: 'boolean', title: 'Seed it', when: [{ key: 'db', op: 'eq', value: 'pg' }] },
+    ];
+    writeAsk(ralphRoot, { id: 'frm_1', kind: 'form', origin: 'run', runId: LIVE_RUN, taskId: 'TASK-2', sessionID: 's', form: { title: 'Q', fields: fields as never }, createdAt: '2026-10-10T00:00:00.000Z' });
+    // Left by a process long gone: not shown, not answerable.
+    writeFileSync(resolve(ralphRoot, 'history', 'asks', 'frm_old.json'), JSON.stringify({ ...readAsk(ralphRoot, 'frm_1'), id: 'frm_old', pid: 2 ** 22 + 7 }));
+    await start(root);
+
+    const { body } = await get<StatusView>('/api/status');
+    expect(body.asks).toEqual([expect.objectContaining({ id: 'frm_1', kind: 'form', taskId: 'TASK-2', answered: false })]);
+
+    expect(await post('/api/actions/ask', { id: 'frm_1', answer: {} })).toMatchObject({ status: 400, body: { error: 'Database needs an answer' } });
+    expect((await post('/api/actions/ask', { id: 'frm_1', decision: 'once' })).status).toBe(400);
+    expect((await post('/api/actions/ask', { id: 'frm_old', answer: { db: 'pg' } })).status).toBe(409);
+    expect((await post('/api/actions/ask', { id: '../x', cancel: '' })).status).toBe(400);
+    expect(await post('/api/actions/ask', { id: 'frm_1', answer: { db: 'pg', seed: true } })).toMatchObject({ status: 200 });
+    expect(readAskAnswer(ralphRoot, 'frm_1')).toMatchObject({ answer: { db: 'pg', seed: true }, by: 'ui' });
+    expect((await post('/api/actions/ask', { id: 'frm_1', cancel: 'no' })).status).toBe(409);
+    expect((await get<StatusView>('/api/status')).body.asks[0]).toMatchObject({ answered: true });
+  });
+
+  it('takes a decision on an asked permission', async () => {
+    const root = project();
+    const ralphRoot = resolve(root, '.ralph');
+    writeAsk(ralphRoot, { id: 'per_1', kind: 'permission', origin: 'run', runId: LIVE_RUN, taskId: null, sessionID: 's', permission: { action: 'shell', resources: ['make deploy'] }, createdAt: '2026-10-10T00:00:00.000Z' });
+    await start(root);
+
+    expect((await post('/api/actions/ask', { id: 'per_1', answer: { a: 'x' } })).status).toBe(400);
+    expect((await post('/api/actions/ask', { id: 'per_1', decision: 'always' })).status).toBe(200);
+    expect(readAskAnswer(ralphRoot, 'per_1')?.decision).toBe('always');
   });
 
   it('hands an answer to the waiting loop, once', async () => {

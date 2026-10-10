@@ -216,6 +216,8 @@ export interface StatusView {
   run: RunView | null;
   /** What a person is asked to settle, if anything. */
   pending: PendingView | null;
+  /** Forms and permissions an agent waits on a person for, oldest first. */
+  asks: AskView[];
   /** The project's daemon, if one has ever run here; `live` says whether it still does. */
   daemon: DaemonView | null;
   /** The latest planning session, while it goes on and for a day after; null otherwise. */

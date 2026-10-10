@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { detect, type Seen } from '../src/ui/notify.js';
-import type { IterationView, PendingView, PlanSummary, RunDetail, RunView, StatusView, TaskView } from '../src/ui/types.js';
+import type { AskView, IterationView, PendingView, PlanSummary, RunDetail, RunView, StatusView, TaskView } from '../src/ui/types.js';
 
 const RUN = '20261005-100000';
 
@@ -24,7 +24,7 @@ const run = (patch: Partial<RunView> = {}): RunView => ({
 
 const task = (id: string, passes: boolean): TaskView => ({ id, title: `Do ${id}`, passes });
 
-function status(patch: { run?: RunView | null; pending?: PendingView | null; tasks?: TaskView[]; plan?: PlanSummary | null } = {}): StatusView {
+function status(patch: { run?: RunView | null; pending?: PendingView | null; tasks?: TaskView[]; plan?: PlanSummary | null; asks?: AskView[] } = {}): StatusView {
   const items = patch.tasks ?? [task('TASK-1', true), task('TASK-2', false), task('TASK-3', false)];
   return {
     project: 'shop',
@@ -33,6 +33,7 @@ function status(patch: { run?: RunView | null; pending?: PendingView | null; tas
     tasks: { total: items.length, passed: items.filter((each) => each.passes).length, next: null, items },
     run: patch.run === undefined ? run() : patch.run,
     pending: patch.pending ?? null,
+    asks: patch.asks ?? [],
     daemon: null,
     plan: patch.plan ?? null,
     planState: 'written',
@@ -76,7 +77,7 @@ describe('detecting what to notify', () => {
   it('takes the watermark from the present the first time, and sends nothing', () => {
     const first = detect(null, status({ pending: pending(), run: run({ live: false, status: 'complete' }) }), detail([iteration(1)]));
     expect(first.notifications).toEqual([]);
-    expect(first.seen).toEqual({ pending: `${RUN}-1`, runEnded: RUN, iteration: { runId: RUN, n: 1 }, passed: ['TASK-1'], plan: null });
+    expect(first.seen).toEqual({ pending: `${RUN}-1`, runEnded: RUN, iteration: { runId: RUN, n: 1 }, passed: ['TASK-1'], plan: null, asks: [] });
   });
 
   it('tells a person about a new request once', () => {
@@ -190,5 +191,39 @@ describe('the planner asking', () => {
   it('reads a watermark written before planning was', () => {
     const old: Seen = { pending: null, runEnded: null, iteration: null, passed: ['TASK-1'] };
     expect(detect(old, quiet({ plan: plan() }), null).notifications).toHaveLength(1);
+  });
+  describe('asks', () => {
+    const ask = (id: string, patch: Partial<AskView> = {}): AskView => ({
+      id,
+      kind: 'form',
+      origin: 'run',
+      runId: RUN,
+      taskId: 'TASK-2',
+      form: { title: 'Questions', source: 'question', fields: [{ key: 'db', type: 'string', title: 'Which database?' }] },
+      answered: false,
+      createdAt: '2026-10-10T00:00:00.000Z',
+      ...patch,
+    });
+
+    it('tells each new form or permission once, and not one answered', () => {
+      const first = detect(now(), status({ asks: [ask('frm_1'), ask('per_1', { kind: 'permission', form: undefined, permission: { action: 'shell', resources: ['make deploy'] } })] }), null);
+      expect(first.notifications.map((each) => each.payload)).toEqual([
+        { title: 'shop: Ralph needs you', body: 'The agent asks on TASK-2: Which database?', tag: 'ask-frm_1', path: '#/overview' },
+        { title: 'shop: Ralph needs you', body: 'The agent asks permission on TASK-2: shell make deploy', tag: 'ask-per_1', path: '#/overview' },
+      ]);
+      expect(first.notifications.every((each) => each.event === 'request')).toBe(true);
+      expect(detect(first.seen, status({ asks: [ask('frm_1'), ask('per_1')] }), null).notifications).toEqual([]);
+      expect(detect(now(), status({ asks: [ask('frm_2', { answered: true })] }), null).notifications).toEqual([]);
+    });
+
+    it("sends a planner's form to the Plan tab", () => {
+      const told = detect(now(), status({ asks: [ask('frm_1', { origin: 'plan', planId: 'p1', taskId: null, form: { title: 'Stack', source: 'mcp', fields: [] } })] }), null);
+      expect(told.notifications[0]?.payload).toMatchObject({ body: 'An MCP server asks while planning: Stack', path: '#/plan' });
+    });
+
+    it('takes a store from before asks for having told none', () => {
+      const { asks: _asks, ...old } = now();
+      expect(detect(old, status({ asks: [ask('frm_1')] }), null).notifications).toHaveLength(1);
+    });
   });
 });

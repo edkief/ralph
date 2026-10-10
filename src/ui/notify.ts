@@ -1,4 +1,4 @@
-import type { PendingView, PushEvent, PushPayload, RunDetail, StatusView } from './types.js';
+import type { AskView, PendingView, PushEvent, PushPayload, RunDetail, StatusView } from './types.js';
 
 /**
  * What has been notified already, so each event is sent once. Kept beside the
@@ -15,6 +15,8 @@ export interface Seen {
   passed: string[];
   /** The last planner's question told, as `<session>:<seq>`; absent from stores written before planning was. */
   plan?: string | null | undefined;
+  /** The forms and permissions waiting that were told; absent from stores written before asks were. */
+  asks?: string[] | undefined;
 }
 
 export interface Notification {
@@ -42,9 +44,11 @@ export function detect(
   const plan = status.plan;
   const question = plan?.live && plan.status === 'asking' && plan.by === 'daemon' ? `${plan.id}:${plan.seq}` : null;
 
+  const asks = status.asks.filter((ask) => !ask.answered);
+
   if (!seen) {
     return {
-      seen: { pending: pending?.id ?? null, runEnded: ended, iteration, passed, plan: question },
+      seen: { pending: pending?.id ?? null, runEnded: ended, iteration, passed, plan: question, asks: asks.map((ask) => ask.id) },
       notifications: [],
     };
   }
@@ -67,6 +71,20 @@ export function detect(
         body: plan!.prompt && plan!.prompt !== 'you' ? truncate(`The planner asks: ${plan!.prompt}`, 200) : 'The planner has a question',
         tag: `plan-${plan!.id}`,
         path: '#/plan',
+      },
+    });
+  }
+
+  const toldAsks = new Set(seen.asks ?? []);
+  for (const ask of asks) {
+    if (toldAsks.has(ask.id)) continue;
+    notifications.push({
+      event: 'request',
+      payload: {
+        title: `${project}: Ralph needs you`,
+        body: askBody(ask),
+        tag: `ask-${ask.id}`,
+        path: ask.origin === 'plan' ? '#/plan' : '#/overview',
       },
     });
   }
@@ -122,6 +140,8 @@ export function detect(
       iteration: iteration ?? seen.iteration,
       passed,
       plan: question ?? seen.plan ?? null,
+      // Only those still waiting: an id is never asked twice.
+      asks: asks.map((ask) => ask.id),
     },
     notifications,
   };
@@ -146,6 +166,18 @@ function requestBody(pending: PendingView): string {
             ? 'The iteration budget is spent'
             : `${pending.taskId ?? 'The run'} stalled: ${pending.message}`;
   return truncate(what, 200);
+}
+
+function askBody(ask: AskView): string {
+  const on = ask.taskId ? ` on ${ask.taskId}` : ask.origin === 'plan' ? ' while planning' : '';
+  if (ask.permission) {
+    const what = [ask.permission.action, ...ask.permission.resources].join(' ');
+    return truncate(`The agent asks permission${on}: ${what}`, 200);
+  }
+  const first = ask.form?.fields.find((field) => field.type !== 'external' && !field.hidden);
+  const question = first?.title ?? first?.description ?? ask.form?.title ?? 'a question';
+  const source = ask.form?.source === 'mcp' ? 'An MCP server asks' : 'The agent asks';
+  return truncate(`${source}${on}: ${question}`, 200);
 }
 
 function label(status: string): string {
