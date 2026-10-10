@@ -1,6 +1,6 @@
 {
   "name": "@edkief/ralph",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "private": false,
   "type": "module",
   "description": "Long-running agent loop that drives opencode through its HTTP API",
