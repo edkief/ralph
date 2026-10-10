@@ -3,7 +3,7 @@ import { relative, sep } from 'node:path';
 import { runIteration, type IterationHooks, type IterationResult } from './iteration.js';
 import { ensureHandoff } from './handoff.js';
 import { buildConfirmPrompt } from '../prompt/confirm.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { TaskStore } from '../tasks/store.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -46,7 +46,7 @@ export function passingInDoubt(result: IterationResult): string | undefined {
  * nothing then.
  */
 export async function settlePassing(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   signal: AbortSignal;
@@ -90,7 +90,7 @@ export async function settlePassing(args: {
     const sameSession = result.sessionId !== '' && result.status !== 'context-overflow';
     try {
       turn = await runIteration({
-        client: args.client,
+        harness: args.harness,
         config,
         logger,
         signal: args.signal,

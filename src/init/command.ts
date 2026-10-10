@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { RALPH_DIR } from '../config/load.js';
-import { startServer } from '../opencode/server.js';
+import { startHarness } from '../harness/registry.js';
 import { ConsoleReporter } from '../report/console.js';
 import { ExitCode } from '../exit.js';
 import { scaffold, type ScaffoldResult } from './scaffold.js';
@@ -66,7 +66,7 @@ export async function runInit(args: {
 
   const reporter = new ConsoleReporter(out);
   const controller = new AbortController();
-  const server = await startServer(config.server, { cwd: config.projectRoot, logger });
+  const harness = await startHarness(config, { cwd: config.projectRoot, logger });
   const terminal = new TerminalIO(out, process.stdin, () => controller.abort());
   // Recorded under history/plans/, so the web UI shows the interview too.
   const io = new RecordingIO(terminal, new PlanRecorder(resolve(config.projectRoot, config.ralphDir), { mode: existing ? 'replan' : 'new', by: 'cli' }));
@@ -78,7 +78,7 @@ export async function runInit(args: {
       `  End a message with an empty line · ${DONE_COMMAND} to have it write the plan now · Ctrl-C to stop`,
     ]);
     const outcome = await planWith({
-      client: server.client,
+      harness,
       config,
       logger,
       io,
@@ -92,7 +92,7 @@ export async function runInit(args: {
   } finally {
     terminal.close();
     io.recorder.close();
-    await server.stop();
+    await harness.stop();
   }
 }
 

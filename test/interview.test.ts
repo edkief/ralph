@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
 import { writePlan } from './helpers/plan.js';
-import { OpencodeClient } from '../src/opencode/client.js';
+import { opencodeHarness } from './helpers/opencode.js';
 import { PLAN_FORM_MESSAGE, runInterview, type InterviewIO } from '../src/init/interview.js';
 import { scaffold } from '../src/init/scaffold.js';
 import { PlanRecorder, readConversation, readPlanState, RecordingIO } from '../src/init/record.js';
@@ -85,8 +85,8 @@ async function interview(
   asks?: AskRelay,
 ) {
   server = await startFakeServer(scenario);
-  const client = new OpencodeClient({ baseUrl: server.url });
-  return runInterview({ client, config: cfg, logger, io: user, signal: new AbortController().signal, replan, ...(asks ? { asks } : {}) });
+  const harness = await opencodeHarness(server.url);
+  return runInterview({ harness, config: cfg, logger, io: user, signal: new AbortController().signal, replan, ...(asks ? { asks } : {}) });
 }
 
 const promptText = (index: number) => String(server?.prompts[index]?.['text']);
@@ -343,8 +343,8 @@ describe('runInterview', () => {
       onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),
       script: (count) => (count === 1 ? say('Which stack?') : say(DONE)),
     });
-    const client = new OpencodeClient({ baseUrl: server.url });
-    await runInterview({ client, config: config(root), logger, io: user, signal: new AbortController().signal, onEvent: (event) => events.push(event.type) });
+    const harness = await opencodeHarness(server.url);
+    await runInterview({ harness, config: config(root), logger, io: user, signal: new AbortController().signal, onEvent: (event) => events.push(event.type) });
 
     expect(turns).toEqual([1, 2]);
     expect(events.filter((type) => type === 'session.text.ended')).toHaveLength(2);
@@ -360,8 +360,8 @@ describe('a recorded interview', () => {
       onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),
       script: (count) => (count === 1 ? say('Which stack?') : say(DONE)),
     });
-    const client = new OpencodeClient({ baseUrl: server.url });
-    const outcome = await planWith({ client, config: config(root, { model: 'm/x' }), logger, io, signal: new AbortController().signal, replan: false });
+    const harness = await opencodeHarness(server.url);
+    const outcome = await planWith({ harness, config: config(root, { model: 'm/x' }), logger, io, signal: new AbortController().signal, replan: false });
     expect(outcome.status).toBe('planned');
 
     const ralphRoot = resolve(root, '.ralph');

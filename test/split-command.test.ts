@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
 import { runSplit } from '../src/split/command.js';
-import { splitCheck } from '../src/opencode/preflight.js';
+import { splitCheck } from '../src/loop/preflight.js';
 import { ConsoleReporter } from '../src/report/console.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';

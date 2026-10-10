@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { commitRecords, recordPaths } from '../src/loop/records.js';
 import { respond } from '../src/human/respond.js';
 import { writePending } from '../src/human/request.js';
-import { artifactsCheck, uncommittedCheck, upstreamCheck } from '../src/opencode/preflight.js';
+import { artifactsCheck, uncommittedCheck, upstreamCheck } from '../src/loop/preflight.js';
 import { ConfigSchema } from '../src/config/schema.js';
 
 const git = (root: string, ...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();

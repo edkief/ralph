@@ -12,7 +12,7 @@ import { splitDir } from '../tasks/splits.js';
 import { checkSpec, readTemplate, TASK_ID } from '../init/plan.js';
 import { TEMPLATES_DIR } from '../init/scaffold.js';
 import { buildSplitFixPrompt, buildSplitPrompt } from '../prompt/split.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -123,7 +123,7 @@ export function readProposal(
  * may write only in the task's split folder. Any earlier proposal is replaced.
  */
 export async function proposeSplit(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   taskId: string;
@@ -141,7 +141,7 @@ export async function proposeSplit(args: {
   hooks?: IterationHooks;
   templatesDir?: string;
 }): Promise<SplitOutcome> {
-  const { client, config, logger, taskId, signal } = args;
+  const { harness, config, logger, taskId, signal } = args;
   const { projectRoot, ralphDir } = config;
   const tasks = TaskStore.forProject(projectRoot, ralphDir).readTasks();
   const task = tasks.find((candidate) => candidate.id === taskId);
@@ -179,7 +179,7 @@ export async function proposeSplit(args: {
 
   for (let attempt = 0; ; attempt += 1) {
     const result = await runIteration({
-      client,
+      harness,
       config: splitConfig,
       prompt: message,
       title: `ralph split · ${taskId}`,

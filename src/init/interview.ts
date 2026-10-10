@@ -9,7 +9,7 @@ import { RALPH_DIR_PLACEHOLDER } from '../prompt/build.js';
 import { TaskStore, type Task } from '../tasks/store.js';
 import { validatePlan } from './plan.js';
 import { TEMPLATES_DIR } from './scaffold.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { HarnessEvent } from '../harness/events.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -77,7 +77,7 @@ export type FailureCause = 'provider' | 'server' | 'blocked' | 'turns';
  * reported in `outsideChanges` (null when the project is not a git repo).
  */
 export async function runInterview(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   io: InterviewIO;
@@ -89,7 +89,7 @@ export async function runInterview(args: {
   /** Puts the agent's forms and asked permissions to the owner; without it, forms are cancelled. */
   asks?: AskRelay;
 }): Promise<InterviewOutcome> {
-  const { client, config, logger, io, signal, replan = false } = args;
+  const { harness, config, logger, io, signal, replan = false } = args;
   const templatesDir = args.templatesDir ?? TEMPLATES_DIR;
   const model = config.plan.model ?? config.model;
   const planConfig: Config = model ? { ...config, model } : config;
@@ -118,7 +118,7 @@ export async function runInterview(args: {
     turns += 1;
     io.turn?.(turns);
     const result = await runIteration({
-      client,
+      harness,
       config: planConfig,
       prompt: message,
       title: replan ? 'ralph init: replan' : 'ralph init: plan',

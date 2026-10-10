@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { startServer } from '../opencode/server.js';
+import { startHarness } from '../harness/registry.js';
 import { sleep } from '../util/sleep.js';
-import { preflight } from '../opencode/preflight.js';
+import { preflight } from '../loop/preflight.js';
 import { runLoop } from '../loop/orchestrator.js';
 import { requestStop, STOP_MESSAGES } from '../human/request.js';
 import { startUiBesideLoop } from '../ui/command.js';
@@ -26,6 +26,7 @@ import { fileAskRelay } from '../loop/asks.js';
 import { livePlan, PlanRecorder, requestPlanStop } from '../init/record.js';
 import { planWith, preparePlan } from '../init/session.js';
 import type { Config } from '../config/schema.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 
 const ralphRootOf = (config: Config) => resolve(config.projectRoot, config.ralphDir);
@@ -73,9 +74,9 @@ export async function runDaemon(args: {
   process.on('SIGHUP', onSignal);
 
   const ui = args.ui ? await startUiBesideLoop(config, logger) : undefined;
-  let server: Awaited<ReturnType<typeof startServer>>;
+  let harness: AgentHarness;
   try {
-    server = await startServer(config.server, { cwd: config.projectRoot, logger });
+    harness = await startHarness(config, { cwd: config.projectRoot, logger });
   } catch (cause) {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
@@ -88,7 +89,7 @@ export async function runDaemon(args: {
     const fresh = args.reload();
     // Someone is around to answer: wait for them rather than end the batch.
     const batch: Config = { ...fresh, maxIterations: iterations, ui: { ...fresh.ui, wait: fresh.ui.wait ?? true } };
-    const checks = await preflight(batch, server.client);
+    const checks = await preflight(batch, harness);
     for (const check of checks.filter((check) => !check.ok)) {
       logger[check.fatal ? 'error' : 'warn'](`preflight: ${check.name}`, { detail: check.detail });
     }
@@ -98,7 +99,7 @@ export async function runDaemon(args: {
     }
     const result = await runLoop({
       config: batch,
-      client: server.client,
+      harness,
       logger,
       reporter: new ConsoleReporter(),
       signal: interrupt,
@@ -131,7 +132,7 @@ export async function runDaemon(args: {
         return;
       }
       const outcome = await planWith({
-        client: server.client,
+        harness,
         config: planConfig,
         logger,
         io,
@@ -168,7 +169,7 @@ export async function runDaemon(args: {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
     process.off('SIGHUP', onSignal);
-    await server.stop();
+    await harness.stop();
     await ui?.close();
     markStopped(ralphRoot);
   }

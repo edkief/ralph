@@ -2,8 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { loadConfig, ConfigError } from './config/load.js';
-import { startServer } from './opencode/server.js';
-import { preflight } from './opencode/preflight.js';
+import { startHarness } from './harness/registry.js';
+import { preflight } from './loop/preflight.js';
 import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
@@ -18,6 +18,7 @@ import { startMenu } from './report/menu.js';
 import { formatTimestamp } from './report/time.js';
 import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
+import type { AgentHarness } from './harness/types.js';
 
 const HELP = `ralph — long-running agent loop for opencode
 
@@ -306,16 +307,16 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
 
   // Up before the opencode server, so preflight problems are visible in it too.
   const ui = config.ui.enabled && command !== 'doctor' ? await startUiBesideLoop(config, logger) : undefined;
-  let server: Awaited<ReturnType<typeof startServer>>;
+  let harness: AgentHarness;
   try {
-    server = await startServer(config.server, { cwd: config.projectRoot, logger });
+    harness = await startHarness(config, { cwd: config.projectRoot, logger });
   } catch (cause) {
     await ui?.close();
     throw cause;
   }
 
   try {
-    const checks = await preflight(config, server.client);
+    const checks = await preflight(config, harness);
     reporter.banner([
       'ralph · opencode loop',
       `  started ${formatTimestamp(new Date())}`,
@@ -379,7 +380,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     const startedAt = Date.now();
     const result = await runLoop({
       config,
-      client: server.client,
+      harness,
       logger,
       reporter,
       signal: controller.signal,
@@ -408,7 +409,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     process.off('SIGHUP', onTerminate);
     closeMenu?.();
     logger.beforeWrite(undefined);
-    await server.stop();
+    await harness.stop();
     await ui?.close();
   }
 }

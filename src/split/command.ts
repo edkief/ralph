@@ -1,4 +1,4 @@
-import { startServer } from '../opencode/server.js';
+import { startHarness } from '../harness/registry.js';
 import { applySplit, proposeSplit, readProposal, splitDir, SplitError, type Split } from '../loop/split.js';
 import { ConsoleReporter, truncate } from '../report/console.js';
 import { TaskStore } from '../tasks/store.js';
@@ -58,11 +58,11 @@ export async function runSplit(args: {
     const controller = new AbortController();
     const onInterrupt = () => controller.abort();
     process.on('SIGINT', onInterrupt);
-    const server = await startServer(config.server, { cwd: config.projectRoot, logger });
+    const harness = await startHarness(config, { cwd: config.projectRoot, logger });
     try {
       reporter.banner([`ralph split · ${taskId}`, `  asking ${config.plan.model ?? config.model ?? 'the server default model'} to propose a split`]);
       const outcome = await proposeSplit({
-        client: server.client,
+        harness,
         config,
         logger,
         taskId,
@@ -84,7 +84,7 @@ export async function runSplit(args: {
       }
     } finally {
       process.off('SIGINT', onInterrupt);
-      await server.stop();
+      await harness.stop();
     }
     read = readProposal(config.projectRoot, config.ralphDir, taskId, tasks);
     if (read.status !== 'ok') return ExitCode.ProviderError;
