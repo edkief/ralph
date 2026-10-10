@@ -39,7 +39,7 @@ export function ownerOf(config: Config): string | undefined {
 }
 
 /**
- * `ralph daemon`: hold the opencode server and the web UI, and run a batch of
+ * `ralph daemon`: hold the harness (opencode's server, say) and the web UI, and run a batch of
  * iterations whenever asked, until shut down. Each batch is a run of the loop
  * with a fresh budget and the configuration as it is then; however it ends,
  * the daemon goes back to idle. Planning interviews asked for from the web UI

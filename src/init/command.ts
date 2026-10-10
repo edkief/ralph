@@ -73,7 +73,7 @@ export async function runInit(args: {
 
   try {
     reporter.banner([
-      `ralph init · ${existing ? 'revising the plan' : 'planning'} with ${config.plan.model ?? config.model ?? 'the server default model'}`,
+      `ralph init · ${existing ? 'revising the plan' : 'planning'} with ${config.plan.model ?? config.model ?? 'the harness default model'}`,
       existing ? '  Say what should change; the agent will ask about the rest.' : '  Describe the project, then answer the agent\'s questions.',
       `  End a message with an empty line · ${DONE_COMMAND} to have it write the plan now · Ctrl-C to stop`,
     ]);

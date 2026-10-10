@@ -13,7 +13,7 @@ export const ExitCode = {
   Decide: 3,
   /** Bad config, missing files, or a failed preflight. */
   ConfigError: 4,
-  /** The model provider or opencode server is unusable. */
+  /** The model provider is unusable, or the agent harness (opencode's server, pi's process) will not start or stay up. */
   ProviderError: 5,
   /** Iterations ran but stopped making progress. */
   Stalled: 6,
