@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isActivityEvent, type HarnessEvent } from '../src/harness/vocab.js';
+import { isActivityEvent, type HarnessEvent } from '../src/harness/events.js';
 import type { OpencodeFrame } from '../src/opencode/frames.js';
 import { errorMessage, OpencodeTranslator } from '../src/opencode/translate.js';
 

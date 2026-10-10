@@ -260,17 +260,16 @@ describe('runIteration', () => {
       logger,
       signal: new AbortController().signal,
       hooks: {
-        onEvent: (event) =>
-          seen.push(`${event.type}:${(event.data as { sessionID: string }).sessionID}`),
+        onEvent: (event) => seen.push(`${event.type}:${event.session}`),
       },
     });
 
     expect(result.status).toBe('progressed');
     // The turn names its own session before any of the stream's events.
-    expect(seen[0]).toBe('ralph.turn.started:ses_fake_1');
-    expect(seen).toContain('session.created:ses_stranger');
-    expect(seen).toContain('session.step.started:ses_child');
-    expect(seen).not.toContain('session.step.started:ses_stranger');
+    expect(seen[0]).toBe('turn.started:ses_fake_1');
+    expect(seen).toContain('session.started:ses_stranger');
+    expect(seen).toContain('step.started:ses_child');
+    expect(seen).not.toContain('step.started:ses_stranger');
   });
 
   it('answers permission requests from policy and keeps going', async () => {
@@ -533,7 +532,7 @@ describe('runIteration', () => {
       { sessionId: 'ses_fake_1', hooks: { onEvent: (event) => seen.push(event) } },
     );
 
-    expect(seen[0]).toMatchObject({ type: 'ralph.turn.started', data: { sessionID: 'ses_fake_1', continued: true } });
+    expect(seen[0]).toMatchObject({ type: 'turn.started', session: 'ses_fake_1', continued: true });
     expect(server?.sessionsCreated).toBe(0);
     expect(result.sessionId).toBe('ses_fake_1');
     expect(result.text).toBe('second turn');

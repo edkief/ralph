@@ -2,16 +2,36 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TranscriptBuilder } from '../src/ui/transcript.js';
-import type { HarnessEvent } from '../src/harness/events.js';
+import type { OpencodeFrame } from '../src/opencode/frames.js';
+import { OpencodeTranslator } from '../src/opencode/translate.js';
+import type { TranscriptEntry } from '../src/ui/types.js';
+
+/**
+ * A transcript fed with opencode's frames as the recorded captures and the
+ * scripts here have them: translated into events, as the adapter does live and
+ * as the legacy reader does for history written before the vocabulary.
+ */
+class FramesBuilder {
+  private readonly builder = new TranscriptBuilder();
+  private readonly translator = new OpencodeTranslator();
+
+  push(frame: OpencodeFrame): TranscriptEntry[] {
+    return this.translator.push(frame).flatMap((event) => this.builder.push(event));
+  }
+
+  get all(): TranscriptEntry[] {
+    return this.builder.all;
+  }
+}
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
   .trim()
   .split('\n')
-  .map((line) => JSON.parse(line) as HarnessEvent);
+  .map((line) => JSON.parse(line) as OpencodeFrame);
 
-function build(events: HarnessEvent[]) {
-  const builder = new TranscriptBuilder();
-  for (const event of events) builder.push(event);
+function build(frames: OpencodeFrame[]) {
+  const builder = new FramesBuilder();
+  for (const frame of frames) builder.push(frame);
   return builder.all;
 }
 
@@ -47,7 +67,7 @@ describe('TranscriptBuilder', () => {
   });
 
   it('grows a text part delta by delta under one id', () => {
-    const builder = new TranscriptBuilder();
+    const builder = new FramesBuilder();
     const part = { sessionID: 's', assistantMessageID: 'm', ordinal: 0 };
     const [first] = builder.push({ type: 'session.text.delta', data: { ...part, delta: 'Hel' } });
     const [second] = builder.push({ type: 'session.text.delta', data: { ...part, delta: 'lo' } });
@@ -155,7 +175,7 @@ describe('TranscriptBuilder', () => {
   });
 
   it('stops a text part growing once it is full', () => {
-    const builder = new TranscriptBuilder();
+    const builder = new FramesBuilder();
     const delta = { type: 'session.text.delta', data: { sessionID: 's', delta: 'y'.repeat(60_000) } };
     expect(builder.push(delta)).toHaveLength(1);
     expect(builder.push(delta)).toHaveLength(1);
@@ -166,7 +186,7 @@ describe('TranscriptBuilder', () => {
 
 describe('a long session', () => {
   it('keeps every entry', () => {
-    const builder = new TranscriptBuilder();
+    const builder = new FramesBuilder();
     for (let index = 0; index < 5000; index += 1) {
       builder.push({ type: 'session.text.ended', data: { sessionID: 's', text: `message ${index}` } });
     }

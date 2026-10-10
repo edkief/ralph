@@ -33,7 +33,7 @@ import {
 } from './push.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
-import type { HarnessEvent } from '../harness/events.js';
+import { HistoryDecoder } from '../harness/history.js';
 import type {
   ActionsView,
   LiveEvents,
@@ -521,6 +521,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     escalation: number | undefined;
     tailer: LineTailer;
     builder: TranscriptBuilder;
+    /** Reads the file's lines as events; it follows the file, so it starts over with it. */
+    decoder: HistoryDecoder;
     /**
      * The transcript has been sent whole once. Until then the file's backlog is
      * still being read and nothing is sent; after it, only what changed is.
@@ -619,6 +621,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         escalation,
         tailer: new LineTailer(escalation ? escalationPath! : split ? splitPath! : project.eventsPath(runId, iteration)),
         builder: new TranscriptBuilder(),
+        decoder: new HistoryDecoder(),
         announced: false,
       };
     }
@@ -627,11 +630,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const eventRead = feed.tailer.read();
     if (eventRead.reset) {
       feed.builder = new TranscriptBuilder();
+      feed.decoder = new HistoryDecoder();
       feed.announced = false;
     }
     // Send each changed entry once, as it stands after this batch.
     const changed = new Map<string, TranscriptEntry>();
-    for (const event of parseJsonLines<HarnessEvent>(eventRead.lines)) {
+    for (const event of feed.decoder.decode(eventRead.lines)) {
       for (const entry of feed.builder.push(event)) changed.set(entry.id, entry);
     }
     if (feed.announced) {

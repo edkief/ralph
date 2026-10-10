@@ -1,5 +1,5 @@
 import { SseParser } from './sse.js';
-import type { HarnessEvent } from '../harness/events.js';
+import type { OpencodeFrame } from './frames.js';
 import { HarnessApiError } from '../harness/types.js';
 
 /** The parts of the server's live OpenAPI document that preflight reads. */
@@ -160,7 +160,7 @@ export class OpencodeClient {
    * Connecting is awaited here rather than inside the generator, so the
    * subscription is live when this resolves: see `AgentHarness.connectEvents`.
    */
-  async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<HarnessEvent>> {
+  async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<OpencodeFrame>> {
     const response = await fetch(`${this.baseUrl}/api/event`, {
       headers: { ...this.headers(), accept: 'text/event-stream' },
       signal,
@@ -212,11 +212,11 @@ export function parseModel(model?: string): { providerID: string; modelID: strin
   return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
 }
 
-/** Drain an already-connected SSE body into parsed events. */
+/** Drain an already-connected SSE body into parsed frames. */
 async function* readEvents(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
-): AsyncGenerator<HarnessEvent> {
+): AsyncGenerator<OpencodeFrame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const parser = new SseParser();

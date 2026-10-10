@@ -115,7 +115,7 @@ interface FormFieldBase {
 }
 
 /**
- * A field of an opencode form, as its `question` tool or an MCP server's
+ * A field of a form, as the agent's `question` tool or an MCP server's
  * request for input opens one. `custom` lets an answer go beyond `options`.
  */
 export type FormField =
@@ -156,7 +156,7 @@ export interface AskView {
   taskId: string | null;
   form?: {
     title: string;
-    /** `question` for opencode's question tool, `mcp` for an MCP server's request. */
+    /** `question` for the agent's question tool, `mcp` for an MCP server's request. */
     source?: string;
     fields: FormField[];
   };
@@ -512,7 +512,7 @@ export interface MetricsUsage {
   tokens: number;
   /** Time the models spent generating; for approximate turns, their wall-clock time. */
   inferenceMs: number;
-  /** What opencode reported, from the provider's prices; 0 for most self-hosted models. */
+  /** What the harness reported, from the provider's prices; 0 for most self-hosted models. */
   reportedCost: number;
   /** The configured estimate, in `MetricsView.cost.currency`; null when none is configured. */
   estimatedCost: number | null;

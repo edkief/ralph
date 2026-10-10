@@ -347,7 +347,7 @@ describe('runInterview', () => {
     await runInterview({ harness, config: config(root), logger, io: user, signal: new AbortController().signal, onEvent: (event) => events.push(event.type) });
 
     expect(turns).toEqual([1, 2]);
-    expect(events.filter((type) => type === 'session.text.ended')).toHaveLength(2);
+    expect(events.filter((type) => type === 'text.ended')).toHaveLength(2);
   });
 });
 
@@ -381,7 +381,7 @@ describe('a recorded interview', () => {
       outcome: { tasks: [{ id: 'TASK-1' }, { id: 'TASK-2' }], outsideChanges: [] },
     });
     const events = readFileSync(resolve(recorder.dir, 'turn-001.events.jsonl'), 'utf8');
-    expect(events).toContain('session.text.ended');
+    expect(events).toContain('"type":"text.ended"');
     expect(existsSync(resolve(recorder.dir, 'turn-002.events.jsonl'))).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
-import { z } from 'zod';
-import { StepEndedSchema, readData, sessionIdOf, type HarnessEvent } from '../harness/events.js';
-import { LineTailer, parseJsonLines } from '../ui/tail.js';
+import type { HarnessEvent } from '../harness/events.js';
+import { HistoryDecoder } from '../harness/history.js';
+import { LineTailer } from '../ui/tail.js';
 
 /** What one model did in a turn: its calls, their tokens, and the time it spent generating. */
 export interface ModelUsage {
@@ -11,7 +11,7 @@ export interface ModelUsage {
   reasoning: number;
   cacheRead: number;
   cacheWrite: number;
-  /** What opencode reported the calls cost; 0 for most self-hosted models. */
+  /** What the harness reported the calls cost, from the provider's prices; 0 for most self-hosted models. */
   cost: number;
   /** Time the model spent generating: each call's start to the end of its stream, less the tools run within it. */
   inferenceMs: number;
@@ -21,12 +21,6 @@ export interface ModelUsage {
 export type TurnUsage = Record<string, ModelUsage>;
 
 export const UNKNOWN_MODEL = 'unknown';
-
-const StepStartedSchema = z.looseObject({
-  model: z.looseObject({ id: z.string().optional(), providerID: z.string().optional() }).optional(),
-});
-
-const ToolEventSchema = z.looseObject({ id: z.string().optional() });
 
 export function emptyUsage(): ModelUsage {
   return { steps: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, inferenceMs: 0 };
@@ -62,8 +56,8 @@ interface OpenStep {
 
 /**
  * Totals a turn's usage by model from its event stream. Each session's model
- * calls (subagents' too) are followed from `session.step.started`, which names
- * the model, to `session.step.ended`, which carries the tokens.
+ * calls (subagents' too) are followed from `step.started`, which names the
+ * model, to `step.ended`, which carries the tokens.
  *
  * Inference time is when the model was generating: from the step's start to
  * the end of its stream, less the time tools ran within it. A step started
@@ -77,27 +71,26 @@ export class UsageMeter {
 
   /** `now` stands in for an event without a `created` time. */
   push(event: HarnessEvent, now?: number): void {
-    const session = sessionIdOf(event);
-    if (!session || !event.type.startsWith('session.')) return;
-    const at = typeof event['created'] === 'number' ? event['created'] : now;
+    const session = event.session;
+    if (!session) return;
+    const at = event.created ?? now;
 
     switch (event.type) {
-      case 'session.step.started': {
-        const model = modelName(readData(event, StepStartedSchema)?.model) ?? this.models.get(session) ?? UNKNOWN_MODEL;
+      case 'step.started': {
+        const model = event.model ?? this.models.get(session) ?? UNKNOWN_MODEL;
         this.models.set(session, model);
         this.steps.set(session, { model, ...(at !== undefined ? { startedAt: at } : {}), tools: new Map(), toolMs: 0 });
         return;
       }
-      case 'session.tool.called': {
+      case 'tool.called': {
         const step = this.steps.get(session);
-        const id = readData(event, ToolEventSchema)?.id;
+        const id = event.id;
         if (step && id && at !== undefined && step.streamedAt === undefined) step.tools.set(id, at);
         return;
       }
-      case 'session.tool.success':
-      case 'session.tool.error': {
+      case 'tool.finished': {
         const step = this.steps.get(session);
-        const id = readData(event, ToolEventSchema)?.id;
+        const id = event.id;
         const started = id ? step?.tools.get(id) : undefined;
         if (step && id && started !== undefined && at !== undefined) {
           step.toolMs += Math.max(0, at - started);
@@ -105,13 +98,13 @@ export class UsageMeter {
         }
         return;
       }
-      case 'session.step.streamed': {
+      case 'step.streamed': {
         const step = this.steps.get(session);
         if (step && step.streamedAt === undefined && at !== undefined) step.streamedAt = at;
         return;
       }
-      case 'session.step.ended':
-      case 'session.step.failed': {
+      case 'step.ended':
+      case 'step.failed': {
         const step = this.steps.get(session);
         this.steps.delete(session);
         const model = step?.model ?? this.models.get(session) ?? UNKNOWN_MODEL;
@@ -120,15 +113,14 @@ export class UsageMeter {
           const end = step.streamedAt ?? at;
           if (end !== undefined) usage.inferenceMs += Math.max(0, end - step.startedAt - step.toolMs);
         }
-        if (event.type === 'session.step.failed') return;
-        const data = readData(event, StepEndedSchema);
+        if (event.type === 'step.failed') return;
         usage.steps += 1;
-        usage.input += data?.tokens?.input ?? 0;
-        usage.output += data?.tokens?.output ?? 0;
-        usage.reasoning += data?.tokens?.reasoning ?? 0;
-        usage.cacheRead += data?.tokens?.cache?.read ?? 0;
-        usage.cacheWrite += data?.tokens?.cache?.write ?? 0;
-        usage.cost += data?.cost ?? 0;
+        usage.input += event.usage.input;
+        usage.output += event.usage.output;
+        usage.reasoning += event.usage.reasoning;
+        usage.cacheRead += event.usage.cacheRead;
+        usage.cacheWrite += event.usage.cacheWrite;
+        usage.cost += event.usage.cost;
         return;
       }
       default:
@@ -150,17 +142,13 @@ export class UsageMeter {
   }
 }
 
-function modelName(model: { id?: string | undefined; providerID?: string | undefined } | undefined): string | undefined {
-  if (!model?.id) return undefined;
-  return model.providerID ? `${model.providerID}/${model.id}` : model.id;
-}
-
 /** The usage recorded in an event file, read a stretch at a time. */
 export function usageOfEventsFile(path: string): TurnUsage {
   const meter = new UsageMeter();
+  const decoder = new HistoryDecoder();
   const tailer = new LineTailer(path);
   for (let read = tailer.read(); ; read = tailer.read()) {
-    for (const event of parseJsonLines<HarnessEvent>(read.lines)) meter.push(event);
+    for (const event of decoder.decode(read.lines)) meter.push(event);
     if (!read.more) break;
   }
   return meter.drain();

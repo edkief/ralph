@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { EventOf, HarnessEvent } from '../harness/vocab.js';
+import type { EventOf, HarnessEvent } from '../harness/events.js';
 import type { OpencodeFrame } from './frames.js';
 
 /** The tokens a step reports; opencode counts reasoning apart from output. */

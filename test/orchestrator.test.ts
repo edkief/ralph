@@ -608,7 +608,7 @@ describe('runLoop', () => {
       expect(records[0]).toMatchObject({ result: { status: 'progressed' } });
       // Both attempts share the iteration's event file, each naming its own session.
       const events = readFileSync(resolve(result.historyDir, 'iteration-001.events.jsonl'), 'utf8');
-      expect(events.match(/"type":"ralph\.turn\.started"/g)).toHaveLength(2);
+      expect(events.match(/"type":"turn.started"/g)).toHaveLength(2);
     });
 
     it('stops a task that keeps outgrowing the context window', async () => {
@@ -1573,7 +1573,7 @@ describe('runLoop', () => {
       resolve(result.historyDir, 'iteration-001.events.jsonl'),
       'utf8',
     );
-    expect(events).toContain('session.text.ended');
+    expect(events).toContain('"type":"text.ended"');
   });
 
   it('keeps the run state and its log lines beside the history', async () => {

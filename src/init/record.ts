@@ -10,7 +10,7 @@ import type { HarnessEvent } from '../harness/events.js';
 /**
  * A planning interview as it goes, under `history/plans/<id>/`, apart from
  * the runs: where it stands (`state.json`), what was said
- * (`conversation.jsonl`) and each turn's opencode events
+ * (`conversation.jsonl`) and each turn's events
  * (`turn-NNN.events.jsonl`). Whoever is asked writes `reply.json`, and
  * `stop.json` ends it. Files, as for runs, so the web UI may be another
  * process or container that shares only the Ralph folder.

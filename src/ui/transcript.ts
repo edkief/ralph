@@ -1,36 +1,5 @@
-import { z } from 'zod';
-import {
-  ExecutionEndedSchema,
-  FormCreatedSchema,
-  PermissionRequestSchema,
-  RetryScheduledSchema,
-  StepEndedSchema,
-  StepFailedSchema,
-  TextEndedSchema,
-  ToolCalledSchema,
-  ToolInputStartedSchema,
-  ToolResultSchema,
-  TURN_STARTED_EVENT,
-  TurnStartedSchema,
-  errorMessage,
-  readData,
-  sessionIdOf,
-  toolName,
-  type HarnessEvent,
-} from '../harness/events.js';
+import type { EventOf, HarnessEvent } from '../harness/events.js';
 import type { TranscriptEntry } from './types.js';
-
-/** Identifies a text or reasoning part across its start, deltas and end. */
-const PartSchema = z.looseObject({
-  assistantMessageID: z.string().optional(),
-  ordinal: z.number().optional(),
-  delta: z.string().optional(),
-  text: z.string().optional(),
-});
-
-const PromptSchema = z.looseObject({
-  item: z.looseObject({ payload: z.looseObject({ text: z.string().optional() }).optional() }).optional(),
-});
 
 /** Tool input and output shown in the UI; the rest is in the event file. */
 const MAX_OUTPUT = 20_000;
@@ -69,84 +38,67 @@ export class TranscriptBuilder {
   }
 
   push(event: HarnessEvent): TranscriptEntry[] {
-    const session = sessionIdOf(event);
-    const time = typeof event['created'] === 'number' ? { time: event['created'] } : {};
-    if (event.type === TURN_STARTED_EVENT) {
-      const started = readData(event, TurnStartedSchema);
-      if (!started || this.ownSessions.has(started.sessionID)) return [];
+    const session = event.session;
+    const time = event.created !== undefined ? { time: event.created } : {};
+    if (event.type === 'turn.started') {
+      if (this.ownSessions.has(event.session)) return [];
       const retry = this.ownSessions.size > 0;
-      this.ownSessions.add(started.sessionID);
+      this.ownSessions.add(event.session);
       return retry ? this.notice(time, 'warn', 'the turn started over in a fresh session') : [];
     }
     if (this.ownSessions.size === 0) this.firstSession ??= session;
-    if (event.type === 'session.created') return [];
+    if (event.type === 'session.started') return [];
     const own = this.ownSessions.size > 0 ? session !== undefined && this.ownSessions.has(session) : session === this.firstSession;
     const base = {
       ...time,
       ...(session && !own ? { subagent: true } : {}),
     };
 
-    if (event.type.includes('permission')) {
-      const request = readData(event, PermissionRequestSchema);
-      if (!request) return [];
-      const what = [request.action, ...request.resources].join(' ');
-      return this.add({ ...base, id: this.nextId('permission'), kind: 'notice', level: 'info', text: `permission asked: ${what}` });
-    }
-
-    // Ralph cancels every form: nobody is there to answer it.
-    if (event.type === 'form.created') {
-      const form = readData(event, FormCreatedSchema)?.form;
-      if (!form) return [];
-      const what = [form.title, `(${form.metadata?.kind ?? 'form'})`].filter(Boolean).join(' ');
-      return this.add({ ...base, id: this.nextId('form'), kind: 'notice', level: 'info', text: `form cancelled: ${what}` });
-    }
-
     switch (event.type) {
-      case 'session.inbox.enqueued': {
-        const text = readData(event, PromptSchema)?.item?.payload?.text;
-        return text ? this.add({ ...base, id: this.nextId('prompt'), kind: 'prompt', text: clip(text, MAX_TEXT) }) : [];
+      case 'permission.asked': {
+        const what = [event.action, ...event.resources].join(' ');
+        return this.add({ ...base, id: this.nextId('permission'), kind: 'notice', level: 'info', text: `permission asked: ${what}` });
       }
-      case 'session.text.delta':
-      case 'session.reasoning.delta': {
-        const part = readData(event, PartSchema);
-        if (!part?.delta) return [];
-        const kind = event.type === 'session.text.delta' ? 'text' : 'reasoning';
-        const id = this.partId(kind, session, part, false);
+      // Ralph cancels every form: nobody is there to answer it.
+      case 'form.opened': {
+        const what = [event.form.title, `(${event.form.kind ?? 'form'})`].filter(Boolean).join(' ');
+        return this.add({ ...base, id: this.nextId('form'), kind: 'notice', level: 'info', text: `form cancelled: ${what}` });
+      }
+      case 'prompt.queued':
+        return event.text ? this.add({ ...base, id: this.nextId('prompt'), kind: 'prompt', text: clip(event.text, MAX_TEXT) }) : [];
+      case 'text.delta':
+      case 'reasoning.delta': {
+        if (!event.text) return [];
+        const kind = event.type === 'text.delta' ? 'text' : 'reasoning';
+        const id = this.partId(kind, session, event.part, false);
         const current = this.entries.get(id);
         const before = current && 'text' in current ? current.text : '';
         // Full already: the rest arrives with the part's end, clipped.
         if (before.length >= MAX_TEXT) return [];
-        const text = before + part.delta;
+        const text = before + event.text;
         return this.add(
           kind === 'text'
             ? { ...base, id, kind, text, done: false }
             : { ...base, id, kind, text },
         );
       }
-      case 'session.text.ended': {
-        const part = readData(event, PartSchema);
-        const text = readData(event, TextEndedSchema)?.text ?? '';
-        const id = this.partId('text', session, part, true);
-        if (!text && !this.entries.has(id)) return [];
-        return this.add({ ...base, id, kind: 'text', text: clip(text, MAX_TEXT), done: true });
+      case 'text.ended': {
+        const id = this.partId('text', session, event.part, true);
+        if (!event.text && !this.entries.has(id)) return [];
+        return this.add({ ...base, id, kind: 'text', text: clip(event.text, MAX_TEXT), done: true });
       }
-      case 'session.reasoning.ended': {
-        const part = readData(event, PartSchema);
-        const id = this.partId('reasoning', session, part, true);
+      case 'reasoning.ended': {
+        const id = this.partId('reasoning', session, event.part, true);
         // Reasoning often arrives encrypted, with no readable text.
-        if (!part?.text) return [];
-        return this.add({ ...base, id, kind: 'reasoning', text: clip(part.text, MAX_TEXT) });
+        if (!event.text) return [];
+        return this.add({ ...base, id, kind: 'reasoning', text: clip(event.text, MAX_TEXT) });
       }
-      case 'session.tool.input.started': {
-        const data = readData(event, ToolInputStartedSchema);
-        if (!data?.id) return [];
-        return this.add({ ...base, id: `tool:${data.id}`, kind: 'tool', name: data.name ?? 'tool', status: 'running' });
-      }
-      case 'session.tool.called': {
-        const data = readData(event, ToolCalledSchema);
-        const id = data?.id ? `tool:${data.id}` : this.nextId('tool');
+      case 'tool.started':
+        return this.add({ ...base, id: `tool:${event.id}`, kind: 'tool', name: event.name ?? 'tool', status: 'running' });
+      case 'tool.called': {
+        const id = event.id ? `tool:${event.id}` : this.nextId('tool');
         const current = this.entries.get(id);
-        const name = current?.kind === 'tool' ? current.name : toolName(event);
+        const name = current?.kind === 'tool' ? current.name : (event.name ?? 'tool');
         return this.add({
           ...(current ?? {}),
           ...base,
@@ -154,67 +106,62 @@ export class TranscriptBuilder {
           kind: 'tool',
           name,
           status: current?.kind === 'tool' ? current.status : 'running',
-          ...(data?.input ? { input: clipInput(data.input) } : {}),
+          ...(event.input ? { input: clipInput(event.input) } : {}),
         });
       }
-      case 'session.tool.success':
-      case 'session.tool.error':
-      case 'session.tool.failed': {
-        const data = readData(event, ToolResultSchema);
-        const id = data?.id ? `tool:${data.id}` : this.nextId('tool');
+      case 'tool.finished': {
+        const id = event.id ? `tool:${event.id}` : this.nextId('tool');
         const current = this.entries.get(id);
-        const output = (data?.content ?? []).flatMap((part) => (part.text ? [part.text] : [])).join('\n');
-        const exit = data?.metadata?.exit;
         return this.add({
-          ...(current?.kind === 'tool' ? current : { name: toolName(event) }),
+          ...(current?.kind === 'tool' ? current : { name: event.name ?? 'tool' }),
           ...base,
           id,
           kind: 'tool',
-          status: event.type === 'session.tool.success' && (exit === undefined || exit === 0) ? 'success' : 'error',
-          ...(output ? { output: clip(output) } : {}),
-          ...(exit !== undefined ? { exit } : {}),
+          // A tool that ran and exited non-zero failed, whatever the harness made of the call.
+          status: event.status === 'success' && (event.exit === undefined || event.exit === 0) ? 'success' : 'error',
+          ...(event.output ? { output: clip(event.output) } : {}),
+          ...(event.exit !== undefined ? { exit: event.exit } : {}),
         });
       }
-      case 'session.step.ended': {
-        const data = readData(event, StepEndedSchema);
-        const tokens = data?.tokens;
+      case 'step.ended':
         return this.add({
           ...base,
           id: this.nextId('step'),
           kind: 'step',
           tokens: {
-            input: tokens?.input ?? 0,
-            output: tokens?.output ?? 0,
-            reasoning: tokens?.reasoning ?? 0,
-            cacheRead: tokens?.cache?.read ?? 0,
+            input: event.usage.input,
+            output: event.usage.output,
+            reasoning: event.usage.reasoning,
+            cacheRead: event.usage.cacheRead,
           },
-          cost: data?.cost ?? 0,
-          ...(data?.finish ? { finish: data.finish } : {}),
+          cost: event.usage.cost,
+          ...(event.finish ? { finish: event.finish } : {}),
         });
+      case 'step.failed':
+        return this.notice(base, 'error', `model call failed: ${event.error ?? 'unknown error'}`);
+      case 'retry': {
+        const error = event.error ?? 'unknown provider error';
+        return this.notice(base, 'warn', `provider retry${event.attempt ? ` ${event.attempt}` : ''}: ${error}`);
       }
-      case 'session.step.failed': {
-        const error = errorMessage(readData(event, StepFailedSchema)?.error) ?? 'unknown error';
-        return this.notice(base, 'error', `model call failed: ${error}`);
-      }
-      case 'session.retry.scheduled': {
-        const data = readData(event, RetryScheduledSchema);
-        const error = data?.error?.message ?? data?.error?.type ?? 'unknown provider error';
-        return this.notice(base, 'warn', `provider retry${data?.attempt ? ` ${data.attempt}` : ''}: ${error}`);
-      }
-      case 'session.compaction.started':
+      case 'compaction.started':
         return this.notice(base, 'info', 'compacting the conversation to fit the context window');
-      case 'session.compaction.ended':
+      case 'compaction.ended':
         return this.notice(base, 'info', 'conversation compacted');
-      case 'session.execution.succeeded':
-        return base.subagent ? [] : this.notice(base, 'info', 'execution finished');
-      case 'session.execution.failed': {
-        const error = errorMessage(readData(event, ExecutionEndedSchema)?.error) ?? 'execution failed';
-        return this.notice(base, 'error', error);
-      }
-      case 'session.execution.aborted':
-        return this.notice(base, 'warn', 'execution interrupted');
+      case 'execution.ended':
+        return this.executionNotice(base, event);
       default:
         return [];
+    }
+  }
+
+  private executionNotice(base: Pick<TranscriptEntry, 'time' | 'subagent'>, event: EventOf<'execution.ended'>): TranscriptEntry[] {
+    switch (event.outcome) {
+      case 'succeeded':
+        return base.subagent ? [] : this.notice(base, 'info', 'execution finished');
+      case 'failed':
+        return this.notice(base, 'error', event.error ?? 'execution failed');
+      case 'aborted':
+        return this.notice(base, 'warn', 'execution interrupted');
     }
   }
 
@@ -237,19 +184,16 @@ export class TranscriptBuilder {
   }
 
   /**
-   * A text or reasoning part is named by its message and ordinal. Test
-   * servers and older opencode send neither, so a part without them lasts
-   * from its first delta to its end.
+   * A text or reasoning part is named by the harness. One that gives no name
+   * lasts from its first delta to its end.
    */
   private partId(
     kind: 'text' | 'reasoning',
     session: string | undefined,
-    part: z.infer<typeof PartSchema> | undefined,
+    part: string | undefined,
     ended: boolean,
   ): string {
-    if (part?.assistantMessageID !== undefined) {
-      return `${kind}:${session ?? ''}:${part.assistantMessageID}:${part.ordinal ?? 0}`;
-    }
+    if (part !== undefined) return `${kind}:${session ?? ''}:${part}`;
     const key = `${kind}:${session ?? ''}`;
     const id = this.anonymous.get(key) ?? this.nextId(kind);
     if (ended) this.anonymous.delete(key);

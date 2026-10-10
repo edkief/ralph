@@ -1,31 +1,7 @@
 import { HarnessApiError, type AgentHarness } from '../harness/types.js';
-import {
-  EXECUTION_DONE_EVENTS,
-  ExecutionEndedSchema,
-  FORM_SETTLED_EVENTS,
-  FormCreatedSchema,
-  FormSettledSchema,
-  PermissionRequestSchema,
-  RetryScheduledSchema,
-  SessionCreatedSchema,
-  StepEndedSchema,
-  StepFailedSchema,
-  TextEndedSchema,
-  ToolCalledSchema,
-  ToolInputStartedSchema,
-  ToolResultSchema,
-  TURN_STARTED_EVENT,
-  errorMessage,
-  isActivityEvent,
-  readData,
-  sessionIdOf,
-  toolName,
-  type HarnessEvent,
-  type PermissionRequest,
-} from '../harness/events.js';
+import { isActivityEvent, type EventOf, type HarnessEvent, type PermissionRequest } from '../harness/events.js';
 import { decidePermission, type PermissionDecision, type PermissionReply } from './permissions.js';
 import type { AskRelay, FormRequest } from './asks.js';
-import type { FormField } from '../ui/types.js';
 import { isContextOverflow } from '../harness/overflow.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
@@ -53,7 +29,7 @@ export interface IterationResult {
   filesTouched: string[];
   providerRetries: number;
   lastProviderError?: string;
-  /** Times opencode summarised the conversation to fit the context window. */
+  /** Times the harness summarised the conversation to fit the context window. */
   compactions: number;
   /** Forms and permissions put to a person during the turn. */
   asks?: number;
@@ -163,10 +139,6 @@ export async function runIteration(args: {
   const texts: string[] = [];
   const filesTouched = new Set<string>();
   let toolCalls = 0;
-  // opencode names a tool on `tool.input.started` but describes its input on
-  // `tool.called`; correlate the two by call id so status lines read
-  // "shell npm test" rather than a bare "tool".
-  const toolNames = new Map<string, string>();
   let trip: WatchdogTrip | null = null;
   let executionError: string | undefined;
   // Why the last model call failed, e.g. a context overflow; the execution's
@@ -249,7 +221,7 @@ export async function runIteration(args: {
     });
 
   const askPermission = (request: PermissionRequest, relay: AskRelay) =>
-    putToPerson(request.id, 'permission', request.sessionID, async (signal) => {
+    putToPerson(request.id, 'permission', request.session, async (signal) => {
       logger.warn('the agent asks for a permission: answer in the web UI', { action: request.action });
       const decision = await relay.permission(request, signal);
       if (!decision && (streamAbort.signal.aborted || openAsks.get(request.id)?.abort.signal.aborted)) return;
@@ -258,8 +230,8 @@ export async function runIteration(args: {
       const failure = await deliverPermission(harness, request, reply, logger);
       if (failure) failTurn(failure);
     });
-  // Whether opencode reported the turn's execution over. Until it does, the
-  // agent is still at work on the server.
+  // Whether the harness reported the turn's execution over. Until it does, the
+  // agent is still at work.
   let executionEnded = false;
   // Subagents run in child sessions. Their work keeps the iteration alive and
   // their permission requests need answers, but their text, tools and
@@ -343,48 +315,47 @@ export async function runIteration(args: {
     sessionId = args.sessionId ?? (await harness.createSession(args.title));
     // Recorded before any of the session's events, so its own work is never taken for a subagent's.
     hooks.onEvent?.({
-      type: TURN_STARTED_EVENT,
+      type: 'turn.started',
       created: Date.now(),
-      data: { sessionID: sessionId, continued: args.sessionId !== undefined },
+      session: sessionId,
+      continued: args.sessionId !== undefined,
     });
     await harness.prompt(sessionId, args.prompt, promptOptions);
     logger.debug('prompt sent', { sessionId });
 
     for await (const event of stream) {
-      if (event.type === 'session.created') {
+      if (event.type === 'session.started') {
         // Recorded whatever the session, so history shows every session the
-        // server started during the turn — subagents included.
+        // harness started during the turn — subagents included.
         hooks.onEvent?.(event);
-        const created = readData(event, SessionCreatedSchema);
-        if (harness.capabilities.subagents && created && created.sessionID !== sessionId) {
-          const parent = created.parentID ?? (await lookupParent(harness, created.sessionID, logger));
+        if (harness.capabilities.subagents && event.session !== sessionId) {
+          const parent = event.parent ?? (await lookupParent(harness, event.session, logger));
           if (parent && (parent === sessionId || subagentSessions.has(parent))) {
-            subagentSessions.add(created.sessionID);
-            logger.debug('subagent session started', { sessionId: created.sessionID });
+            subagentSessions.add(event.session);
+            logger.debug('subagent session started', { sessionId: event.session });
           }
         }
         continue;
       }
 
-      const eventSession = sessionIdOf(event);
+      const eventSession = event.session;
       const fromSubagent = eventSession !== undefined && subagentSessions.has(eventSession);
       if (eventSession && eventSession !== sessionId && !fromSubagent) continue;
       hooks.onEvent?.(event);
 
-      if (isActivityEvent(event.type)) watchdog.recordActivity();
-      // Compaction is quiet until it ends, whichever session it is for.
-      if (event.type === 'session.compaction.started' || event.type === 'session.compaction.delta') {
+      if (isActivityEvent(event)) watchdog.recordActivity();
+      // Compaction is quiet until it ends.
+      if (event.type === 'compaction.started' || event.type === 'compaction.progress') {
         watchdog.beginCompaction();
       }
 
-      if (harness.capabilities.permissionAsks && event.type.includes('permission')) {
-        const request = readData(event, PermissionRequestSchema);
-        const decision = request ? policy(request) : undefined;
-        if (request && decision?.reply === 'ask' && args.asks) {
-          askPermission(request, args.asks);
+      if (harness.capabilities.permissionAsks && event.type === 'permission.asked') {
+        const decision = policy(event);
+        if (decision.reply === 'ask' && args.asks) {
+          askPermission(event, args.asks);
           continue;
         }
-        permissionFailure = request && decision ? await handlePermission(request, decision, harness, logger) : undefined;
+        permissionFailure = await handlePermission(event, decision, harness, logger);
         if (permissionFailure) {
           executionError = permissionFailure;
           break;
@@ -393,22 +364,22 @@ export async function runIteration(args: {
         continue;
       }
 
-      if (harness.capabilities.forms && event.type === 'form.created') {
-        const form = readData(event, FormCreatedSchema)?.form;
-        if (form && args.asks) {
+      if (harness.capabilities.forms && event.type === 'form.opened') {
+        const form = event.form;
+        if (args.asks) {
           askForm(
             {
               id: form.id,
-              sessionID: form.sessionID,
+              sessionID: event.session,
               title: form.title ?? 'Questions',
-              ...(form.metadata?.kind ? { source: form.metadata.kind } : {}),
-              fields: (form.fields ?? []) as FormField[],
+              ...(form.kind ? { source: form.kind } : {}),
+              fields: form.fields ?? [],
             },
             args.asks,
           );
           continue;
         }
-        const formFailure = form ? await cancelForm(form, harness, args.formMessage ?? FORM_CANCEL_MESSAGE, logger) : undefined;
+        const formFailure = await cancelForm(event, harness, args.formMessage ?? FORM_CANCEL_MESSAGE, logger);
         if (formFailure) {
           executionError = formFailure;
           break;
@@ -417,70 +388,58 @@ export async function runIteration(args: {
         continue;
       }
 
-      if (FORM_SETTLED_EVENTS.has(event.type)) {
-        // Settled elsewhere, e.g. in opencode's own UI: nobody need answer it here.
-        const settled = readData(event, FormSettledSchema);
-        const open = settled ? openAsks.get(settled.id) : undefined;
+      if (event.type === 'form.settled') {
+        // Settled elsewhere, e.g. in the harness's own UI: nobody need answer it here.
+        const open = openAsks.get(event.id);
         if (open && !open.answered) {
-          logger.info('form settled elsewhere', { id: settled!.id });
+          logger.info('form settled elsewhere', { id: event.id });
           open.abort.abort();
         }
         continue;
       }
 
-      if (fromSubagent && event.type !== 'session.retry.scheduled') continue;
+      if (fromSubagent && event.type !== 'retry') continue;
 
       switch (event.type) {
-        case 'session.text.ended': {
-          const data = readData(event, TextEndedSchema);
-          if (data?.text) {
-            texts.push(data.text);
-            hooks.onText?.(data.text);
+        case 'text.ended': {
+          if (event.text) {
+            texts.push(event.text);
+            hooks.onText?.(event.text);
           }
           break;
         }
-        case 'session.tool.input.started': {
-          const data = readData(event, ToolInputStartedSchema);
-          if (data?.id && data.name) toolNames.set(data.id, data.name);
-          break;
-        }
-        case 'session.tool.called': {
-          const data = readData(event, ToolCalledSchema);
+        case 'tool.called': {
           toolCalls += 1;
-          const name = (data?.id ? toolNames.get(data.id) : undefined) ?? toolName(event);
-          hooks.onTool?.(name, describeInput(data?.input));
+          hooks.onTool?.(event.name ?? 'tool', describeInput(event.input));
           break;
         }
-        case 'session.tool.error': {
-          const data = readData(event, ToolResultSchema);
-          logger.debug('tool error', { detail: firstText(data?.content) });
+        case 'tool.finished': {
+          if (event.status === 'error') logger.debug('tool error', { detail: event.output ?? '' });
           break;
         }
-        case 'session.step.ended': {
-          const data = readData(event, StepEndedSchema);
-          addUsage(usage, data);
-          for (const file of data?.files ?? []) filesTouched.add(file);
+        case 'step.ended': {
+          addUsage(usage, event.usage);
+          for (const file of event.files ?? []) filesTouched.add(file);
           break;
         }
-        case 'session.step.failed': {
-          stepFailure = errorMessage(readData(event, StepFailedSchema)?.error) ?? stepFailure;
+        case 'step.failed': {
+          stepFailure = event.error ?? stepFailure;
           logger.warn('model call failed', { error: stepFailure ?? 'unknown' });
           break;
         }
-        case 'session.compaction.started':
+        case 'compaction.started':
           logger.info('compacting the conversation to fit the context window');
           break;
-        case 'session.compaction.ended':
+        case 'compaction.ended':
           compactions += 1;
           logger.info('conversation compacted', { compactions });
           break;
-        case 'session.retry.scheduled': {
-          const data = readData(event, RetryScheduledSchema);
+        case 'retry': {
           watchdog.recordProviderRetry();
-          lastProviderError = data?.error?.message ?? data?.error?.type ?? 'unknown provider error';
-          hooks.onRetry?.(data?.attempt ?? watchdog.providerRetries, lastProviderError);
+          lastProviderError = event.error ?? 'unknown provider error';
+          hooks.onRetry?.(event.attempt ?? watchdog.providerRetries, lastProviderError);
           logger.warn('provider retry scheduled', {
-            attempt: data?.attempt ?? watchdog.providerRetries,
+            attempt: event.attempt ?? watchdog.providerRetries,
             error: lastProviderError,
           });
           break;
@@ -489,17 +448,16 @@ export async function runIteration(args: {
           break;
       }
 
-      if (EXECUTION_DONE_EVENTS.has(event.type)) {
+      if (event.type === 'execution.ended') {
         // The end of the execution interrupted to make way for the wrap-up.
         if (wrapUp.state && !wrapUp.state.sent) {
           wrapUp.onInterruptedEnd?.();
           continue;
         }
-        if (event.type === 'session.execution.failed') {
-          const ended = readData(event, ExecutionEndedSchema);
-          executionError = errorMessage(ended?.error) ?? stepFailure ?? 'execution failed';
-        } else if (event.type !== 'session.execution.succeeded') {
-          executionError = `execution ${event.type.split('.').pop()}`;
+        if (event.outcome === 'failed') {
+          executionError = event.error ?? stepFailure ?? 'execution failed';
+        } else if (event.outcome !== 'succeeded') {
+          executionError = `execution ${event.outcome}`;
         }
         if (wrapUp.state) wrapUp.state.completed = !executionError;
         executionEnded = true;
@@ -708,7 +666,7 @@ async function deliverPermission(
   // A rejected request fails the same way twice; anything else may be a blip.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await harness.replyPermission(request.sessionID, request.id, reply);
+      await harness.replyPermission(request.session, request.id, reply);
       return undefined;
     } catch (cause) {
       const status = cause instanceof HarnessApiError ? cause.status : undefined;
@@ -736,14 +694,14 @@ async function deliverPermission(
  * not, so the caller ends the turn rather than wait for the watchdog.
  */
 async function cancelForm(
-  form: { id: string; sessionID: string; title?: string | undefined; metadata?: { kind?: string | undefined } | undefined },
+  opened: EventOf<'form.opened'>,
   harness: AgentHarness,
   message: string,
   logger: Logger,
 ): Promise<string | undefined> {
-  const kind = form.metadata?.kind ?? 'form';
-  logger.info('form cancelled', { kind, ...(form.title ? { title: form.title } : {}) });
-  return deliverCancel(harness, { id: form.id, sessionID: form.sessionID, ...(form.metadata?.kind ? { source: form.metadata.kind } : {}) }, message, logger);
+  const { form } = opened;
+  logger.info('form cancelled', { kind: form.kind ?? 'form', ...(form.title ? { title: form.title } : {}) });
+  return deliverCancel(harness, { id: form.id, sessionID: opened.session, ...(form.kind ? { source: form.kind } : {}) }, message, logger);
 }
 
 async function deliverCancel(
@@ -832,30 +790,19 @@ function describeReplyFailure(what: string, cause: unknown): string {
   return `${what} was rejected by the server (${cause.status})${detail ? `: ${detail}` : ''}`;
 }
 
-function addUsage(
-  usage: IterationUsage,
-  data: { tokens?: unknown; cost?: number | undefined } | undefined,
-) {
-  if (!data) return;
-  const tokens = data.tokens as
-    | { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-    | undefined;
-  usage.input += tokens?.input ?? 0;
-  usage.output += tokens?.output ?? 0;
-  usage.reasoning += tokens?.reasoning ?? 0;
-  usage.cacheRead += tokens?.cache?.read ?? 0;
-  usage.cacheWrite += tokens?.cache?.write ?? 0;
-  usage.cost += data.cost ?? 0;
+function addUsage(into: IterationUsage, usage: EventOf<'step.ended'>['usage']) {
+  into.input += usage.input;
+  into.output += usage.output;
+  into.reasoning += usage.reasoning;
+  into.cacheRead += usage.cacheRead;
+  into.cacheWrite += usage.cacheWrite;
+  into.cost += usage.cost;
 }
 
 function describeInput(input: Record<string, unknown> | undefined): string {
   if (!input) return '';
   const interesting = input['command'] ?? input['filePath'] ?? input['file_path'] ?? input['pattern'];
   return typeof interesting === 'string' ? interesting : '';
-}
-
-function firstText(content: Array<{ text?: string | undefined }> | undefined): string {
-  return content?.find((entry) => entry.text)?.text ?? '';
 }
 
 function isAbortError(cause: unknown): boolean {

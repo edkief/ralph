@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HistoryDecoder, historyHeaderLine, startHistoryFile } from '../src/harness/history.js';
-import { HISTORY_VOCABULARY, type HarnessEvent } from '../src/harness/vocab.js';
+import { HISTORY_VOCABULARY, type HarnessEvent } from '../src/harness/events.js';
 
 const lines = (...events: unknown[]) => events.map((event) => JSON.stringify(event));
 const header = (extra: Record<string, unknown> = {}) => ({ type: 'history.header', harness: 'opencode', vocabulary: HISTORY_VOCABULARY, ...extra });

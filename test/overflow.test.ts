@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isContextOverflow } from '../src/harness/overflow.js';
-import { errorMessage } from '../src/harness/events.js';
+import { errorMessage } from '../src/opencode/translate.js';
 
 describe('isContextOverflow', () => {
   it.each([

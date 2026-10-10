@@ -12,7 +12,7 @@ import { LineTailer, parseJsonLines } from './tail.js';
 import { readJournalTranscript } from '../report/journal.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { EscalationRecord, IterationRecord, RunState, SplitRecord } from '../report/jsonl.js';
-import type { HarnessEvent } from '../harness/events.js';
+import { HistoryDecoder } from '../harness/history.js';
 import { aggregateMetrics, type TaskInput, type TurnInput } from '../metrics/aggregate.js';
 import { UNKNOWN_MODEL, usageOfEventsFile, type TurnUsage } from '../metrics/usage.js';
 import type { CostEstimator, EnergyEstimator } from '../metrics/cost.js';
@@ -810,10 +810,11 @@ function escalationView(record: EscalationRecord): EscalationView {
 
 function transcriptOf(path: string): TranscriptEntry[] {
   const builder = new TranscriptBuilder();
+  const decoder = new HistoryDecoder();
   // Folded a stretch at a time: only the transcript is held, never the file.
   const tailer = new LineTailer(path);
   for (let read = tailer.read(); ; read = tailer.read()) {
-    for (const event of parseJsonLines<HarnessEvent>(read.lines)) builder.push(event);
+    for (const event of decoder.decode(read.lines)) builder.push(event);
     if (!read.more) break;
   }
   return builder.all;

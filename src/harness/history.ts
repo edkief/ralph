@@ -8,7 +8,7 @@ import {
   HistoryHeaderSchema,
   type HarnessEvent,
   type HistoryHeader,
-} from './vocab.js';
+} from './events.js';
 
 /** The header line an event file begins with, newline included. */
 export function historyHeaderLine(harness: string): string {

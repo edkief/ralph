@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { HarnessEvent } from '../src/harness/events.js';
+import { HistoryDecoder } from '../src/harness/history.js';
 import { usageOfEventsFile } from '../src/metrics/usage.js';
 import { TranscriptBuilder } from '../src/ui/transcript.js';
 
@@ -24,18 +24,13 @@ function golden(name: string): unknown {
   return JSON.parse(readFileSync(resolve(FIXTURES, name), 'utf8'));
 }
 
-/** What a reader of an event file does with its lines. */
-function decode(file: string[]): HarnessEvent[] {
-  return file.map((line) => JSON.parse(line) as HarnessEvent);
-}
-
 describe.each([
   ['session-events', 'a real captured session'],
   ['legacy-extra-events', 'a session with forms, permissions, compaction, failures and a subagent'],
 ])('legacy history: %s (%s)', (name) => {
   it('renders the transcript as it did', () => {
     const builder = new TranscriptBuilder();
-    for (const event of decode(lines(name))) builder.push(event);
+    for (const event of new HistoryDecoder().decode(lines(name))) builder.push(event);
     expect(JSON.parse(JSON.stringify(builder.all))).toEqual(golden(`${name}.transcript.golden.json`));
   });
 

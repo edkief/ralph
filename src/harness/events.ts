@@ -1,177 +1,183 @@
 import { z } from 'zod';
+import type { FormField } from '../ui/types.js';
 
 /**
- * An event on the agent's stream: `{ type, data, ... }`, opencode's frame shape
- * (a harness-neutral vocabulary is the next step). We validate only the fields
- * the loop reacts to and keep the rest as-is, so a server upgrade that adds
- * fields (or event types) cannot crash the loop.
+ * Ralph's own event vocabulary: what every harness adapter emits, and what the
+ * loop, the transcript, the metrics, the journal and the records read. A
+ * harness's wire format stops at its adapter.
+ *
+ * Every event is `{ type, created?, session?, ...fields }`: `created` is epoch
+ * milliseconds, and `session` the session the event belongs to. Fields a
+ * harness cannot supply are absent, never invented.
+ *
+ * Event files record this vocabulary, led by a header naming the harness and
+ * `HISTORY_VOCABULARY`. Raise that number when an event changes meaning or a
+ * field changes shape; adding an event type or an optional field needs no new
+ * version, as readers skip what they do not know.
  */
-export const HarnessEventSchema = z.looseObject({
-  type: z.string(),
-  data: z.unknown().optional(),
+export const HISTORY_VOCABULARY = 1;
+
+/** The first line of an event file Ralph wrote. */
+export const HISTORY_HEADER_TYPE = 'history.header';
+
+export const HistoryHeaderSchema = z.object({
+  type: z.literal(HISTORY_HEADER_TYPE),
+  /** `AgentHarness.name` of the harness that produced the events. */
+  harness: z.string(),
+  vocabulary: z.number().int(),
 });
 
-export type HarnessEvent = z.infer<typeof HarnessEventSchema>;
+export type HistoryHeader = z.infer<typeof HistoryHeaderSchema>;
 
-const TokensSchema = z.looseObject({
-  input: z.number().optional(),
-  output: z.number().optional(),
-  reasoning: z.number().optional(),
-  cache: z.looseObject({ read: z.number().optional(), write: z.number().optional() }).optional(),
+const Base = z.object({
+  created: z.number().optional(),
+  session: z.string().optional(),
 });
 
-export const TextEndedSchema = z.looseObject({
-  sessionID: z.string().optional(),
-  text: z.string().default(''),
+/** What one model call used. Zero where the harness does not report a figure. */
+export const StepUsageSchema = z.object({
+  input: z.number().default(0),
+  output: z.number().default(0),
+  /** Thinking tokens, where the harness counts them apart from `output`. */
+  reasoning: z.number().default(0),
+  cacheRead: z.number().default(0),
+  cacheWrite: z.number().default(0),
+  /** What the provider's prices make the call cost, in dollars; 0 for models without prices. */
+  cost: z.number().default(0),
 });
 
-export const ToolCalledSchema = z.looseObject({
-  id: z.string().optional(),
-  input: z.record(z.string(), z.unknown()).optional(),
-});
+export type StepUsage = z.infer<typeof StepUsageSchema>;
 
-/** Carries the tool's name; `session.tool.called` only carries its input. */
-export const ToolInputStartedSchema = z.looseObject({
-  id: z.string().optional(),
-  name: z.string().optional(),
-});
+export const emptyStepUsage = (): StepUsage => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 
-export const ToolResultSchema = z.looseObject({
-  id: z.string().optional(),
-  content: z.array(z.looseObject({ text: z.string().optional() })).optional(),
-  metadata: z.looseObject({ exit: z.number().optional(), status: z.string().optional() }).optional(),
-});
+const FormFieldSchema = z.custom<FormField>(
+  (value) =>
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { key?: unknown }).key === 'string' &&
+    typeof (value as { type?: unknown }).type === 'string',
+);
 
-export const UsageSchema = z.looseObject({
-  cost: z.number().optional(),
-  tokens: TokensSchema.optional(),
-});
-
-export const StepEndedSchema = z.looseObject({
-  finish: z.string().optional(),
-  tokens: TokensSchema.optional(),
-  cost: z.number().optional(),
-  files: z.array(z.string()).optional(),
-});
-
-export const RetryScheduledSchema = z.looseObject({
-  attempt: z.number().optional(),
-  error: z
-    .looseObject({
-      type: z.string().optional(),
-      message: z.string().optional(),
-      status: z.number().optional(),
-    })
-    .optional(),
-});
-
-export const ExecutionEndedSchema = z.looseObject({
-  sessionID: z.string().optional(),
-  error: z.unknown().optional(),
-});
-
-/** A model call that failed, e.g. because the request overflowed the context window. */
-export const StepFailedSchema = z.looseObject({
-  error: z.unknown().optional(),
-});
-
-/**
- * The message of an error on the event stream. v2 sends `{ type, message }`,
- * v1 `{ name, data: { message } }`, and some paths a bare string.
- */
-export function errorMessage(error: unknown): string | undefined {
-  if (typeof error === 'string') return error || undefined;
-  if (!error || typeof error !== 'object') return undefined;
-  const record = error as { message?: unknown; data?: { message?: unknown }; name?: unknown; type?: unknown };
-  for (const candidate of [record.message, record.data?.message, record.name, record.type]) {
-    if (typeof candidate === 'string' && candidate) return candidate;
-  }
-  return undefined;
-}
-
-export const PermissionRequestSchema = z.looseObject({
-  id: z.string(),
-  sessionID: z.string(),
-  action: z.string(),
-  resources: z.array(z.string()).default([]),
-  message: z.string().optional(),
-});
-
-export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
-
-/**
- * A form waiting on an answer: what opencode's `question` tool and an MCP
- * server's request for input open. The asker waits until it is replied to or
- * cancelled.
- */
-export const FormCreatedSchema = z.looseObject({
-  form: z.looseObject({
-    id: z.string(),
-    sessionID: z.string(),
-    title: z.string().optional(),
-    metadata: z.looseObject({ kind: z.string().optional() }).optional(),
-    fields: z.array(z.looseObject({ key: z.string(), type: z.string() })).optional(),
+export const HarnessEventSchema = z.discriminatedUnion('type', [
+  /** Ralph's: a turn starts work in `session`, before any of the session's own events. */
+  Base.extend({
+    type: z.literal('turn.started'),
+    session: z.string(),
+    /** The turn carries on a session an earlier turn started. */
+    continued: z.boolean(),
   }),
-});
+  /** A session opened, a subagent's included. `parent` is set when the harness says whose child it is. */
+  Base.extend({ type: z.literal('session.started'), session: z.string(), parent: z.string().optional() }),
+  /** A prompt reached the agent. */
+  Base.extend({ type: z.literal('prompt.queued'), text: z.string() }),
 
-/** `form.replied` or `form.cancelled`: a form settled, by whoever answered it. */
-export const FORM_SETTLED_EVENTS = new Set(['form.replied', 'form.cancelled']);
-export const FormSettledSchema = z.looseObject({ id: z.string(), sessionID: z.string().optional() });
+  /** `part` names a text or reasoning part across its deltas and end; absent when the harness gives none. */
+  Base.extend({ type: z.literal('text.delta'), part: z.string().optional(), text: z.string() }),
+  Base.extend({ type: z.literal('text.ended'), part: z.string().optional(), text: z.string() }),
+  Base.extend({ type: z.literal('reasoning.delta'), part: z.string().optional(), text: z.string() }),
+  /** `text` is absent when the reasoning is empty or not readable. */
+  Base.extend({ type: z.literal('reasoning.ended'), part: z.string().optional(), text: z.string().optional() }),
 
-/**
- * Not opencode's: Ralph records this in a turn's event file when the turn
- * starts work in a session, before any of the session's own events. It names
- * the turn's own sessions, which the event stream does not: `session.created`
- * carries no parent, so a retry's fresh session and a subagent's look alike.
- */
-export const TURN_STARTED_EVENT = 'ralph.turn.started';
+  /** The agent begins a tool call. */
+  Base.extend({ type: z.literal('tool.started'), id: z.string(), name: z.string().optional() }),
+  /** The call's input is complete and the tool runs. `name` is that of `tool.started` with the same `id`, where there was one. */
+  Base.extend({
+    type: z.literal('tool.called'),
+    id: z.string().optional(),
+    name: z.string().optional(),
+    input: z.record(z.string(), z.unknown()).optional(),
+  }),
+  /** `output` is the tool's text, parts joined by newlines. A tool that ran and exited non-zero is `success` with its `exit`. */
+  Base.extend({
+    type: z.literal('tool.finished'),
+    id: z.string().optional(),
+    name: z.string().optional(),
+    status: z.enum(['success', 'error']),
+    exit: z.number().optional(),
+    output: z.string().optional(),
+  }),
 
-export const TurnStartedSchema = z.looseObject({
-  sessionID: z.string(),
-  /** The turn carries on a session an earlier turn started. */
-  continued: z.boolean().optional(),
-});
+  /** A model call begins; `model` is `provider/id`. */
+  Base.extend({ type: z.literal('step.started'), model: z.string().optional() }),
+  /** The model's output stream is complete; tools may still run. */
+  Base.extend({ type: z.literal('step.streamed') }),
+  Base.extend({
+    type: z.literal('step.ended'),
+    finish: z.string().optional(),
+    usage: StepUsageSchema.default(emptyStepUsage),
+    files: z.array(z.string()).optional(),
+  }),
+  /** A model call failed, e.g. because the request overflowed the context window. */
+  Base.extend({ type: z.literal('step.failed'), error: z.string().optional() }),
+  /** The provider failed and the harness will try again. */
+  Base.extend({
+    type: z.literal('retry'),
+    attempt: z.number().optional(),
+    error: z.string().optional(),
+    status: z.number().optional(),
+  }),
 
-/** Carries the parent of a subagent session, so its work can be attributed. */
-export const SessionCreatedSchema = z.looseObject({
-  sessionID: z.string(),
-  parentID: z.string().optional(),
-});
+  Base.extend({ type: z.literal('compaction.started') }),
+  /** Compaction is still going. */
+  Base.extend({ type: z.literal('compaction.progress') }),
+  Base.extend({ type: z.literal('compaction.ended') }),
 
-/**
- * Whether a session-scoped event proves the agent is alive, resetting the
- * inactivity watchdog. Any `session.*` event counts — a fixed allowlist misses
- * quiet phases such as `session.step.started` while a local model is still
- * processing the prompt. Provider retries are the exception: they mean the
- * agent is stuck, and the retry-storm check counts them separately.
- */
-export function isActivityEvent(type: string): boolean {
-  return type.startsWith('session.') && type !== 'session.retry.scheduled';
-}
+  /** The session's work ended. `error` is the reason, when it did not succeed. */
+  Base.extend({
+    type: z.literal('execution.ended'),
+    outcome: z.enum(['succeeded', 'failed', 'aborted']),
+    error: z.string().optional(),
+  }),
 
-export const EXECUTION_DONE_EVENTS = new Set([
-  'session.execution.succeeded',
-  'session.execution.failed',
-  'session.execution.aborted',
+  /** A form is waiting on an answer. `kind` is what opened it, e.g. `question` or `mcp`. */
+  Base.extend({
+    type: z.literal('form.opened'),
+    session: z.string(),
+    form: z.object({
+      id: z.string(),
+      title: z.string().optional(),
+      kind: z.string().optional(),
+      fields: z.array(FormFieldSchema).optional(),
+    }),
+  }),
+  /** A form was answered or cancelled, by whoever did. */
+  Base.extend({ type: z.literal('form.settled'), id: z.string(), outcome: z.enum(['replied', 'cancelled']) }),
+  /** The agent waits for permission to do something. */
+  Base.extend({
+    type: z.literal('permission.asked'),
+    session: z.string(),
+    id: z.string(),
+    action: z.string(),
+    resources: z.array(z.string()).default([]),
+    message: z.string().optional(),
+  }),
+
+  /** The agent is alive and nothing else is to be recorded: a harness event with no content of its own. */
+  Base.extend({ type: z.literal('activity') }),
 ]);
 
-/** The session a session-scoped event belongs to; a form event names it on the form. */
-export function sessionIdOf(event: HarnessEvent): string | undefined {
-  const data = event.data as { sessionID?: unknown; form?: { sessionID?: unknown } } | undefined;
-  if (typeof data?.sessionID === 'string') return data.sessionID;
-  return typeof data?.form?.sessionID === 'string' ? data.form.sessionID : undefined;
-}
+export type HarnessEvent = z.infer<typeof HarnessEventSchema>;
+export type HarnessEventType = HarnessEvent['type'];
+export type EventOf<T extends HarnessEventType> = Extract<HarnessEvent, { type: T }>;
 
-/** A tool's name where the event carries one, else a generic `tool`. */
-export function toolName(event: HarnessEvent): string {
-  const data = event.data as { tool?: unknown; name?: unknown } | undefined;
-  if (typeof data?.tool === 'string') return data.tool;
-  if (typeof data?.name === 'string') return data.name;
-  return 'tool';
-}
+export type PermissionRequest = Pick<EventOf<'permission.asked'>, 'id' | 'session' | 'action' | 'resources' | 'message'>;
 
-/** Narrow an event's `data` with a schema, returning undefined when it does not fit. */
-export function readData<T>(event: HarnessEvent, schema: z.ZodType<T>): T | undefined {
-  const parsed = schema.safeParse(event.data);
-  return parsed.success ? parsed.data : undefined;
+/**
+ * Whether an event proves the agent is alive, resetting the inactivity
+ * watchdog. Nearly all do — a fixed allowlist misses quiet phases such as a
+ * step starting while a local model is still processing the prompt. Not the
+ * provider retries, which mean the agent is stuck (the retry-storm check
+ * counts them separately), nor the bookkeeping about sessions and asks.
+ */
+export function isActivityEvent(event: HarnessEvent): boolean {
+  switch (event.type) {
+    case 'retry':
+    case 'session.started':
+    case 'turn.started':
+    case 'form.opened':
+    case 'form.settled':
+      return false;
+    default:
+      return true;
+  }
 }

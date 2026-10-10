@@ -2,12 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SseParser } from '../src/opencode/sse.js';
-import {
-  readData,
-  StepEndedSchema,
-  RetryScheduledSchema,
-  TextEndedSchema,
-} from '../src/harness/events.js';
+import { OpencodeTranslator } from '../src/opencode/translate.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
   .split('\n')
@@ -49,17 +44,19 @@ describe('SseParser', () => {
 
   it('reads token usage and retry errors from real payloads', () => {
     const parser = new SseParser();
-    const events = parser.push(toSse(fixture));
+    const translator = new OpencodeTranslator();
+    const frames = parser.push(toSse(fixture));
+    expect(frames.length).toBe(fixture.length);
 
-    const step = events.find((event) => event.type === 'session.step.ended');
-    const usage = readData(step!, StepEndedSchema);
-    expect(usage?.tokens?.input).toBeGreaterThan(0);
+    const events = frames.flatMap((frame) => translator.push(frame));
 
-    const retry = events.find((event) => event.type === 'session.retry.scheduled');
-    const error = readData(retry!, RetryScheduledSchema);
-    expect(error?.error?.status).toBe(429);
+    const step = events.find((event) => event.type === 'step.ended');
+    expect(step?.type === 'step.ended' && step.usage.input).toBeGreaterThan(0);
 
-    const text = events.find((event) => event.type === 'session.text.ended');
-    expect(readData(text!, TextEndedSchema)?.text).toBeTruthy();
+    const retry = events.find((event) => event.type === 'retry');
+    expect(retry?.type === 'retry' && retry.status).toBe(429);
+
+    const text = events.find((event) => event.type === 'text.ended');
+    expect(text?.type === 'text.ended' && text.text).toBeTruthy();
   });
 });

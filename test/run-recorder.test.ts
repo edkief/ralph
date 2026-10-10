@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { HarnessEvent } from '../src/harness/events.js';
 import { RunRecorder, type IterationRecord, type SplitRecord } from '../src/report/jsonl.js';
 
-const step = (created: number, input: number) => [
-  { type: 'session.step.started', created, data: { sessionID: 's', model: { id: 'qwen3', providerID: 'ollama' } } },
-  { type: 'session.step.ended', created: created + 100, data: { sessionID: 's', tokens: { input, output: 1 } } },
+const step = (created: number, input: number): HarnessEvent[] => [
+  { type: 'step.started', created, session: 's', model: 'ollama/qwen3' },
+  { type: 'step.ended', created: created + 100, session: 's', usage: { input, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } },
 ];
 
 function recorder() {
