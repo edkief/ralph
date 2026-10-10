@@ -27,6 +27,12 @@ const TimeoutsSchema = z.object({
    * the next iteration.
    */
   confirmMs: z.number().int().min(0).default(5 * 60_000),
+  /**
+   * How long a form or a permission put to a person waits for an answer
+   * before it is given up on: the form cancelled, the permission rejected.
+   * 0 waits for as long as it takes. The iteration's clocks stop meanwhile.
+   */
+  askMs: z.number().int().min(0).default(0),
 });
 
 const RetriesSchema = z.object({
@@ -124,10 +130,12 @@ const GitSchema = z.object({
 /**
  * Permission policy for unattended runs. `deny` wins over `allow`; anything
  * unmatched follows `fallback`. Patterns are matched against the permission
- * action and its resources.
+ * action and its resources. `ask` puts an unmatched request to a person (in
+ * the web UI, or the terminal of `ralph init`) when one can answer, and
+ * rejects it when none can.
  */
 const PermissionsSchema = z.object({
-  fallback: z.enum(['allow', 'reject']).default('allow'),
+  fallback: z.enum(['allow', 'reject', 'ask']).default('allow'),
   deny: z.array(z.string()).default([
     'git push',
     'git remote',

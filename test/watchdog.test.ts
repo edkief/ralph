@@ -145,4 +145,32 @@ describe('Watchdog wrap-up phase', () => {
       'Wrap-up exceeded its 10m budget',
     );
   });
+  it('trips on nothing but a retry storm while held, and leaves the time held out of the budgets', () => {
+    const time = clock();
+    const watchdog = new Watchdog(options(time.now));
+    time.advance(50_000);
+    watchdog.recordActivity();
+    watchdog.hold();
+    watchdog.hold();
+    time.advance(120_000);
+    expect(watchdog.check()).toBeNull();
+    watchdog.release();
+    expect(watchdog.held).toBe(true);
+    expect(watchdog.check()).toBeNull();
+    watchdog.release();
+    expect(watchdog.held).toBe(false);
+    // 50s of the 60s budget used before the hold; a fresh quiet window after it.
+    time.advance(9_000);
+    expect(watchdog.check()).toBeNull();
+    time.advance(1_000);
+    expect(watchdog.check()).toBe('iteration-timeout');
+  });
+
+  it('still trips on a retry storm while held', () => {
+    const time = clock();
+    const watchdog = new Watchdog(options(time.now));
+    watchdog.hold();
+    for (let i = 0; i < 3; i += 1) watchdog.recordProviderRetry();
+    expect(watchdog.check()).toBe('retry-storm');
+  });
 });

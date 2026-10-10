@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
 import { OpencodeClient } from '../src/opencode/client.js';
-import { FORM_CANCEL_MESSAGE, joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
+import { FORM_CANCEL_MESSAGE, FORM_EXPIRED_MESSAGE, joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
+import { fileAskRelay, type AskRelay, type FormOutcome } from '../src/loop/asks.js';
+import { listAsks, readAsk, writeAskAnswer } from '../src/human/asks.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { OpencodeEvent } from '../src/opencode/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
@@ -22,7 +27,7 @@ function config(overrides: Record<string, unknown> = {}): Config {
 async function iterate(
   scenario: Parameters<typeof startFakeServer>[0],
   cfg: Config,
-  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'formMessage' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
+  extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'formMessage' | 'asks' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({
@@ -770,5 +775,180 @@ describe('joinTurns', () => {
     expect(joined.filesTouched).toEqual(['a.ts', 'b.ts']);
     expect(joined.compactions).toBe(1);
     expect(joined.durationMs).toBe(2_000);
+  });
+});
+
+describe('runIteration asks', () => {
+  const formEvent = (id: string, sessionID = 'ses_fake_1') => ({
+    type: 'form.created',
+    raw: true,
+    data: {
+      form: { id, sessionID, title: 'Questions', metadata: { kind: 'question' }, fields: [{ key: 'a', type: 'string', title: 'Which?' }] },
+    },
+  });
+  // The agent carries on once its form is settled.
+  const carryOn = () => {
+    server!.emit({ type: 'session.text.ended', data: { text: 'Thanks, carrying on.' } });
+    server!.emit({ type: 'session.execution.succeeded' });
+  };
+
+  /** A person scripted in memory: answers each ask in turn, after `delayMs`. */
+  function person(answers: Array<FormOutcome | 'once' | 'always' | 'reject' | null>, delayMs = 20) {
+    const calls: string[] = [];
+    const rejected: Array<{ id: string; error: string }> = [];
+    const settled: string[] = [];
+    const next = async (id: string, signal: AbortSignal) => {
+      calls.push(id);
+      const answer = answers.shift();
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, answer === null ? 60_000 : delayMs);
+        signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true });
+      });
+      return signal.aborted || answer === null ? undefined : answer;
+    };
+    const relay: AskRelay = {
+      form: async (form, signal) => (await next(form.id, signal)) as FormOutcome | undefined,
+      permission: async (request, signal) => (await next(request.id, signal)) as 'once' | 'always' | 'reject' | undefined,
+      rejected: (id, error) => rejected.push({ id, error }),
+      settled: (id) => settled.push(id),
+    };
+    return { relay, calls, rejected, settled };
+  }
+
+  it("delivers a person's answer to a form, and the turn carries on", async () => {
+    const { relay, settled } = person([{ answer: { a: 'Node' } }]);
+    const result = await iterate(
+      { script: [formEvent('frm_1')], onFormSettled: carryOn },
+      config(),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(result.asks).toBe(1);
+    expect(server?.formReplies).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', answer: { a: 'Node' } }]);
+    expect(server?.formCancels).toEqual([]);
+    expect(settled).toEqual(['frm_1']);
+  });
+
+  it('asks again when the server turns the answer down', async () => {
+    const { relay, rejected, calls } = person([{ answer: {} }, { answer: { a: 'Node' } }]);
+    const result = await iterate(
+      { formReplyStatuses: [400], script: [formEvent('frm_1')], onFormSettled: carryOn },
+      config(),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(rejected).toEqual([{ id: 'frm_1', error: 'The answer was rejected by the server (400): Invalid answer: a is required' }]);
+    expect(calls).toEqual(['frm_1', 'frm_1']);
+    expect(server?.formReplies.map((reply) => reply.answer)).toEqual([{ a: 'Node' }]);
+  });
+
+  it('cancels with what the person said when they decline', async () => {
+    const { relay } = person([{ cancel: 'Not now.' }]);
+    await iterate({ script: [formEvent('frm_1')], onFormSettled: carryOn }, config(), { asks: relay });
+
+    expect(server?.formCancels).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', message: 'Not now.' }]);
+  });
+
+  it('does not let the watchdog trip while a person is asked', async () => {
+    const { relay } = person([{ answer: { a: 'Node' } }], 1_500);
+    const result = await iterate(
+      { script: [formEvent('frm_1')], onFormSettled: carryOn },
+      config({ timeouts: { inactivityMs: 1_000, iterationMs: 1_200, wrapUpMs: 0 } }),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(result.trip).toBeUndefined();
+  });
+
+  it('cancels a form nobody answers within timeouts.askMs', async () => {
+    const { relay } = person([null]);
+    const result = await iterate(
+      { script: [formEvent('frm_1')], onFormSettled: carryOn },
+      config({ timeouts: { askMs: 100 } }),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(server?.formCancels).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', message: FORM_EXPIRED_MESSAGE }]);
+  });
+
+  it('stops asking about a form settled elsewhere', async () => {
+    const { relay, settled } = person([null]);
+    const result = await iterate(
+      {
+        script: [
+          formEvent('frm_1'),
+          { after: 50, type: 'form.replied', raw: true, data: { id: 'frm_1', sessionID: 'ses_fake_1', answer: { a: 'x' } } },
+          { after: 60, type: 'session.execution.succeeded' },
+        ],
+      },
+      config(),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(settled).toEqual(['frm_1']);
+    expect(server?.formReplies).toEqual([]);
+    expect(server?.formCancels).toEqual([]);
+  });
+
+  it('puts a permission the policy leaves to a person to them', async () => {
+    const { relay } = person(['always']);
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['make deploy'] } },
+          { after: 100, type: 'session.execution.succeeded' },
+        ],
+      },
+      config({ permissions: { fallback: 'ask' } }),
+      { asks: relay },
+    );
+
+    expect(result.status).toBe('progressed');
+    expect(server?.replies).toEqual([{ requestID: 'per_1', reply: 'always' }]);
+  });
+
+  it('rejects such a permission with nobody to ask, and still applies allow rules', async () => {
+    await iterate(
+      {
+        script: [
+          { type: 'session.permission.requested', data: { id: 'per_1', action: 'shell', resources: ['make deploy'] } },
+          { type: 'session.permission.requested', data: { id: 'per_2', action: 'read', resources: ['a.ts'] } },
+          { type: 'session.execution.succeeded' },
+        ],
+      },
+      config({ permissions: { fallback: 'ask', allow: ['read'] } }),
+    );
+
+    expect(server?.replies).toEqual([
+      { requestID: 'per_1', reply: 'reject' },
+      { requestID: 'per_2', reply: 'always' },
+    ]);
+  });
+
+  it('leaves asks in the Ralph folder for the web UI, and clears them once answered', async () => {
+    const ralphRoot = mkdtempSync(join(tmpdir(), 'ralph-iter-asks-'));
+    const relay = fileAskRelay({ ralphRoot, origin: { run: 'run-1' }, taskId: () => 'TASK-3', pollMs: 10 });
+    const answering = (async () => {
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const ask = listAsks(ralphRoot)[0];
+        if (!ask) continue;
+        expect(ask).toMatchObject({ kind: 'form', origin: 'run', runId: 'run-1', taskId: 'TASK-3', sessionID: 'ses_fake_1' });
+        expect(readAsk(ralphRoot, ask.id)?.form?.fields).toEqual([{ key: 'a', type: 'string', title: 'Which?' }]);
+        writeAskAnswer(ralphRoot, { id: ask.id, answer: { a: 'Node' }, by: 'ui', answeredAt: new Date().toISOString() });
+        return;
+      }
+    })();
+    const result = await iterate({ script: [formEvent('frm_1')], onFormSettled: carryOn }, config(), { asks: relay });
+    await answering;
+
+    expect(result.status).toBe('progressed');
+    expect(server?.formReplies[0]?.answer).toEqual({ a: 'Node' });
+    expect(listAsks(ralphRoot)).toEqual([]);
   });
 });

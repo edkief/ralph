@@ -2,7 +2,9 @@ import { OpencodeApiError, type OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
   ExecutionEndedSchema,
+  FORM_SETTLED_EVENTS,
   FormCreatedSchema,
+  FormSettledSchema,
   PermissionRequestSchema,
   RetryScheduledSchema,
   SessionCreatedSchema,
@@ -21,7 +23,9 @@ import {
   type OpencodeEvent,
   type PermissionRequest,
 } from '../opencode/events.js';
-import { decidePermission, type PermissionDecision } from './permissions.js';
+import { decidePermission, type PermissionDecision, type PermissionReply } from './permissions.js';
+import type { AskRelay, FormRequest } from './asks.js';
+import type { FormField } from '../ui/types.js';
 import { isContextOverflow } from '../opencode/overflow.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
@@ -51,6 +55,8 @@ export interface IterationResult {
   lastProviderError?: string;
   /** Times opencode summarised the conversation to fit the context window. */
   compactions: number;
+  /** Forms and permissions put to a person during the turn. */
+  asks?: number;
   error?: string;
   /** Set when the iteration ran out of time and the agent was asked to hand off. */
   wrapUp?: WrapUpRecord;
@@ -91,6 +97,11 @@ export const FORM_CANCEL_MESSAGE =
   'Carry on with a sensible default and record the assumption, or, for a decision only a ' +
   'person can make, output <promise>DECIDE:your question</promise> and stop.';
 
+/** Why a form put to a person is cancelled once `timeouts.askMs` runs out. */
+export const FORM_EXPIRED_MESSAGE =
+  'Nobody answered this in time. Carry on with a sensible default and record the assumption, ' +
+  'or, for a decision only a person can make, output <promise>DECIDE:your question</promise> and stop.';
+
 /**
  * Run one agent turn: open a session (or continue `sessionId`), send the
  * prompt, and consume the event stream until the execution finishes or a
@@ -108,8 +119,16 @@ export async function runIteration(args: {
   sessionId?: string;
   /** Answers permission requests; defaults to the configured policy. */
   permissions?: PermissionPolicy;
+  /**
+   * Puts forms, and permissions the policy leaves to a person, to a person.
+   * Without it, forms are cancelled with `formMessage` and such permissions
+   * rejected.
+   */
+  asks?: AskRelay;
   /** Why a form opened during the turn is cancelled; defaults to `FORM_CANCEL_MESSAGE`. */
   formMessage?: string;
+  /** Why a form put to a person is cancelled when nobody answers in time; defaults to `FORM_EXPIRED_MESSAGE`. */
+  formExpiredMessage?: string;
   /**
    * When the iteration runs out of time or goes quiet, send this prompt into
    * the same session and give the agent `timeouts.wrapUpMs` to act on it,
@@ -159,6 +178,86 @@ export async function runIteration(args: {
   let permissionFailure: string | undefined;
   let compactions = 0;
   let sessionId = '';
+  // What the agent waits on a person for: forms and permissions, by id. Each
+  // wait runs beside the event loop, which must keep reading the stream.
+  const openAsks = new Map<string, { kind: 'form' | 'permission'; sessionID: string; abort: AbortController; answered: boolean }>();
+  const askWaits = new Set<Promise<void>>();
+  let asksPut = 0;
+  // An answer a person gave that the server would not take, past retrying: the agent would wait for good.
+  const failTurn = (reason: string) => {
+    permissionFailure ??= reason;
+    executionError ??= reason;
+    streamAbort.abort();
+  };
+
+  /**
+   * Put what the agent waits on to a person, beside the event loop: wait for
+   * the answer, deliver it, and ask again when the server turns it down. The
+   * watchdog's clocks stop meanwhile.
+   */
+  const putToPerson = (
+    id: string,
+    kind: 'form' | 'permission',
+    sessionID: string,
+    wait: (signal: AbortSignal) => Promise<void>,
+  ) => {
+    if (openAsks.has(id)) return;
+    const abort = new AbortController();
+    openAsks.set(id, { kind, sessionID, abort, answered: false });
+    asksPut += 1;
+    watchdog.hold();
+    const askMs = config.timeouts.askMs;
+    const expiry = askMs > 0 ? AbortSignal.timeout(askMs) : undefined;
+    const signal = AbortSignal.any([abort.signal, streamAbort.signal, ...(expiry ? [expiry] : [])]);
+    const done = wait(signal)
+      .catch((cause: unknown) => {
+        logger.warn('waiting on a person failed', { id, error: (cause as Error).message });
+        failTurn(`Waiting on a person for ${kind} ${id} failed: ${(cause as Error).message}`);
+      })
+      .finally(() => {
+        openAsks.delete(id);
+        watchdog.release();
+        watchdog.recordActivity();
+        args.asks!.settled(id);
+        askWaits.delete(done);
+      });
+    askWaits.add(done);
+  };
+
+  const askForm = (form: FormRequest, relay: AskRelay) =>
+    putToPerson(form.id, 'form', form.sessionID, async (signal) => {
+      logger.warn('the agent asks: answer in the web UI', { form: form.title, ...(form.source ? { source: form.source } : {}) });
+      for (;;) {
+        const outcome = await relay.form(form, signal);
+        if (!outcome) {
+          if (signal.aborted && !streamAbort.signal.aborted && !openAsks.get(form.id)?.abort.signal.aborted) {
+            // Nobody answered in time.
+            logger.warn('form not answered in time: cancelled', { form: form.title });
+            const failure = await deliverCancel(client, form, args.formExpiredMessage ?? FORM_EXPIRED_MESSAGE, logger);
+            if (failure) failTurn(failure);
+          }
+          return;
+        }
+        const entry = openAsks.get(form.id);
+        if (entry) entry.answered = true;
+        const result = await deliverForm(client, form, outcome, logger);
+        if (result.status === 'delivered' || result.status === 'settled') return;
+        if (result.status === 'failed') return failTurn(result.reason);
+        if (entry) entry.answered = false;
+        relay.rejected(form.id, result.reason);
+      }
+    });
+
+  const askPermission = (request: PermissionRequest, relay: AskRelay) =>
+    putToPerson(request.id, 'permission', request.sessionID, async (signal) => {
+      logger.warn('the agent asks for a permission: answer in the web UI', { action: request.action });
+      const decision = await relay.permission(request, signal);
+      if (!decision && (streamAbort.signal.aborted || openAsks.get(request.id)?.abort.signal.aborted)) return;
+      const reply: PermissionReply = decision ?? 'reject';
+      logger.info('permission decided', { action: request.action, reply, reason: decision ? 'person' : 'not-answered' });
+      const failure = await deliverPermission(client, request, reply, logger);
+      if (failure) failTurn(failure);
+    });
   // Whether opencode reported the turn's execution over. Until it does, the
   // agent is still at work on the server.
   let executionEnded = false;
@@ -279,7 +378,13 @@ export async function runIteration(args: {
       }
 
       if (event.type.includes('permission')) {
-        permissionFailure = await handlePermission(event, client, policy, logger);
+        const request = readData(event, PermissionRequestSchema);
+        const decision = request ? policy(request) : undefined;
+        if (request && decision?.reply === 'ask' && args.asks) {
+          askPermission(request, args.asks);
+          continue;
+        }
+        permissionFailure = request && decision ? await handlePermission(request, decision, client, logger) : undefined;
         if (permissionFailure) {
           executionError = permissionFailure;
           break;
@@ -289,12 +394,37 @@ export async function runIteration(args: {
       }
 
       if (event.type === 'form.created') {
-        const formFailure = await cancelForm(event, client, args.formMessage ?? FORM_CANCEL_MESSAGE, logger);
+        const form = readData(event, FormCreatedSchema)?.form;
+        if (form && args.asks) {
+          askForm(
+            {
+              id: form.id,
+              sessionID: form.sessionID,
+              title: form.title ?? 'Questions',
+              ...(form.metadata?.kind ? { source: form.metadata.kind } : {}),
+              fields: (form.fields ?? []) as FormField[],
+            },
+            args.asks,
+          );
+          continue;
+        }
+        const formFailure = form ? await cancelForm(form, client, args.formMessage ?? FORM_CANCEL_MESSAGE, logger) : undefined;
         if (formFailure) {
           executionError = formFailure;
           break;
         }
         watchdog.recordActivity();
+        continue;
+      }
+
+      if (FORM_SETTLED_EVENTS.has(event.type)) {
+        // Settled elsewhere, e.g. in opencode's own UI: nobody need answer it here.
+        const settled = readData(event, FormSettledSchema);
+        const open = settled ? openAsks.get(settled.id) : undefined;
+        if (open && !open.answered) {
+          logger.info('form settled elsewhere', { id: settled!.id });
+          open.abort.abort();
+        }
         continue;
       }
 
@@ -382,7 +512,17 @@ export async function runIteration(args: {
   } finally {
     clearInterval(timer);
     signal.removeEventListener('abort', onOuterAbort);
+    // Forms still put to a person die with the turn; the agent will not read their answers.
+    const unanswered = [...openAsks.entries()].filter(([, ask]) => ask.kind === 'form' && !ask.answered);
     streamAbort.abort();
+    await Promise.all(askWaits);
+    if (executionEnded) {
+      await Promise.all(
+        unanswered.map(([id, ask]) =>
+          client.cancelForm(ask.sessionID, id, args.formMessage ?? FORM_CANCEL_MESSAGE).catch(() => undefined),
+        ),
+      );
+    }
     // However the turn ended early (a watchdog, a permission reply that never
     // landed, a stop, a broken stream), stop the agent too: closing the stream
     // does not, and a daemon's or an attached server outlives the turn.
@@ -420,6 +560,7 @@ export async function runIteration(args: {
     providerRetries: watchdog.providerRetries,
     ...(lastProviderError ? { lastProviderError } : {}),
     compactions,
+    ...(asksPut > 0 ? { asks: asksPut } : {}),
     ...(trip ? { trip } : {}),
     ...(reasons.length > 0 ? { error: reasons.join('; ') } : {}),
     ...(executionError && reasons.length === 0 ? { error: executionError } : {}),
@@ -537,31 +678,37 @@ async function lookupParent(
 }
 
 /**
- * Answer a permission request from policy. Returns why the answer could not
- * be delivered, if it could not: the agent stays blocked on an unanswered
+ * Answer a permission request from policy; one the policy leaves to a person
+ * is rejected, as nobody can be asked. Returns why the answer could not be
+ * delivered, if it could not: the agent stays blocked on an unanswered
  * request, so the caller ends the turn rather than wait for the watchdog.
  */
 async function handlePermission(
-  event: OpencodeEvent,
+  request: PermissionRequest,
+  decision: PermissionDecision,
   client: OpencodeClient,
-  policy: PermissionPolicy,
   logger: Logger,
 ): Promise<string | undefined> {
-  const request = readData(event, PermissionRequestSchema);
-  if (!request) return undefined;
-
-  const decision = policy(request);
+  const reply: PermissionReply = decision.reply === 'ask' ? 'reject' : decision.reply;
   logger.info('permission decided', {
     action: request.action,
-    reply: decision.reply,
-    reason: decision.reason,
+    reply,
+    reason: decision.reply === 'ask' ? 'nobody-to-ask' : decision.reason,
     ...(decision.matched ? { matched: decision.matched } : {}),
   });
+  return deliverPermission(client, request, reply, logger);
+}
 
+async function deliverPermission(
+  client: OpencodeClient,
+  request: PermissionRequest,
+  reply: PermissionReply,
+  logger: Logger,
+): Promise<string | undefined> {
   // A rejected request fails the same way twice; anything else may be a blip.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await client.replyPermission(request.sessionID, request.id, decision.reply);
+      await client.replyPermission(request.sessionID, request.id, reply);
       return undefined;
     } catch (cause) {
       const status = cause instanceof OpencodeApiError ? cause.status : undefined;
@@ -589,16 +736,23 @@ async function handlePermission(
  * not, so the caller ends the turn rather than wait for the watchdog.
  */
 async function cancelForm(
-  event: OpencodeEvent,
+  form: { id: string; sessionID: string; title?: string | undefined; metadata?: { kind?: string | undefined } | undefined },
   client: OpencodeClient,
   message: string,
   logger: Logger,
 ): Promise<string | undefined> {
-  const form = readData(event, FormCreatedSchema)?.form;
-  if (!form) return undefined;
   const kind = form.metadata?.kind ?? 'form';
   logger.info('form cancelled', { kind, ...(form.title ? { title: form.title } : {}) });
+  return deliverCancel(client, { id: form.id, sessionID: form.sessionID, ...(form.metadata?.kind ? { source: form.metadata.kind } : {}) }, message, logger);
+}
 
+async function deliverCancel(
+  client: OpencodeClient,
+  form: Pick<FormRequest, 'id' | 'sessionID' | 'source'>,
+  message: string,
+  logger: Logger,
+): Promise<string | undefined> {
+  const kind = form.source ?? 'form';
   for (let attempt = 1; ; attempt += 1) {
     try {
       await client.cancelForm(form.sessionID, form.id, message);
@@ -617,6 +771,47 @@ async function cancelForm(
       });
       if (rejected || attempt >= REPLY_ATTEMPTS) {
         return describeReplyFailure(`Cancel of a ${kind} form`, cause);
+      }
+    }
+  }
+}
+
+/**
+ * Hand a person's answer (or refusal) to the form's asker. `rejected`: the
+ * server says the answer does not fit, for the person to put right. `settled`:
+ * the form was answered or cancelled already. `failed`: the server would not
+ * take it, and the agent would wait for good.
+ */
+async function deliverForm(
+  client: OpencodeClient,
+  form: FormRequest,
+  outcome: { answer: Record<string, unknown> } | { cancel: string },
+  logger: Logger,
+): Promise<{ status: 'delivered' } | { status: 'settled' } | { status: 'rejected'; reason: string } | { status: 'failed'; reason: string }> {
+  if ('cancel' in outcome) {
+    logger.info('form declined by a person', { form: form.title });
+    const failure = await deliverCancel(client, form, outcome.cancel, logger);
+    return failure ? { status: 'failed', reason: failure } : { status: 'delivered' };
+  }
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await client.replyForm(form.sessionID, form.id, outcome.answer);
+      logger.info('form answered by a person', { form: form.title });
+      return { status: 'delivered' };
+    } catch (cause) {
+      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      if (status === 404 || status === 409) {
+        logger.debug('form already settled', { id: form.id });
+        return { status: 'settled' };
+      }
+      if (status === 400) {
+        const reason = describeReplyFailure('The answer', cause);
+        logger.warn('form answer turned down', { form: form.title, reason });
+        return { status: 'rejected', reason };
+      }
+      logger.warn('form answer failed', { error: (cause as Error).message });
+      if ((status !== undefined && status < 500) || attempt >= REPLY_ATTEMPTS) {
+        return { status: 'failed', reason: describeReplyFailure(`Answer to a ${form.source ?? 'form'} form`, cause) };
       }
     }
   }

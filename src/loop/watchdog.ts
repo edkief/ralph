@@ -23,13 +23,19 @@ export interface WatchdogOptions {
  * While opencode compacts the conversation it sends nothing until the summary
  * is done, which on a slow local model can outlast the inactivity window.
  * Inactivity is not checked then; the time budgets still are.
+ *
+ * While the agent waits on a person (a form to fill in, a permission to
+ * grant), nothing trips but a retry storm, and the time spent waiting does not
+ * count against the budgets.
  */
 export class Watchdog {
-  private readonly startedAt: number;
+  private startedAt: number;
   private lastActivityAt: number;
   private wrapUpStartedAt: number | null = null;
   private compacting = false;
   private retries = 0;
+  private holds = 0;
+  private heldSince: number | null = null;
   private readonly now: () => number;
 
   constructor(private readonly options: WatchdogOptions) {
@@ -66,6 +72,29 @@ export class Watchdog {
     return this.wrapUpStartedAt !== null;
   }
 
+  get held(): boolean {
+    return this.holds > 0;
+  }
+
+  /** The agent waits on a person from now: stop the clocks. Calls nest. */
+  hold(): void {
+    if (this.holds === 0) this.heldSince = this.now();
+    this.holds += 1;
+  }
+
+  /** One wait is over; once all are, the clocks run again, without the time held. */
+  release(): void {
+    if (this.holds === 0) return;
+    this.holds -= 1;
+    if (this.holds > 0 || this.heldSince === null) return;
+    const now = this.now();
+    const held = now - this.heldSince;
+    this.heldSince = null;
+    this.startedAt += held;
+    if (this.wrapUpStartedAt !== null) this.wrapUpStartedAt += held;
+    this.lastActivityAt = now;
+  }
+
   /** Switch to the wrap-up budget, with a fresh inactivity window. */
   beginWrapUp(): void {
     this.wrapUpStartedAt = this.now();
@@ -76,6 +105,7 @@ export class Watchdog {
   check(): WatchdogTrip | null {
     const now = this.now();
     if (this.retries > this.options.maxProviderRetries) return 'retry-storm';
+    if (this.holds > 0) return null;
     if (this.wrapUpStartedAt !== null) {
       if (now - this.wrapUpStartedAt >= (this.options.wrapUpMs ?? 0)) return 'wrap-up-timeout';
     } else if (now - this.startedAt >= this.options.iterationMs) {

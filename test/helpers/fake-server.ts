@@ -26,6 +26,10 @@ export interface FakeServerOptions {
   replyField?: string;
   /** Answer form cancels with this status instead of accepting them. */
   formCancelStatus?: number;
+  /** Statuses for successive form replies; once used up, replies are accepted. */
+  formReplyStatuses?: number[];
+  /** Called on each accepted form reply or cancel, e.g. to script the agent carrying on. */
+  onFormSettled?: (formID: string) => void;
 }
 
 export interface FakeServer {
@@ -39,6 +43,12 @@ export interface FakeServer {
   formCancels: Array<{ sessionID: string; formID: string; message: string | null }>;
   /** Cancel requests received, accepted or not. */
   formCancelAttempts: number;
+  /** Form answers accepted, in order. */
+  formReplies: Array<{ sessionID: string; formID: string; answer: unknown }>;
+  /** Reply requests received, accepted or not. */
+  formReplyAttempts: number;
+  /** Send an event now, outside the script. */
+  emit(event: ScriptedEvent): void;
   interrupts: number;
   /** The session each interrupt was for, in order. */
   interrupted: string[];
@@ -58,6 +68,8 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     replyAttempts: 0,
     formCancels: [] as Array<{ sessionID: string; formID: string; message: string | null }>,
     formCancelAttempts: 0,
+    formReplies: [] as Array<{ sessionID: string; formID: string; answer: unknown }>,
+    formReplyAttempts: 0,
     interrupts: 0,
     interrupted: [] as string[],
     sessionsCreated: 0,
@@ -167,6 +179,23 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
       }
       state.formCancels.push({ sessionID: formMatch[1]!, formID: formMatch[2]!, message: url.searchParams.get('message') });
       res.writeHead(204).end();
+      options.onFormSettled?.(formMatch[2]!);
+      return;
+    }
+
+    const formReplyMatch = /^\/api\/session\/([^/]+)\/form\/([^/]+)\/reply$/.exec(path);
+    if (formReplyMatch && req.method === 'POST') {
+      state.formReplyAttempts += 1;
+      const body = (await readBody(req)) as { answer?: unknown };
+      const status = options.formReplyStatuses?.[state.formReplyAttempts - 1];
+      if (status) {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ _tag: 'FormInvalidAnswerError', message: 'Invalid answer: a is required' }));
+        return;
+      }
+      state.formReplies.push({ sessionID: formReplyMatch[1]!, formID: formReplyMatch[2]!, answer: body.answer });
+      res.writeHead(204).end();
+      options.onFormSettled?.(formReplyMatch[2]!);
       return;
     }
 
@@ -211,6 +240,13 @@ export async function startFakeServer(options: FakeServerOptions): Promise<FakeS
     get formCancelAttempts() {
       return state.formCancelAttempts;
     },
+    get formReplies() {
+      return state.formReplies;
+    },
+    get formReplyAttempts() {
+      return state.formReplyAttempts;
+    },
+    emit: broadcast,
     get interrupts() {
       return state.interrupts;
     },
