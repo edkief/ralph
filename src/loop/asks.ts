@@ -83,7 +83,7 @@ export function fileAskRelay(args: {
         writeAsk(ralphRoot, {
           id: request.id,
           kind: 'permission',
-          sessionID: request.sessionID,
+          sessionID: request.session,
           permission: {
             action: request.action,
             resources: request.resources,

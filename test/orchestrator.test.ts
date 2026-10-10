@@ -608,7 +608,7 @@ describe('runLoop', () => {
       expect(records[0]).toMatchObject({ result: { status: 'progressed' } });
       // Both attempts share the iteration's event file, each naming its own session.
       const events = readFileSync(resolve(result.historyDir, 'iteration-001.events.jsonl'), 'utf8');
-      expect(events.match(/"type":"ralph\.turn\.started"/g)).toHaveLength(2);
+      expect(events.match(/"type":"turn.started"/g)).toHaveLength(2);
     });
 
     it('stops a task that keeps outgrowing the context window', async () => {
@@ -1573,7 +1573,9 @@ describe('runLoop', () => {
       resolve(result.historyDir, 'iteration-001.events.jsonl'),
       'utf8',
     );
-    expect(events).toContain('session.text.ended');
+    expect(events).toContain('"type":"text.ended"');
+    // Led by the harness that wrote it, and the vocabulary it is in.
+    expect(JSON.parse(events.split('\n')[0]!)).toEqual({ type: 'history.header', harness: 'opencode', vocabulary: 1 });
   });
 
   it('keeps the run state and its log lines beside the history', async () => {

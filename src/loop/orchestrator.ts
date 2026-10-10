@@ -85,6 +85,7 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
   const recorder = new RunRecorder(
     resolve(config.projectRoot, config.ralphDir, 'history'),
     runId,
+    args.harness.name,
   );
   // The run's history keeps its log and where it stands, for the web UI.
   const detach = logger.addSink((entry) => recorder.recordLog(entry));

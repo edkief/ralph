@@ -299,7 +299,7 @@ describe('ralph daemon pause', () => {
   it('stops a planning interview', async () => {
     const root = folder();
     const ralphRoot = resolve(root, '.ralph');
-    const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'daemon' });
+    const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'daemon', harness: 'opencode' });
     const write = process.stdout.write;
     process.stdout.write = (() => true) as typeof process.stdout.write;
     try {

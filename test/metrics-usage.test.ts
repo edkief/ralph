@@ -1,11 +1,27 @@
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { UsageMeter, usageOfEventsFile, totalTokens } from '../src/metrics/usage.js';
+import { UsageMeter, usageOfEventsFile, totalTokens, type TurnUsage } from '../src/metrics/usage.js';
+import type { OpencodeFrame } from '../src/opencode/frames.js';
+import { OpencodeTranslator } from '../src/opencode/translate.js';
+
+/** A meter fed opencode's frames, translated as the adapter does live. */
+class FramesMeter {
+  private readonly meter = new UsageMeter();
+  private readonly translator = new OpencodeTranslator();
+
+  push(frame: OpencodeFrame, now?: number): void {
+    for (const event of this.translator.push(frame)) this.meter.push(event, now);
+  }
+
+  drain(): TurnUsage {
+    return this.meter.drain();
+  }
+}
 
 const FIXTURE = resolve(__dirname, 'fixtures/session-events.jsonl');
 const MODEL = 'opencode/muse-spark-1.3-contributor-free';
 
-const event = (type: string, created: number, data: Record<string, unknown> = {}) => ({
+const event = (type: string, created: number, data: Record<string, unknown> = {}): OpencodeFrame => ({
   type,
   created,
   data: { sessionID: 's', ...data },
@@ -27,7 +43,7 @@ describe('UsageMeter', () => {
   });
 
   it('times a step to its end when it reports no stream end', () => {
-    const meter = new UsageMeter();
+    const meter = new FramesMeter();
     meter.push(started(1_000));
     meter.push(ended(4_000, 100, 10));
     const usage = meter.drain()['ollama/qwen3']!;
@@ -36,7 +52,7 @@ describe('UsageMeter', () => {
   });
 
   it('keeps sessions apart, so a subagent on another model is attributed to it', () => {
-    const meter = new UsageMeter();
+    const meter = new FramesMeter();
     meter.push(started(0, 'big'));
     meter.push(started(100, 'small', 'child'));
     meter.push(ended(600, 1, 1, 'child'));
@@ -47,7 +63,7 @@ describe('UsageMeter', () => {
   });
 
   it('counts the time of a failed call, and tokens of a call whose start it missed', () => {
-    const meter = new UsageMeter();
+    const meter = new FramesMeter();
     meter.push(started(0));
     meter.push(event('session.step.failed', 700));
     meter.push(ended(900, 3, 3));
@@ -58,7 +74,7 @@ describe('UsageMeter', () => {
   });
 
   it('starts over after a drain', () => {
-    const meter = new UsageMeter();
+    const meter = new FramesMeter();
     meter.push(started(0));
     meter.push(ended(10, 1, 1));
     meter.drain();

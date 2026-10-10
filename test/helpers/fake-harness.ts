@@ -1,18 +1,24 @@
 import type { Config } from '../../src/config/schema.js';
 import type { HarnessEvent } from '../../src/harness/events.js';
 import type { AgentHarness, CheckResult, HarnessCapabilities, PromptOptions } from '../../src/harness/types.js';
+import type { OpencodeFrame } from '../../src/opencode/frames.js';
+import { OpencodeTranslator } from '../../src/opencode/translate.js';
 
 export const SESSION = 'ses_fake';
 
-/** An event for a session, shaped like opencode's frames. */
-export function event(type: string, sessionID: string, data: Record<string, unknown> = {}): HarnessEvent {
+/**
+ * A frame for a session, as opencode sends it. The fake harness scripts frames
+ * and runs them through the opencode translator, so the loop is tested on what
+ * a real adapter emits, and the scripts read like the captures they come from.
+ */
+export function event(type: string, sessionID: string, data: Record<string, unknown> = {}): OpencodeFrame {
   return { type, data: { sessionID, ...data } };
 }
 
 export interface FakeHarnessOptions {
   capabilities?: Partial<HarnessCapabilities>;
-  /** Events the harness emits when the Nth prompt (1-based) arrives. */
-  script: (promptCount: number) => HarnessEvent[];
+  /** Frames the harness emits when the Nth prompt (1-based) arrives. */
+  script: (promptCount: number) => OpencodeFrame[];
   /** How long connecting takes, so a subscription opened late would miss what a prompt triggers. */
   connectMs?: number;
   /** Fail permission replies with this error. */
@@ -21,7 +27,7 @@ export interface FakeHarnessOptions {
 
 /**
  * A harness with no transport: the loop is driven through the interface alone.
- * Events emitted while no subscription is live are dropped, as a stream
+ * Frames emitted while no subscription is live are dropped, as a stream
  * opened too late would drop them.
  */
 export class FakeHarness implements AgentHarness {
@@ -35,7 +41,7 @@ export class FakeHarness implements AgentHarness {
   readonly parentLookups: string[] = [];
   preflightCalls = 0;
 
-  private live: ((event: HarnessEvent) => void) | undefined;
+  private live: ((frame: OpencodeFrame) => void) | undefined;
 
   constructor(private readonly options: FakeHarnessOptions) {
     this.capabilities = {
@@ -63,9 +69,10 @@ export class FakeHarness implements AgentHarness {
     await new Promise((resolve) => setTimeout(resolve, this.options.connectMs ?? 0));
     this.calls.push('connected');
     const queue: HarnessEvent[] = [];
+    const translator = new OpencodeTranslator();
     let wake: (() => void) | undefined;
-    this.live = (next) => {
-      queue.push(next);
+    this.live = (frame) => {
+      queue.push(...translator.push(frame));
       wake?.();
     };
     signal.addEventListener('abort', () => wake?.(), { once: true });
@@ -88,7 +95,7 @@ export class FakeHarness implements AgentHarness {
     this.prompts.push({ sessionId, text, options });
     const events = this.options.script(this.prompts.length);
     // After the prompt returns, as a real agent would answer it.
-    setTimeout(() => events.forEach((next) => this.live?.(next)), 5);
+    setTimeout(() => events.forEach((frame) => this.live?.(frame)), 5);
   }
 
   async interrupt(sessionId: string): Promise<void> {

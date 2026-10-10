@@ -347,14 +347,14 @@ describe('runInterview', () => {
     await runInterview({ harness, config: config(root), logger, io: user, signal: new AbortController().signal, onEvent: (event) => events.push(event.type) });
 
     expect(turns).toEqual([1, 2]);
-    expect(events.filter((type) => type === 'session.text.ended')).toHaveLength(2);
+    expect(events.filter((type) => type === 'text.ended')).toHaveLength(2);
   });
 });
 
 describe('a recorded interview', () => {
   it('keeps the conversation, each turn\'s events and the outcome under history/plans/', async () => {
     const root = project();
-    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'cli' });
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'cli', harness: 'opencode' });
     const io = new RecordingIO(new ScriptedUser(['An app.', '/done']), recorder);
     server = await startFakeServer({
       onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),
@@ -381,7 +381,7 @@ describe('a recorded interview', () => {
       outcome: { tasks: [{ id: 'TASK-1' }, { id: 'TASK-2' }], outsideChanges: [] },
     });
     const events = readFileSync(resolve(recorder.dir, 'turn-001.events.jsonl'), 'utf8');
-    expect(events).toContain('session.text.ended');
+    expect(events).toContain('"type":"text.ended"');
     expect(existsSync(resolve(recorder.dir, 'turn-002.events.jsonl'))).toBe(true);
   });
 });

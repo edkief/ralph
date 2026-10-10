@@ -3,8 +3,10 @@ import type { HarnessEvent } from '../harness/events.js';
 import type { AgentHarness, CheckResult, HarnessCapabilities, PromptOptions } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import type { OpencodeClient } from './client.js';
+import type { OpencodeFrame } from './frames.js';
 import { harnessChecks } from './preflight.js';
 import { startServer } from './server.js';
+import { OpencodeTranslator } from './translate.js';
 
 /**
  * opencode behind the harness interface: the HTTP client for the calls, and
@@ -36,8 +38,10 @@ export class OpencodeHarness implements AgentHarness {
     return this.client.createSession(title);
   }
 
-  connectEvents(signal: AbortSignal): Promise<AsyncGenerator<HarnessEvent>> {
-    return this.client.connectEvents(signal);
+  async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<HarnessEvent>> {
+    // Connected before this resolves, so the caller's subscription is live.
+    const frames = await this.client.connectEvents(signal);
+    return translated(frames);
   }
 
   prompt(sessionId: string, text: string, options: PromptOptions = {}): Promise<void> {
@@ -67,6 +71,12 @@ export class OpencodeHarness implements AgentHarness {
   stop(): Promise<void> {
     return this.stopServer();
   }
+}
+
+/** One stream's frames as events in Ralph's vocabulary; a stream gets a translator of its own. */
+async function* translated(frames: AsyncGenerator<OpencodeFrame>): AsyncGenerator<HarnessEvent> {
+  const translator = new OpencodeTranslator();
+  for await (const frame of frames) yield* translator.push(frame);
 }
 
 /** Attach to the opencode server `config.url` names, or spawn one Ralph owns. */

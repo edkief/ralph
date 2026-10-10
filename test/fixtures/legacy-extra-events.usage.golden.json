@@ -1,0 +1,22 @@
+{
+  "ollama/qwen3": {
+    "steps": 3,
+    "input": 517,
+    "output": 44,
+    "reasoning": 12,
+    "cacheRead": 301,
+    "cacheWrite": 21,
+    "cost": 0.502,
+    "inferenceMs": 200
+  },
+  "ollama/small": {
+    "steps": 1,
+    "input": 50,
+    "output": 5,
+    "reasoning": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "cost": 0,
+    "inferenceMs": 40
+  }
+}

@@ -540,7 +540,7 @@ describe('web UI server', () => {
 
   it('streams the planning conversation, with no run to follow', async () => {
     const root = mkdtempSync(resolve(tmpdir(), 'ralph-ui-plan-'));
-    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'daemon' });
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'daemon', harness: 'opencode' });
     recorder.line('owner', 'A todo app.');
     await start(root);
     const live = subscribe('/api/live');
@@ -1179,7 +1179,7 @@ describe('web UI actions', () => {
   it('answers the planner by the number of its question, once, and stops it', async () => {
     const root = project();
     const ralph = resolve(root, '.ralph');
-    const recorder = new PlanRecorder(ralph, { mode: 'replan', by: 'daemon' });
+    const recorder = new PlanRecorder(ralph, { mode: 'replan', by: 'daemon', harness: 'opencode' });
     try {
       recorder.line('owner', 'Add search.');
       recorder.line('agent', 'Which fields?');
@@ -1219,7 +1219,7 @@ describe('web UI actions', () => {
   it('takes an interview whose process is gone as aborted', async () => {
     const root = project();
     const ralph = resolve(root, '.ralph');
-    const recorder = new PlanRecorder(ralph, { mode: 'new', by: 'cli' });
+    const recorder = new PlanRecorder(ralph, { mode: 'new', by: 'cli', harness: 'opencode' });
     recorder.close();
     recorder.update({ status: 'asking', prompt: 'you', seq: 1, pid: 2 ** 22 + 1 });
     await start(root);

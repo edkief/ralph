@@ -1,0 +1,217 @@
+[
+  {
+    "time": 1789000001050,
+    "id": "prompt:1",
+    "kind": "prompt",
+    "text": "Fix the failing test"
+  },
+  {
+    "time": 1789000001110,
+    "id": "reasoning:ses_a:msg_1:0",
+    "kind": "reasoning",
+    "text": "Thinking hard"
+  },
+  {
+    "time": 1789000001150,
+    "id": "text:ses_a:msg_1:1",
+    "kind": "text",
+    "text": "Let me look",
+    "done": true
+  },
+  {
+    "time": 1789000001200,
+    "id": "tool:c1",
+    "kind": "tool",
+    "name": "read",
+    "status": "success",
+    "input": {
+      "filePath": "a.ts"
+    },
+    "output": "file body"
+  },
+  {
+    "time": 1789000001240,
+    "id": "tool:c2",
+    "kind": "tool",
+    "name": "bash",
+    "status": "error",
+    "input": {
+      "command": "npm test",
+      "description": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "output": "1 failed\nCommand exited with code 1.",
+    "exit": 1
+  },
+  {
+    "time": 1789000001270,
+    "id": "tool:c3",
+    "kind": "tool",
+    "name": "edit",
+    "status": "error",
+    "input": {
+      "filePath": "a.ts",
+      "oldString": "a",
+      "newString": "b"
+    },
+    "output": "no match"
+  },
+  {
+    "time": 1789000001290,
+    "id": "step:2",
+    "kind": "step",
+    "tokens": {
+      "input": 500,
+      "output": 40,
+      "reasoning": 10,
+      "cacheRead": 300
+    },
+    "cost": 0.002,
+    "finish": "tool-calls"
+  },
+  {
+    "time": 1789000001330,
+    "subagent": true,
+    "id": "text:ses_sub:msg_sub:0",
+    "kind": "text",
+    "text": "sub says hi",
+    "done": true
+  },
+  {
+    "time": 1789000001360,
+    "subagent": true,
+    "id": "tool:s1",
+    "kind": "tool",
+    "name": "grep",
+    "status": "success",
+    "input": {
+      "pattern": "foo"
+    },
+    "output": "hit",
+    "exit": 0
+  },
+  {
+    "time": 1789000001380,
+    "subagent": true,
+    "id": "step:3",
+    "kind": "step",
+    "tokens": {
+      "input": 50,
+      "output": 5,
+      "reasoning": 0,
+      "cacheRead": 0
+    },
+    "cost": 0,
+    "finish": "stop"
+  },
+  {
+    "time": 1789000001390,
+    "subagent": true,
+    "id": "notice:4",
+    "kind": "notice",
+    "level": "warn",
+    "text": "provider retry 1: slow down"
+  },
+  {
+    "time": 1789000001410,
+    "id": "permission:5",
+    "kind": "notice",
+    "level": "info",
+    "text": "permission asked: edit src/a.ts"
+  },
+  {
+    "time": 1789000001430,
+    "id": "form:6",
+    "kind": "notice",
+    "level": "info",
+    "text": "form cancelled: Pick one (question)"
+  },
+  {
+    "time": 1789000001450,
+    "id": "notice:7",
+    "kind": "notice",
+    "level": "info",
+    "text": "compacting the conversation to fit the context window"
+  },
+  {
+    "time": 1789000001470,
+    "id": "notice:8",
+    "kind": "notice",
+    "level": "info",
+    "text": "conversation compacted"
+  },
+  {
+    "time": 1789000001490,
+    "id": "notice:9",
+    "kind": "notice",
+    "level": "warn",
+    "text": "provider retry 2: provider.unavailable"
+  },
+  {
+    "time": 1789000001510,
+    "id": "notice:10",
+    "kind": "notice",
+    "level": "error",
+    "text": "model call failed: prompt is too long"
+  },
+  {
+    "time": 1789000001520,
+    "id": "step:11",
+    "kind": "step",
+    "tokens": {
+      "input": 10,
+      "output": 1,
+      "reasoning": 0,
+      "cacheRead": 0
+    },
+    "cost": 0,
+    "finish": "stop"
+  },
+  {
+    "time": 1789000001540,
+    "id": "notice:12",
+    "kind": "notice",
+    "level": "warn",
+    "text": "the turn started over in a fresh session"
+  },
+  {
+    "time": 1789000001570,
+    "id": "text:13",
+    "kind": "text",
+    "text": "no ids here, ended",
+    "done": true
+  },
+  {
+    "time": 1789000001580,
+    "id": "step:14",
+    "kind": "step",
+    "tokens": {
+      "input": 7,
+      "output": 3,
+      "reasoning": 2,
+      "cacheRead": 1
+    },
+    "cost": 0.5,
+    "finish": "stop"
+  },
+  {
+    "time": 1789000001590,
+    "id": "notice:15",
+    "kind": "notice",
+    "level": "error",
+    "text": "context window exceeds limit"
+  },
+  {
+    "time": 1789000001600,
+    "id": "notice:16",
+    "kind": "notice",
+    "level": "warn",
+    "text": "execution interrupted"
+  },
+  {
+    "time": 1789000001610,
+    "id": "notice:17",
+    "kind": "notice",
+    "level": "info",
+    "text": "execution finished"
+  }
+]

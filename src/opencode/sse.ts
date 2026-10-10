@@ -1,4 +1,4 @@
-import { HarnessEventSchema, type HarnessEvent } from '../harness/events.js';
+import { OpencodeFrameSchema, type OpencodeFrame } from './frames.js';
 
 /**
  * Incremental SSE frame parser. Feed it decoded chunks; it yields one parsed
@@ -7,9 +7,9 @@ import { HarnessEventSchema, type HarnessEvent } from '../harness/events.js';
 export class SseParser {
   private buffer = '';
 
-  push(chunk: string): HarnessEvent[] {
+  push(chunk: string): OpencodeFrame[] {
     this.buffer += chunk;
-    const events: HarnessEvent[] = [];
+    const events: OpencodeFrame[] = [];
 
     let boundary = this.nextBoundary();
     while (boundary !== null) {
@@ -31,7 +31,7 @@ export class SseParser {
   }
 }
 
-function parseFrame(frame: string): HarnessEvent | null {
+function parseFrame(frame: string): OpencodeFrame | null {
   const payload = frame
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data:'))
@@ -41,7 +41,7 @@ function parseFrame(frame: string): HarnessEvent | null {
   if (!payload || payload === '[DONE]') return null;
 
   try {
-    const parsed = HarnessEventSchema.safeParse(JSON.parse(payload));
+    const parsed = OpencodeFrameSchema.safeParse(JSON.parse(payload));
     return parsed.success ? parsed.data : null;
   } catch {
     return null;
