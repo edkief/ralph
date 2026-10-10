@@ -884,6 +884,8 @@ describe('web UI actions', () => {
 
     const { body } = await get<StatusView>('/api/status');
     expect(body.asks).toEqual([expect.objectContaining({ id: 'frm_1', kind: 'form', taskId: 'TASK-2', answered: false })]);
+    // Its folder is not a run.
+    expect(body.run?.runId).toBe(LIVE_RUN);
 
     expect(await post('/api/actions/ask', { id: 'frm_1', answer: {} })).toMatchObject({ status: 400, body: { error: 'Database needs an answer' } });
     expect((await post('/api/actions/ask', { id: 'frm_1', decision: 'once' })).status).toBe(400);

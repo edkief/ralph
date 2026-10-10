@@ -66,8 +66,8 @@ const STALE_MS = 15 * 60_000;
 const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
-/** Where planning sessions are kept in the history, as `history/plans/<id>/`. */
-const PLANS_DIR = 'plans';
+/** Folders beside the runs in the history: planning sessions (`plans/<id>/`) and what agents ask (`asks/`). */
+const NOT_RUNS = new Set(['plans', 'asks']);
 /** A run id as `newRunId` makes it: the start in the local time of the machine that ran it. */
 const RUN_ID_TIME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
 const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
@@ -287,8 +287,8 @@ export class RalphProject {
     for (const root of [this.historyRoot, this.journalRoot]) {
       if (!existsSync(root)) continue;
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        // Planning sessions keep a folder of their own beside the runs.
-        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && entry.name === PLANS_DIR)) ids.add(entry.name);
+        // Planning sessions and asks keep folders of their own beside the runs.
+        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && NOT_RUNS.has(entry.name))) ids.add(entry.name);
       }
     }
     // By when they started, not by id: an id is in the local time of the
