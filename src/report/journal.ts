@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSyn
 import { resolve } from 'node:path';
 import { TranscriptBuilder } from '../ui/transcript.js';
 import { LineTailer, parseJsonLines } from '../ui/tail.js';
-import type { OpencodeEvent } from '../opencode/events.js';
+import type { HarnessEvent } from '../harness/events.js';
 import type { TranscriptEntry } from '../ui/types.js';
 import type { LogEntry } from './logger.js';
 
@@ -64,7 +64,7 @@ export function condensedTranscript(eventsPath: string): string {
   const builder = new TranscriptBuilder();
   const tailer = new LineTailer(eventsPath);
   for (let read = tailer.read(); ; read = tailer.read()) {
-    for (const event of parseJsonLines<OpencodeEvent>(read.lines)) builder.push(event);
+    for (const event of parseJsonLines<HarnessEvent>(read.lines)) builder.push(event);
     if (!read.more) break;
   }
   const entries = builder.all.map(condense);

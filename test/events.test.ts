@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SseParser } from '../src/opencode/sse.js';
 import {
-  SseParser,
   readData,
   StepEndedSchema,
   RetryScheduledSchema,
   TextEndedSchema,
-} from '../src/opencode/events.js';
+} from '../src/harness/events.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
   .split('\n')

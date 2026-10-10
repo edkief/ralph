@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import { readAs, writeAtomic } from './request.js';
 import type { FormAnswer } from '../ui/form-check.js';
 import type { FormField } from '../ui/types.js';

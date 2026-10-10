@@ -7,7 +7,7 @@ import { listAsks, readAsk, writeAskAnswer } from '../src/human/asks.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { OpencodeEvent } from '../src/opencode/events.js';
+import type { HarnessEvent } from '../src/harness/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 
@@ -524,7 +524,7 @@ describe('runIteration', () => {
   });
 
   it('continues an existing session instead of opening a new one', async () => {
-    const seen: OpencodeEvent[] = [];
+    const seen: HarnessEvent[] = [];
     const result = await iterate(
       {
         script: [

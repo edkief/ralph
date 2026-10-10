@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 
 /**
  * How the loop and a person talk when the loop cannot go on alone. The loop

@@ -33,7 +33,7 @@ import {
 } from './push.js';
 import { TranscriptBuilder } from './transcript.js';
 import type { Logger } from '../report/logger.js';
-import type { OpencodeEvent } from '../opencode/events.js';
+import type { HarnessEvent } from '../harness/events.js';
 import type {
   ActionsView,
   LiveEvents,
@@ -631,7 +631,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     }
     // Send each changed entry once, as it stands after this batch.
     const changed = new Map<string, TranscriptEntry>();
-    for (const event of parseJsonLines<OpencodeEvent>(eventRead.lines)) {
+    for (const event of parseJsonLines<HarnessEvent>(eventRead.lines)) {
       for (const entry of feed.builder.push(event)) changed.set(entry.id, entry);
     }
     if (feed.announced) {

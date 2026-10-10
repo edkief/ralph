@@ -10,7 +10,7 @@ import { TaskStore, type Task } from '../tasks/store.js';
 import { validatePlan } from './plan.js';
 import { TEMPLATES_DIR } from './scaffold.js';
 import type { OpencodeClient } from '../opencode/client.js';
-import type { OpencodeEvent } from '../opencode/events.js';
+import type { HarnessEvent } from '../harness/events.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -85,7 +85,7 @@ export async function runInterview(args: {
   replan?: boolean;
   templatesDir?: string;
   /** Each turn's raw opencode events, for its record. */
-  onEvent?: (event: OpencodeEvent) => void;
+  onEvent?: (event: HarnessEvent) => void;
   /** Puts the agent's forms and asked permissions to the owner; without it, forms are cancelled. */
   asks?: AskRelay;
 }): Promise<InterviewOutcome> {

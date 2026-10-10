@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { OpencodeClient } from './client.js';
+import { sleep } from '../util/sleep.js';
 import type { ServerConfig } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -203,15 +204,4 @@ async function stopChild(child: ChildProcess, timeoutMs: number): Promise<void> 
   } finally {
     clearTimeout(timer);
   }
-}
-
-export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
 }

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { startServer, sleep } from '../opencode/server.js';
+import { startServer } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import { preflight } from '../opencode/preflight.js';
 import { runLoop } from '../loop/orchestrator.js';
 import { requestStop, STOP_MESSAGES } from '../human/request.js';

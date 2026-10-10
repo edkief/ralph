@@ -26,7 +26,7 @@ import {
   type Answer,
   type PendingRequest,
 } from '../human/request.js';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import { RunRecorder, newRunId, type IterationRecord, type RunState, type SplitRecord } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
 import { fileAskRelay, type AskRelay } from './asks.js';

@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { PermissionsConfig } from '../config/schema.js';
-import type { PermissionRequest } from '../opencode/events.js';
+import type { PermissionRequest } from '../harness/events.js';
 
 export type PermissionReply = 'once' | 'always' | 'reject';
 

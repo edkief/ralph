@@ -20,16 +20,16 @@ import {
   readData,
   sessionIdOf,
   toolName,
-  type OpencodeEvent,
+  type HarnessEvent,
   type PermissionRequest,
-} from '../opencode/events.js';
+} from '../harness/events.js';
 import { decidePermission, type PermissionDecision, type PermissionReply } from './permissions.js';
 import type { AskRelay, FormRequest } from './asks.js';
 import type { FormField } from '../ui/types.js';
-import { isContextOverflow } from '../opencode/overflow.js';
+import { isContextOverflow } from '../harness/overflow.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import type { WrapUpTrigger } from '../prompt/wrapup.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -83,7 +83,7 @@ export interface IterationHooks {
   onText?: (text: string) => void;
   onTool?: (tool: string, detail: string) => void;
   onRetry?: (attempt: number, message: string) => void;
-  onEvent?: (event: OpencodeEvent) => void;
+  onEvent?: (event: HarnessEvent) => void;
 }
 
 export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;

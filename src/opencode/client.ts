@@ -1,4 +1,5 @@
-import { SseParser, type OpencodeEvent } from './events.js';
+import { SseParser } from './sse.js';
+import type { HarnessEvent } from '../harness/events.js';
 
 export class OpencodeApiError extends Error {
   constructor(
@@ -170,7 +171,7 @@ export class OpencodeClient {
    * subscription only after the prompt had already been sent and let early
    * events slip through the gap.
    */
-  async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<OpencodeEvent>> {
+  async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<HarnessEvent>> {
     const response = await fetch(`${this.baseUrl}/api/event`, {
       headers: { ...this.headers(), accept: 'text/event-stream' },
       signal,
@@ -226,7 +227,7 @@ export function parseModel(model?: string): { providerID: string; modelID: strin
 async function* readEvents(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
-): AsyncGenerator<OpencodeEvent> {
+): AsyncGenerator<HarnessEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const parser = new SseParser();
