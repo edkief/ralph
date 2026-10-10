@@ -20,7 +20,7 @@ import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
 import type { AgentHarness } from './harness/types.js';
 
-const HELP = `ralph — long-running agent loop for opencode
+const HELP = `ralph — long-running agent loop for coding agents (opencode; pi is coming)
 
 Usage:
   ralph [run] [options]     Run the loop until the backlog is done
@@ -70,11 +70,12 @@ Respond options:
 Options:
   -n, --max-iterations <n>  Iteration budget (default 10)
   -m, --model <id>          provider/model, e.g. ollama/qwen3-coder
-  -a, --agent <name>        opencode agent profile
+      --harness <name>      Agent backend: opencode (default) | pi (not yet available)
+  -a, --agent <name>        opencode agent profile (opencode harness only)
   -C, --cwd <path>          Project root (default: current directory)
       --ralph-dir <path>    Ralph's project folder (default: .ralph)
       --config <path>       Config file (default: <root>/ralph.config.json)
-      --server <url>        Attach to an existing opencode server
+      --server <url>        Attach to an existing opencode server (opencode harness only)
       --no-pin-task         Let the agent choose its own task
       --log-format <fmt>    text | json
       --log-level <level>   debug | info | warn | error
@@ -89,7 +90,7 @@ Options:
 
 Exit codes:
   0 complete · 1 budget exhausted · 2 blocked · 3 decision needed
-  4 config/preflight · 5 provider · 6 stalled · 130 interrupted or stopped
+  4 config/preflight · 5 model provider or harness unusable · 6 stalled · 130 interrupted or stopped
 
 Stopping:
   At a terminal, Enter opens a menu to stop after the current iteration, now,
@@ -113,6 +114,7 @@ async function main(argv: string[]): Promise<number> {
     options: {
       'max-iterations': { type: 'string', short: 'n' },
       model: { type: 'string', short: 'm' },
+      harness: { type: 'string' },
       agent: { type: 'string', short: 'a' },
       cwd: { type: 'string', short: 'C' },
       'ralph-dir': { type: 'string' },
@@ -163,6 +165,7 @@ async function main(argv: string[]): Promise<number> {
         ? { plan: { model: values.model } }
         : { model: values.model }
       : {}),
+    ...(values.harness ? { harness: values.harness } : {}),
     ...(values.agent ? { agent: values.agent } : {}),
     ...(values['ralph-dir'] ? { ralphDir: values['ralph-dir'] } : {}),
     ...(values['pin-task'] === false ? { pinTask: false } : {}),
@@ -290,7 +293,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
     logger.warn('stopping now, interrupting the current iteration');
     controller.abort();
   };
-  // A Ctrl-C at a terminal reaches the opencode server as well, which ends
+  // A Ctrl-C at a terminal reaches the harness's process as well, which ends
   // its work there and then: nothing is left to finish. A SIGINT sent to
   // Ralph alone asks to stop after the current iteration; a second one stops now.
   const onInterrupt = () => {
@@ -305,7 +308,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   const interactive = command !== 'doctor' && Boolean(process.stdin.isTTY && process.stdout.isTTY);
   let closeMenu: (() => void) | undefined;
 
-  // Up before the opencode server, so preflight problems are visible in it too.
+  // Up before the harness, so preflight problems are visible in it too.
   const ui = config.ui.enabled && command !== 'doctor' ? await startUiBesideLoop(config, logger) : undefined;
   let harness: AgentHarness;
   try {
@@ -318,7 +321,7 @@ async function runCommand(command: string, config: Config, logger: Logger): Prom
   try {
     const checks = await preflight(config, harness);
     reporter.banner([
-      'ralph · opencode loop',
+      `ralph · ${harness.name} loop`,
       `  started ${formatTimestamp(new Date())}`,
       ...checks.map((check) => `  ${check.ok ? '✓' : check.fatal ? '✗' : '!'} ${check.name}: ${check.detail}`),
       ...(interactive ? ['  Enter for a menu: stop, or answer what Ralph asks · Ctrl-C to stop now'] : []),

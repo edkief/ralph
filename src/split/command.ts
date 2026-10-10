@@ -60,7 +60,7 @@ export async function runSplit(args: {
     process.on('SIGINT', onInterrupt);
     const harness = await startHarness(config, { cwd: config.projectRoot, logger });
     try {
-      reporter.banner([`ralph split · ${taskId}`, `  asking ${config.plan.model ?? config.model ?? 'the server default model'} to propose a split`]);
+      reporter.banner([`ralph split · ${taskId}`, `  asking ${config.plan.model ?? config.model ?? 'the harness default model'} to propose a split`]);
       const outcome = await proposeSplit({
         harness,
         config,

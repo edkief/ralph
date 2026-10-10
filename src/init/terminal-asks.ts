@@ -74,7 +74,7 @@ export function terminalAskRelay(io: InterviewIO): AskRelay {
           if (decision) return decision;
         }
       }),
-    rejected: (_id, error) => io.note(`opencode did not take that answer: ${error}`),
+    rejected: (_id, error) => io.note(`the harness did not take that answer: ${error}`),
     settled: () => {},
   };
 }

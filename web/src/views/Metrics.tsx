@@ -112,7 +112,7 @@ function Summary({ data }: { data: MetricsView }) {
                 Set <code>{energy.basis ? 'metrics.cost.power.pricePerKwh' : 'metrics.cost'}</code> in ralph.config.json
               </>
             )}
-            {totals.reportedCost > 0 ? ` · ${formatMoney(totals.reportedCost, 'USD')} reported by opencode` : ''}
+            {totals.reportedCost > 0 ? ` · ${formatMoney(totals.reportedCost, 'USD')} reported by the harness` : ''}
           </div>
         </div>
       </section>

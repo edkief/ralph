@@ -647,6 +647,7 @@ async function loop(
 
     if (status === 'provider-error') {
       logger.warn('provider unhealthy, backing off', {
+        harness: args.harness.name,
         error: result.lastProviderError ?? 'unknown',
         backoffMs: config.retries.backoffMs,
       });

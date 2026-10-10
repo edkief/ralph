@@ -224,3 +224,116 @@ describe('ralphDir resolution', () => {
     expect(warnings[0]).toMatch(/using "ralphDir"/);
   });
 });
+
+describe('harness selection', () => {
+  function load(root: string, options: { env?: NodeJS.ProcessEnv; overrides?: Record<string, unknown> } = {}) {
+    const warnings: string[] = [];
+    const config = loadConfig({
+      projectRoot: root,
+      env: options.env ?? {},
+      ...(options.overrides ? { overrides: options.overrides } : {}),
+      onWarning: (message) => warnings.push(message),
+    });
+    return { config, warnings };
+  }
+
+  function withFile(content: Record<string, unknown>): string {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph'));
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify(content));
+    return root;
+  }
+
+  it('resolves a file that predates the setting to opencode, unchanged and without warnings', () => {
+    const root = withFile({
+      model: 'ollama/qwen3-coder',
+      agent: 'build',
+      server: { url: 'http://opencode:4096', password: 'secret', port: 4096 },
+      timeouts: { iterationMs: 1_000 },
+    });
+
+    const { config, warnings } = load(root);
+
+    expect(config.harness).toBe('opencode');
+    expect(config.agent).toBe('build');
+    expect(config.server).toMatchObject({ url: 'http://opencode:4096', password: 'secret', port: 4096 });
+    expect(config.pi).toEqual({ binary: 'pi', args: [] });
+    expect(warnings).toEqual([]);
+  });
+
+  it('defaults to opencode with no file and an empty RALPH_HARNESS', () => {
+    expect(load(project()).config.harness).toBe('opencode');
+    expect(load(project(), { env: { RALPH_HARNESS: '' } }).config.harness).toBe('opencode');
+  });
+
+  it('layers the harness file < env < flag', () => {
+    const root = withFile({ harness: 'pi' });
+
+    expect(load(root).config.harness).toBe('pi');
+    expect(load(root, { env: { RALPH_HARNESS: 'opencode' } }).config.harness).toBe('opencode');
+    expect(
+      load(root, { env: { RALPH_HARNESS: 'opencode' }, overrides: { harness: 'pi' } }).config.harness,
+    ).toBe('pi');
+    expect(load(project(), { env: { RALPH_HARNESS: 'pi' }, overrides: { harness: 'opencode' } }).config.harness).toBe(
+      'opencode',
+    );
+  });
+
+  it('layers pi settings file < env, and keeps siblings', () => {
+    const root = withFile({ harness: 'pi', pi: { binary: '/opt/pi', args: ['--offline'], thinking: 'low' } });
+
+    const { config, warnings } = load(root, { env: { RALPH_PI_THINKING: 'high' } });
+
+    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high' });
+    expect(load(root, { env: { RALPH_PI_BINARY: 'pi-next' } }).config.pi.binary).toBe('pi-next');
+    expect(load(root, { env: { RALPH_PI_THINKING: '' } }).config.pi.thinking).toBe('low');
+    expect(warnings).toEqual([]);
+  });
+
+  it('rejects an unknown harness or thinking level with a readable message', () => {
+    expect(() => load(project(), { env: { RALPH_HARNESS: 'codex' } })).toThrow(ConfigError);
+    expect(() => load(project(), { env: { RALPH_HARNESS: 'codex' } })).toThrow(/harness/);
+    expect(() => load(project(), { env: { RALPH_PI_THINKING: 'max' } })).toThrow(/thinking/);
+  });
+
+  it('warns, without failing, about opencode settings under pi', () => {
+    const root = withFile({ harness: 'pi', agent: 'build', server: { url: 'http://opencode:4096' } });
+
+    const { config, warnings } = load(root);
+
+    expect(config.harness).toBe('pi');
+    expect(warnings).toEqual([
+      '"agent" only applies to the opencode harness; it is ignored with pi',
+      '"server" only applies to the opencode harness; it is ignored with pi',
+    ]);
+  });
+
+  it('warns about settings given by env or flag under pi', () => {
+    const fromEnv = load(project(), { env: { RALPH_HARNESS: 'pi', RALPH_AGENT: 'build' } });
+    expect(fromEnv.warnings).toEqual(['"agent" only applies to the opencode harness; it is ignored with pi']);
+
+    const fromFlags = load(project(), {
+      env: { RALPH_HARNESS: 'pi' },
+      overrides: { server: { url: 'http://opencode:4096' } },
+    });
+    expect(fromFlags.warnings).toEqual(['"server" only applies to the opencode harness; it is ignored with pi']);
+  });
+
+  it('warns, without failing, about pi settings under opencode', () => {
+    const root = withFile({ pi: { binary: '/opt/pi' } });
+
+    const { config, warnings } = load(root);
+
+    expect(config.harness).toBe('opencode');
+    expect(warnings).toEqual(['"pi" only applies to the pi harness; it is ignored with opencode']);
+    expect(load(project(), { env: { RALPH_PI_THINKING: 'low' } }).warnings).toHaveLength(1);
+  });
+
+  it('does not warn about settings every harness shares, or about nothing set', () => {
+    const { warnings } = load(withFile({ harness: 'pi', model: 'ollama/qwen3-coder', timeouts: { iterationMs: 1_000 } }), {
+      env: { RALPH_MODEL: 'ollama/other' },
+    });
+    expect(warnings).toEqual([]);
+    expect(load(project(), { env: { RALPH_HARNESS: 'pi' } }).warnings).toEqual([]);
+  });
+});
