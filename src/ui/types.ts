@@ -88,6 +88,88 @@ export interface PendingView {
   createdAt: string;
 }
 
+/** A value in a form's answer, by field type: text, a number, a yes/no, or the options picked. */
+export type FormValue = string | number | boolean | string[];
+
+/** A condition on another field's answer that shows a field. */
+export interface FormWhen {
+  key: string;
+  op: 'eq' | 'neq';
+  value: string | number | boolean;
+}
+
+export interface FormOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+interface FormFieldBase {
+  key: string;
+  title?: string;
+  description?: string;
+  required?: boolean;
+  hidden?: boolean;
+  /** Shown only when every condition holds. */
+  when?: FormWhen[];
+}
+
+/**
+ * A field of an opencode form, as its `question` tool or an MCP server's
+ * request for input opens one. `custom` lets an answer go beyond `options`.
+ */
+export type FormField =
+  | (FormFieldBase & {
+      type: 'string';
+      format?: 'email' | 'uri' | 'date' | 'date-time';
+      minLength?: number;
+      maxLength?: number;
+      pattern?: string;
+      placeholder?: string;
+      default?: string;
+      options?: FormOption[];
+      custom?: boolean;
+    })
+  | (FormFieldBase & { type: 'number' | 'integer'; minimum?: number; maximum?: number; default?: number })
+  | (FormFieldBase & { type: 'boolean'; default?: boolean })
+  | (FormFieldBase & {
+      type: 'multiselect';
+      options: FormOption[];
+      minItems?: number;
+      maxItems?: number;
+      custom?: boolean;
+      default?: string[];
+    })
+  | (FormFieldBase & { type: 'external'; url: string });
+
+/**
+ * Something the agent waits on a person for, in the middle of its turn: a
+ * form to fill in, or, with `permissions.fallback: ask`, a permission to grant.
+ */
+export interface AskView {
+  id: string;
+  kind: 'form' | 'permission';
+  /** A run's turn, or a planning interview held from the web UI. */
+  origin: 'run' | 'plan';
+  runId?: string;
+  planId?: string;
+  taskId: string | null;
+  form?: {
+    title: string;
+    /** `question` for opencode's question tool, `mcp` for an MCP server's request. */
+    source?: string;
+    fields: FormField[];
+  };
+  permission?: { action: string; resources: string[]; message?: string };
+  /** Why the last answer was not taken, to be put right. */
+  error?: string;
+  /** Answered, and the loop has not delivered it yet. */
+  answered: boolean;
+  createdAt: string;
+  /** When it is given up on, if ever. */
+  expiresAt?: string;
+}
+
 /**
  * What a push notification can be sent for: a request reaching a person, a
  * run ending, an iteration ending, a task passing. Each browser picks its own.
