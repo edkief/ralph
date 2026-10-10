@@ -10,6 +10,8 @@ import { PLAN_FORM_MESSAGE, runInterview, type InterviewIO } from '../src/init/i
 import { scaffold } from '../src/init/scaffold.js';
 import { PlanRecorder, readConversation, readPlanState, RecordingIO } from '../src/init/record.js';
 import { planWith } from '../src/init/session.js';
+import { parseDecision, parseFieldInput, terminalAskRelay } from '../src/init/terminal-asks.js';
+import type { AskRelay } from '../src/loop/asks.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 
@@ -80,10 +82,11 @@ async function interview(
   user: ScriptedUser,
   scenario: Parameters<typeof startFakeServer>[0],
   replan = false,
+  asks?: AskRelay,
 ) {
   server = await startFakeServer(scenario);
   const client = new OpencodeClient({ baseUrl: server.url });
-  return runInterview({ client, config: cfg, logger, io: user, signal: new AbortController().signal, replan });
+  return runInterview({ client, config: cfg, logger, io: user, signal: new AbortController().signal, replan, ...(asks ? { asks } : {}) });
 }
 
 const promptText = (index: number) => String(server?.prompts[index]?.['text']);
@@ -130,6 +133,48 @@ describe('runInterview', () => {
 
     expect(server?.formCancels).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', message: PLAN_FORM_MESSAGE }]);
     expect(user.said).toEqual(['1. Which stack? (default: Node)']);
+  });
+
+  it("puts a question form to the owner through the interview's IO when it can", async () => {
+    const root = project();
+    // The description, then the form's two fields.
+    const user = new ScriptedUser(['A todo app for my team.', '2', 'y']);
+
+    await interview(
+      root,
+      config(root),
+      user,
+      {
+        script: [
+          {
+            type: 'form.created',
+            raw: true,
+            data: {
+              form: {
+                id: 'frm_1',
+                sessionID: 'ses_fake_1',
+                title: 'Stack',
+                metadata: { kind: 'question' },
+                fields: [
+                  { key: 'stack', type: 'string', title: 'Which stack?', options: [{ value: 'deno', label: 'Deno' }, { value: 'node', label: 'Node' }] },
+                  { key: 'db', type: 'boolean', title: 'A database' },
+                ],
+              },
+            },
+          },
+        ],
+        onFormSettled: () => {
+          for (const event of say('Noted.')) server!.emit(event);
+        },
+      },
+      false,
+      terminalAskRelay(user),
+    );
+
+    expect(server?.formReplies).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', answer: { stack: 'node', db: true } }]);
+    expect(server?.formCancels).toEqual([]);
+    expect(user.asked.slice(1, 3)).toEqual(['Which stack? (number or text) (optional)', 'A database? y/n (optional)']);
+    expect(user.notes[0]).toBe('The agent asks: Stack. Answer each question (/skip to decline).');
   });
 
   it('falls back to the loop model when no planning model is set', async () => {
@@ -338,5 +383,34 @@ describe('a recorded interview', () => {
     const events = readFileSync(resolve(recorder.dir, 'turn-001.events.jsonl'), 'utf8');
     expect(events).toContain('session.text.ended');
     expect(existsSync(resolve(recorder.dir, 'turn-002.events.jsonl'))).toBe(true);
+  });
+});
+
+describe('terminal asks', () => {
+  it('reads what was typed for each kind of field', () => {
+    const options = [{ value: 'pg', label: 'Postgres' }, { value: 'sqlite', label: 'SQLite' }];
+    expect(parseFieldInput({ key: 'a', type: 'string', options }, '2')).toEqual({ value: 'sqlite' });
+    expect(parseFieldInput({ key: 'a', type: 'string', options }, 'postgres')).toEqual({ value: 'pg' });
+    expect(parseFieldInput({ key: 'a', type: 'string', options }, 'mysql')).toEqual({ error: 'Pick 1 to 2' });
+    expect(parseFieldInput({ key: 'a', type: 'string', options, custom: true }, 'mysql')).toEqual({ value: 'mysql' });
+    expect(parseFieldInput({ key: 'a', type: 'string', default: 'x' }, ' ')).toEqual({ value: 'x' });
+    expect(parseFieldInput({ key: 'n', type: 'integer' }, '2.5')).toEqual({ error: 'A whole number, please' });
+    expect(parseFieldInput({ key: 'n', type: 'number' }, '2.5')).toEqual({ value: 2.5 });
+    expect(parseFieldInput({ key: 'b', type: 'boolean' }, 'No')).toEqual({ value: false });
+    expect(parseFieldInput({ key: 'm', type: 'multiselect', options }, '1, sqlite, 1')).toEqual({ value: ['pg', 'sqlite'] });
+    expect(parseDecision('A')).toBe('always');
+    expect(parseDecision('maybe')).toBeUndefined();
+  });
+
+  it('declines a form on /skip, and asks a permission until it gets an answer', async () => {
+    const user = new ScriptedUser(['/skip', 'perhaps', 'o']);
+    const relay = terminalAskRelay(user);
+    const signal = new AbortController().signal;
+
+    const form = await relay.form({ id: 'frm_1', sessionID: 's', title: 'Q', fields: [{ key: 'a', type: 'string' }] }, signal);
+    expect(form).toEqual({ cancel: expect.stringContaining('declined') });
+    const decision = await relay.permission({ id: 'per_1', sessionID: 's', action: 'shell', resources: ['make deploy'] }, signal);
+    expect(decision).toBe('once');
+    expect(user.notes).toContain('The agent asks to shell: make deploy');
   });
 });

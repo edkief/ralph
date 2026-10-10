@@ -29,7 +29,8 @@ spec of **one** task, implements it, runs the tests, marks the task passing and 
    and non-goals, stack and constraints, what "done" looks like. Ask at most five numbered
    questions per message, most important first, and suggest a default for each so the
    owner can simply agree. Ask in your message text, then end it and wait for the answer.
-   Never use the question tool: nobody can answer it, and Ralph cancels it.
+   The question tool also reaches the owner, and suits a few short choices; if it fails,
+   ask in your message instead.
 3. **Stop asking** as soon as you could write the plan. The owner can also reply `/done`,
    which means: write the plan now and record anything unresolved as an assumption.
 4. **Write the files** below, then reply with a short summary of the plan (the task list, one

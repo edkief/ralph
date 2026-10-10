@@ -21,6 +21,7 @@ import {
 } from './control.js';
 import { daemonLoop, markStopped, type BatchOutcome, type PlanRequest } from './daemon.js';
 import { FileInterviewIO } from '../init/file-io.js';
+import { fileAskRelay } from '../loop/asks.js';
 import { livePlan, PlanRecorder, requestPlanStop } from '../init/record.js';
 import { planWith, preparePlan } from '../init/session.js';
 import type { Config } from '../config/schema.js';
@@ -135,6 +136,8 @@ export async function runDaemon(args: {
         io,
         signal,
         replan: request.mode === 'replan',
+        // Its forms go to the owner in the web UI, beside the interview.
+        asks: fileAskRelay({ ralphRoot, origin: { plan: request.id }, askMs: planConfig.timeouts.askMs }),
       });
       logger.info('planning ended', {
         id: request.id,
