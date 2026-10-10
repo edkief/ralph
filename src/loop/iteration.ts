@@ -1,4 +1,4 @@
-import { OpencodeApiError, type OpencodeClient } from '../opencode/client.js';
+import { HarnessApiError, type AgentHarness } from '../harness/types.js';
 import {
   EXECUTION_DONE_EVENTS,
   ExecutionEndedSchema,
@@ -20,16 +20,16 @@ import {
   readData,
   sessionIdOf,
   toolName,
-  type OpencodeEvent,
+  type HarnessEvent,
   type PermissionRequest,
-} from '../opencode/events.js';
+} from '../harness/events.js';
 import { decidePermission, type PermissionDecision, type PermissionReply } from './permissions.js';
 import type { AskRelay, FormRequest } from './asks.js';
 import type { FormField } from '../ui/types.js';
-import { isContextOverflow } from '../opencode/overflow.js';
+import { isContextOverflow } from '../harness/overflow.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import type { WrapUpTrigger } from '../prompt/wrapup.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -83,7 +83,7 @@ export interface IterationHooks {
   onText?: (text: string) => void;
   onTool?: (tool: string, detail: string) => void;
   onRetry?: (attempt: number, message: string) => void;
-  onEvent?: (event: OpencodeEvent) => void;
+  onEvent?: (event: HarnessEvent) => void;
 }
 
 export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;
@@ -111,7 +111,7 @@ export const FORM_EXPIRED_MESSAGE =
  * be missed in the gap.
  */
 export async function runIteration(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   prompt: string;
   title: string;
@@ -143,7 +143,7 @@ export async function runIteration(args: {
   hooks?: IterationHooks;
   signal: AbortSignal;
 }): Promise<IterationResult> {
-  const { client, config, logger, hooks = {}, signal } = args;
+  const { harness, config, logger, hooks = {}, signal } = args;
   const policy = args.permissions ?? ((request) => decidePermission(request, config.permissions));
   const startedAt = Date.now();
 
@@ -233,14 +233,14 @@ export async function runIteration(args: {
           if (signal.aborted && !streamAbort.signal.aborted && !openAsks.get(form.id)?.abort.signal.aborted) {
             // Nobody answered in time.
             logger.warn('form not answered in time: cancelled', { form: form.title });
-            const failure = await deliverCancel(client, form, args.formExpiredMessage ?? FORM_EXPIRED_MESSAGE, logger);
+            const failure = await deliverCancel(harness, form, args.formExpiredMessage ?? FORM_EXPIRED_MESSAGE, logger);
             if (failure) failTurn(failure);
           }
           return;
         }
         const entry = openAsks.get(form.id);
         if (entry) entry.answered = true;
-        const result = await deliverForm(client, form, outcome, logger);
+        const result = await deliverForm(harness, form, outcome, logger);
         if (result.status === 'delivered' || result.status === 'settled') return;
         if (result.status === 'failed') return failTurn(result.reason);
         if (entry) entry.answered = false;
@@ -255,7 +255,7 @@ export async function runIteration(args: {
       if (!decision && (streamAbort.signal.aborted || openAsks.get(request.id)?.abort.signal.aborted)) return;
       const reply: PermissionReply = decision ?? 'reject';
       logger.info('permission decided', { action: request.action, reply, reason: decision ? 'person' : 'not-answered' });
-      const failure = await deliverPermission(client, request, reply, logger);
+      const failure = await deliverPermission(harness, request, reply, logger);
       if (failure) failTurn(failure);
     });
   // Whether opencode reported the turn's execution over. Until it does, the
@@ -291,20 +291,20 @@ export async function runIteration(args: {
     wrapUp.state = state;
     // The time budget and a park can steer a working agent; a quiet one is
     // stuck in a tool, which only an interrupt ends.
-    if (trigger !== 'inactivity' && (await client.supportsSteering())) state.delivery = 'steer';
+    if (trigger !== 'inactivity' && harness.capabilities.steering) state.delivery = 'steer';
     // The iteration may have ended while this was waiting.
     if (streamAbort.signal.aborted) return;
     logger.warn('asking the agent to wrap up', { reason: trigger, delivery: state.delivery });
     if (state.delivery === 'interrupt') {
       const ended = new Promise<void>((resolve) => (wrapUp.onInterruptedEnd = resolve));
-      await client.interrupt(sessionId);
+      await harness.interrupt(sessionId);
       await Promise.race([ended, sleep(INTERRUPT_SETTLE_MS, streamAbort.signal)]);
       wrapUp.onInterruptedEnd = null;
       if (streamAbort.signal.aborted) return;
     }
     state.sent = true;
     state.textIndex = texts.length;
-    await client.prompt(sessionId, args.wrapUp!.prompt(trigger), {
+    await harness.prompt(sessionId, args.wrapUp!.prompt(trigger), {
       ...promptOptions,
       ...(state.delivery === 'steer' ? { delivery: 'steer' as const } : {}),
     });
@@ -339,15 +339,15 @@ export async function runIteration(args: {
 
   try {
     // Subscribe before prompting so no early event is missed.
-    const stream = await client.connectEvents(streamAbort.signal);
-    sessionId = args.sessionId ?? (await client.createSession(args.title));
+    const stream = await harness.connectEvents(streamAbort.signal);
+    sessionId = args.sessionId ?? (await harness.createSession(args.title));
     // Recorded before any of the session's events, so its own work is never taken for a subagent's.
     hooks.onEvent?.({
       type: TURN_STARTED_EVENT,
       created: Date.now(),
       data: { sessionID: sessionId, continued: args.sessionId !== undefined },
     });
-    await client.prompt(sessionId, args.prompt, promptOptions);
+    await harness.prompt(sessionId, args.prompt, promptOptions);
     logger.debug('prompt sent', { sessionId });
 
     for await (const event of stream) {
@@ -356,8 +356,8 @@ export async function runIteration(args: {
         // server started during the turn — subagents included.
         hooks.onEvent?.(event);
         const created = readData(event, SessionCreatedSchema);
-        if (created && created.sessionID !== sessionId) {
-          const parent = created.parentID ?? (await lookupParent(client, created.sessionID, logger));
+        if (harness.capabilities.subagents && created && created.sessionID !== sessionId) {
+          const parent = created.parentID ?? (await lookupParent(harness, created.sessionID, logger));
           if (parent && (parent === sessionId || subagentSessions.has(parent))) {
             subagentSessions.add(created.sessionID);
             logger.debug('subagent session started', { sessionId: created.sessionID });
@@ -377,14 +377,14 @@ export async function runIteration(args: {
         watchdog.beginCompaction();
       }
 
-      if (event.type.includes('permission')) {
+      if (harness.capabilities.permissionAsks && event.type.includes('permission')) {
         const request = readData(event, PermissionRequestSchema);
         const decision = request ? policy(request) : undefined;
         if (request && decision?.reply === 'ask' && args.asks) {
           askPermission(request, args.asks);
           continue;
         }
-        permissionFailure = request && decision ? await handlePermission(request, decision, client, logger) : undefined;
+        permissionFailure = request && decision ? await handlePermission(request, decision, harness, logger) : undefined;
         if (permissionFailure) {
           executionError = permissionFailure;
           break;
@@ -393,7 +393,7 @@ export async function runIteration(args: {
         continue;
       }
 
-      if (event.type === 'form.created') {
+      if (harness.capabilities.forms && event.type === 'form.created') {
         const form = readData(event, FormCreatedSchema)?.form;
         if (form && args.asks) {
           askForm(
@@ -408,7 +408,7 @@ export async function runIteration(args: {
           );
           continue;
         }
-        const formFailure = form ? await cancelForm(form, client, args.formMessage ?? FORM_CANCEL_MESSAGE, logger) : undefined;
+        const formFailure = form ? await cancelForm(form, harness, args.formMessage ?? FORM_CANCEL_MESSAGE, logger) : undefined;
         if (formFailure) {
           executionError = formFailure;
           break;
@@ -519,7 +519,7 @@ export async function runIteration(args: {
     if (executionEnded) {
       await Promise.all(
         unanswered.map(([id, ask]) =>
-          client.cancelForm(ask.sessionID, id, args.formMessage ?? FORM_CANCEL_MESSAGE).catch(() => undefined),
+          harness.cancelForm(ask.sessionID, id, args.formMessage ?? FORM_CANCEL_MESSAGE).catch(() => undefined),
         ),
       );
     }
@@ -528,12 +528,12 @@ export async function runIteration(args: {
     // does not, and a daemon's or an attached server outlives the turn.
     if (sessionId && !executionEnded) {
       await Promise.all([
-        client.interrupt(sessionId).catch((cause: unknown) => {
+        harness.interrupt(sessionId).catch((cause: unknown) => {
           // The session may still be running and competing with the retry.
           logger.warn('interrupt failed', { sessionId, error: (cause as Error).message });
         }),
         ...[...subagentSessions].map((id) =>
-          client.interrupt(id).catch((cause: unknown) => {
+          harness.interrupt(id).catch((cause: unknown) => {
             // It may well have finished already.
             logger.debug('subagent interrupt failed', { sessionId: id, error: (cause as Error).message });
           }),
@@ -661,16 +661,16 @@ const REPLY_ATTEMPTS = 2;
 
 /**
  * The event payload is not documented to carry `parentID`, but the session
- * record is, so fall back to fetching it. A failed lookup just means the
+ * record is, so fall back to asking the harness. A failed lookup just means the
  * session is not treated as ours.
  */
 async function lookupParent(
-  client: OpencodeClient,
+  harness: AgentHarness,
   sessionID: string,
   logger: Logger,
 ): Promise<string | undefined> {
   try {
-    return (await client.getSession(sessionID)).parentID;
+    return await harness.parentOf(sessionID);
   } catch (cause) {
     logger.debug('session lookup failed', { sessionId: sessionID, error: (cause as Error).message });
     return undefined;
@@ -686,7 +686,7 @@ async function lookupParent(
 async function handlePermission(
   request: PermissionRequest,
   decision: PermissionDecision,
-  client: OpencodeClient,
+  harness: AgentHarness,
   logger: Logger,
 ): Promise<string | undefined> {
   const reply: PermissionReply = decision.reply === 'ask' ? 'reject' : decision.reply;
@@ -696,11 +696,11 @@ async function handlePermission(
     reason: decision.reply === 'ask' ? 'nobody-to-ask' : decision.reason,
     ...(decision.matched ? { matched: decision.matched } : {}),
   });
-  return deliverPermission(client, request, reply, logger);
+  return deliverPermission(harness, request, reply, logger);
 }
 
 async function deliverPermission(
-  client: OpencodeClient,
+  harness: AgentHarness,
   request: PermissionRequest,
   reply: PermissionReply,
   logger: Logger,
@@ -708,10 +708,10 @@ async function deliverPermission(
   // A rejected request fails the same way twice; anything else may be a blip.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await client.replyPermission(request.sessionID, request.id, reply);
+      await harness.replyPermission(request.sessionID, request.id, reply);
       return undefined;
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       // Already answered, by a person or an earlier attempt: nothing is waiting.
       if (status === 404) {
         logger.debug('permission request already gone', { id: request.id });
@@ -721,7 +721,7 @@ async function deliverPermission(
       logger.warn('permission reply failed', {
         error: (cause as Error).message,
         // The server says which field it rejected; without it a 400 is opaque.
-        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+        ...(cause instanceof HarnessApiError && cause.body ? { body: cause.body } : {}),
       });
       if (rejected || attempt >= REPLY_ATTEMPTS) {
         return describeReplyFailure(`Permission reply for ${request.action}`, cause);
@@ -737,17 +737,17 @@ async function deliverPermission(
  */
 async function cancelForm(
   form: { id: string; sessionID: string; title?: string | undefined; metadata?: { kind?: string | undefined } | undefined },
-  client: OpencodeClient,
+  harness: AgentHarness,
   message: string,
   logger: Logger,
 ): Promise<string | undefined> {
   const kind = form.metadata?.kind ?? 'form';
   logger.info('form cancelled', { kind, ...(form.title ? { title: form.title } : {}) });
-  return deliverCancel(client, { id: form.id, sessionID: form.sessionID, ...(form.metadata?.kind ? { source: form.metadata.kind } : {}) }, message, logger);
+  return deliverCancel(harness, { id: form.id, sessionID: form.sessionID, ...(form.metadata?.kind ? { source: form.metadata.kind } : {}) }, message, logger);
 }
 
 async function deliverCancel(
-  client: OpencodeClient,
+  harness: AgentHarness,
   form: Pick<FormRequest, 'id' | 'sessionID' | 'source'>,
   message: string,
   logger: Logger,
@@ -755,10 +755,10 @@ async function deliverCancel(
   const kind = form.source ?? 'form';
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await client.cancelForm(form.sessionID, form.id, message);
+      await harness.cancelForm(form.sessionID, form.id, message);
       return undefined;
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       // Gone or already settled, by a person or an earlier attempt: nothing is waiting.
       if (status === 404 || status === 409) {
         logger.debug('form already settled', { id: form.id });
@@ -767,7 +767,7 @@ async function deliverCancel(
       const rejected = status !== undefined && status >= 400 && status < 500;
       logger.warn('form cancel failed', {
         error: (cause as Error).message,
-        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+        ...(cause instanceof HarnessApiError && cause.body ? { body: cause.body } : {}),
       });
       if (rejected || attempt >= REPLY_ATTEMPTS) {
         return describeReplyFailure(`Cancel of a ${kind} form`, cause);
@@ -783,23 +783,23 @@ async function deliverCancel(
  * take it, and the agent would wait for good.
  */
 async function deliverForm(
-  client: OpencodeClient,
+  harness: AgentHarness,
   form: FormRequest,
   outcome: { answer: Record<string, unknown> } | { cancel: string },
   logger: Logger,
 ): Promise<{ status: 'delivered' } | { status: 'settled' } | { status: 'rejected'; reason: string } | { status: 'failed'; reason: string }> {
   if ('cancel' in outcome) {
     logger.info('form declined by a person', { form: form.title });
-    const failure = await deliverCancel(client, form, outcome.cancel, logger);
+    const failure = await deliverCancel(harness, form, outcome.cancel, logger);
     return failure ? { status: 'failed', reason: failure } : { status: 'delivered' };
   }
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await client.replyForm(form.sessionID, form.id, outcome.answer);
+      await harness.replyForm(form.sessionID, form.id, outcome.answer);
       logger.info('form answered by a person', { form: form.title });
       return { status: 'delivered' };
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       if (status === 404 || status === 409) {
         logger.debug('form already settled', { id: form.id });
         return { status: 'settled' };
@@ -819,7 +819,7 @@ async function deliverForm(
 
 /** `what` names the reply, e.g. `Permission reply for shell`. */
 function describeReplyFailure(what: string, cause: unknown): string {
-  if (!(cause instanceof OpencodeApiError)) {
+  if (!(cause instanceof HarnessApiError)) {
     return `${what} could not be delivered: ${(cause as Error).message}`;
   }
   let detail = cause.body;

@@ -12,7 +12,7 @@ import {
 } from '../src/loop/handoff.js';
 import { buildWrapUpPrompt } from '../src/prompt/wrapup.js';
 import { buildResumePrompt } from '../src/prompt/resume.js';
-import { handoffCheck } from '../src/opencode/preflight.js';
+import { handoffCheck } from '../src/loop/preflight.js';
 import { ConfigSchema } from '../src/config/schema.js';
 
 const complete = HANDOFF_HEADINGS.map((heading) => `## ${heading}\n\nSomething.`).join('\n\n');

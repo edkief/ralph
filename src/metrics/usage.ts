@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { StepEndedSchema, readData, sessionIdOf, type OpencodeEvent } from '../opencode/events.js';
+import { StepEndedSchema, readData, sessionIdOf, type HarnessEvent } from '../harness/events.js';
 import { LineTailer, parseJsonLines } from '../ui/tail.js';
 
 /** What one model did in a turn: its calls, their tokens, and the time it spent generating. */
@@ -76,7 +76,7 @@ export class UsageMeter {
   private readonly models = new Map<string, string>();
 
   /** `now` stands in for an event without a `created` time. */
-  push(event: OpencodeEvent, now?: number): void {
+  push(event: HarnessEvent, now?: number): void {
     const session = sessionIdOf(event);
     if (!session || !event.type.startsWith('session.')) return;
     const at = typeof event['created'] === 'number' ? event['created'] : now;
@@ -160,7 +160,7 @@ export function usageOfEventsFile(path: string): TurnUsage {
   const meter = new UsageMeter();
   const tailer = new LineTailer(path);
   for (let read = tailer.read(); ; read = tailer.read()) {
-    for (const event of parseJsonLines<OpencodeEvent>(read.lines)) meter.push(event);
+    for (const event of parseJsonLines<HarnessEvent>(read.lines)) meter.push(event);
     if (!read.more) break;
   }
   return meter.drain();

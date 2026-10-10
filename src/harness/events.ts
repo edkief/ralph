@@ -1,16 +1,17 @@
 import { z } from 'zod';
 
 /**
- * opencode SSE frames are `{ type, data, ... }`. We validate only the fields
+ * An event on the agent's stream: `{ type, data, ... }`, opencode's frame shape
+ * (a harness-neutral vocabulary is the next step). We validate only the fields
  * the loop reacts to and keep the rest as-is, so a server upgrade that adds
  * fields (or event types) cannot crash the loop.
  */
-export const OpencodeEventSchema = z.looseObject({
+export const HarnessEventSchema = z.looseObject({
   type: z.string(),
   data: z.unknown().optional(),
 });
 
-export type OpencodeEvent = z.infer<typeof OpencodeEventSchema>;
+export type HarnessEvent = z.infer<typeof HarnessEventSchema>;
 
 const TokensSchema = z.looseObject({
   input: z.number().optional(),
@@ -154,63 +155,15 @@ export const EXECUTION_DONE_EVENTS = new Set([
   'session.execution.aborted',
 ]);
 
-/**
- * Incremental SSE frame parser. Feed it decoded chunks; it yields one parsed
- * event per complete `data:` frame and keeps any partial tail buffered.
- */
-export class SseParser {
-  private buffer = '';
-
-  push(chunk: string): OpencodeEvent[] {
-    this.buffer += chunk;
-    const events: OpencodeEvent[] = [];
-
-    let boundary = this.nextBoundary();
-    while (boundary !== null) {
-      const frame = this.buffer.slice(0, boundary.index);
-      this.buffer = this.buffer.slice(boundary.index + boundary.length);
-      const event = parseFrame(frame);
-      if (event) events.push(event);
-      boundary = this.nextBoundary();
-    }
-    return events;
-  }
-
-  private nextBoundary(): { index: number; length: number } | null {
-    const lf = this.buffer.indexOf('\n\n');
-    const crlf = this.buffer.indexOf('\r\n\r\n');
-    if (lf === -1 && crlf === -1) return null;
-    if (crlf !== -1 && (lf === -1 || crlf < lf)) return { index: crlf, length: 4 };
-    return { index: lf, length: 2 };
-  }
-}
-
-function parseFrame(frame: string): OpencodeEvent | null {
-  const payload = frame
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart())
-    .join('\n');
-
-  if (!payload || payload === '[DONE]') return null;
-
-  try {
-    const parsed = OpencodeEventSchema.safeParse(JSON.parse(payload));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
 /** The session a session-scoped event belongs to; a form event names it on the form. */
-export function sessionIdOf(event: OpencodeEvent): string | undefined {
+export function sessionIdOf(event: HarnessEvent): string | undefined {
   const data = event.data as { sessionID?: unknown; form?: { sessionID?: unknown } } | undefined;
   if (typeof data?.sessionID === 'string') return data.sessionID;
   return typeof data?.form?.sessionID === 'string' ? data.form.sessionID : undefined;
 }
 
 /** A tool's name where the event carries one, else a generic `tool`. */
-export function toolName(event: OpencodeEvent): string {
+export function toolName(event: HarnessEvent): string {
   const data = event.data as { tool?: unknown; name?: unknown } | undefined;
   if (typeof data?.tool === 'string') return data.tool;
   if (typeof data?.name === 'string') return data.name;
@@ -218,7 +171,7 @@ export function toolName(event: OpencodeEvent): string {
 }
 
 /** Narrow an event's `data` with a schema, returning undefined when it does not fit. */
-export function readData<T>(event: OpencodeEvent, schema: z.ZodType<T>): T | undefined {
+export function readData<T>(event: HarnessEvent, schema: z.ZodType<T>): T | undefined {
   const parsed = schema.safeParse(event.data);
   return parsed.success ? parsed.data : undefined;
 }

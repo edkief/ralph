@@ -8,7 +8,7 @@ import { TaskStore } from '../tasks/store.js';
 import { buildEscalationFixPrompt, buildEscalationPrompt } from '../prompt/escalate.js';
 import { agentActionsFor, type Action, type PendingRequest } from '../human/request.js';
 import type { Decision } from '../human/decisions.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -96,7 +96,7 @@ export function escalationDir(ralphDir: string, runId: string): string {
  * can act on, Ralph puts the request to a person.
  */
 export async function runEscalation(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   runId: string;
@@ -107,7 +107,7 @@ export async function runEscalation(args: {
   signal: AbortSignal;
   hooks?: IterationHooks;
 }): Promise<EscalationOutcome> {
-  const { client, config, logger, request, signal } = args;
+  const { harness, config, logger, request, signal } = args;
   const { projectRoot, ralphDir } = config;
   const actions = agentActionsFor(request.kind);
   const dir = escalationDir(ralphDir, args.runId);
@@ -159,7 +159,7 @@ export async function runEscalation(args: {
 
   for (let attempt = 0; ; attempt += 1) {
     const result = await runIteration({
-      client,
+      harness,
       // The turn's own budget, with no wrap-up: there is nothing to hand off.
       config: {
         ...config,

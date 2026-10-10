@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TranscriptBuilder } from '../src/ui/transcript.js';
-import type { OpencodeEvent } from '../src/opencode/events.js';
+import type { HarnessEvent } from '../src/harness/events.js';
 
 const fixture = readFileSync(resolve(__dirname, 'fixtures/session-events.jsonl'), 'utf8')
   .trim()
   .split('\n')
-  .map((line) => JSON.parse(line) as OpencodeEvent);
+  .map((line) => JSON.parse(line) as HarnessEvent);
 
-function build(events: OpencodeEvent[]) {
+function build(events: HarnessEvent[]) {
   const builder = new TranscriptBuilder();
   for (const event of events) builder.push(event);
   return builder.all;

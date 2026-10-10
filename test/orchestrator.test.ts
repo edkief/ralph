@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
-import { OpencodeClient } from '../src/opencode/client.js';
+import { opencodeHarness } from './helpers/opencode.js';
 import { runLoop } from '../src/loop/orchestrator.js';
 import { ConsoleReporter } from '../src/report/console.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
@@ -61,10 +61,10 @@ async function loop(
   stop?: AbortSignal,
 ) {
   server = await startFakeServer(options);
-  const client = new OpencodeClient({ baseUrl: server.url });
+  const harness = await opencodeHarness(server.url);
   return runLoop({
     config: cfg,
-    client,
+    harness,
     logger,
     reporter,
     signal: new AbortController().signal,
@@ -83,7 +83,7 @@ async function waitingLoop(
   return runLoop({
     ...extra,
     config: { ...cfg, ui: { ...cfg.ui, wait: true } },
-    client: new OpencodeClient({ baseUrl: server.url }),
+    harness: await opencodeHarness(server.url),
     logger,
     reporter,
     signal: new AbortController().signal,
@@ -1328,7 +1328,7 @@ describe('runLoop', () => {
         });
         const result = await runLoop({
           config: config(root, { maxIterations: 5, assess: { mode: 'split' } }),
-          client: new OpencodeClient({ baseUrl: server.url }),
+          harness: await opencodeHarness(server.url),
           logger: new Logger({ level: 'warn', stream: sink }),
           reporter,
           signal: new AbortController().signal,
@@ -1582,7 +1582,7 @@ describe('runLoop', () => {
     const infoLogger = new Logger({ level: 'info', stream: sink });
     const result = await runLoop({
       config: config(root, { maxIterations: 1 }),
-      client: new OpencodeClient({ baseUrl: server.url }),
+      harness: await opencodeHarness(server.url),
       logger: infoLogger,
       reporter,
       signal: new AbortController().signal,

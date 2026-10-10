@@ -26,12 +26,12 @@ import {
   type Answer,
   type PendingRequest,
 } from '../human/request.js';
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import { RunRecorder, newRunId, type IterationRecord, type RunState, type SplitRecord } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
 import { fileAskRelay, type AskRelay } from './asks.js';
 import type { ConsoleReporter } from '../report/console.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -166,7 +166,7 @@ const POLL_MS = 500;
 
 interface LoopArgs {
   config: Config;
-  client: OpencodeClient;
+  harness: AgentHarness;
   logger: Logger;
   reporter: ConsoleReporter;
   signal: AbortSignal;
@@ -188,7 +188,7 @@ async function loop(
   recorder: RunRecorder,
   saveState: (patch: Partial<RunState>) => void,
 ): Promise<RunResult> {
-  const { config, client, logger, reporter, signal } = args;
+  const { config, harness, logger, reporter, signal } = args;
   const park = args.park ?? new AbortController().signal;
   // A park is a stop that also hands off.
   const stop = AbortSignal.any([...(args.stop ? [args.stop] : []), park]);
@@ -227,7 +227,7 @@ async function loop(
     saveState({ escalation: { n, kind: request.kind, taskId: request.taskId, startedAt } });
     const agentText = request.taskId && lastAgentText?.taskId === request.taskId ? lastAgentText.text : undefined;
     const outcome = await runEscalation({
-      client,
+      harness,
       config,
       logger,
       runId,
@@ -475,7 +475,7 @@ async function loop(
 
     taskAtWork = next.id;
     const attempt = await attemptIteration({
-      args: { client, config, logger, reporter, signal, stop, park, ...(asks ? { asks } : {}) },
+      args: { harness, config, logger, reporter, signal, stop, park, ...(asks ? { asks } : {}) },
       recorder,
       iteration,
       // Built per attempt, so a retry sees the handoff the failed one left.
@@ -514,7 +514,7 @@ async function loop(
     // Marked passing, yet cut short: the two disagree, so the task is
     // confirmed or reopened before the loop moves on.
     const confirm = await settlePassing({
-      client,
+      harness,
       config,
       logger,
       signal,
@@ -783,7 +783,7 @@ const DECISIONS_SHOWN = 20;
  */
 async function attemptIteration(context: {
   args: {
-    client: OpencodeClient;
+    harness: AgentHarness;
     config: Config;
     logger: Logger;
     reporter: ConsoleReporter;
@@ -804,7 +804,7 @@ async function attemptIteration(context: {
   /** Whether the task is marked passing, read afresh. */
   taskPasses: () => boolean;
 }): Promise<{ result: IterationResult; cutShort: StallCause[]; handoff?: 'agent' | 'fallback' }> {
-  const { client, config, logger, reporter, signal, stop, park, asks } = context.args;
+  const { harness, config, logger, reporter, signal, stop, park, asks } = context.args;
   const handoffShown = display(config, context.handoffFile);
   let attempt = 0;
   const cutShort: StallCause[] = [];
@@ -814,7 +814,7 @@ async function attemptIteration(context: {
   // One turn of the attempt: its first, or one resuming the agent in the same session.
   const turn = (prompt: string, resume?: { sessionId: string; iterationMs: number }) =>
     runIteration({
-      client,
+      harness,
       config,
       logger,
       signal,
@@ -1009,7 +1009,7 @@ async function assessBeforeAttempt(context: {
   context.saveState({ iteration, taskId, iterationStartedAt: null, split: { taskId, startedAt, phase: 'assess' } });
   const { assessment, sessionId, recorded } = await planning(config, logger, taskId, () =>
     assessTask({
-      client: args.client,
+      harness: args.harness,
       config,
       logger,
       task,
@@ -1170,7 +1170,7 @@ async function handleStall(context: StallContext): Promise<StallOutcome> {
   context.saveState({ split: { taskId, startedAt, phase: 'split' } });
   const outcome = await planning(config, logger, taskId, () =>
     proposeSplit({
-      client: args.client,
+      harness: args.harness,
       config,
       logger,
       taskId,

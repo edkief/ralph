@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { readAs, writeAtomic } from '../human/request.js';
 import { newRunId } from '../report/jsonl.js';
 import { DONE_COMMAND, type InterviewIO, type InterviewOutcome } from './interview.js';
-import type { OpencodeEvent } from '../opencode/events.js';
+import type { HarnessEvent } from '../harness/events.js';
 
 /**
  * A planning interview as it goes, under `history/plans/<id>/`, apart from
@@ -289,7 +289,7 @@ export class PlanRecorder {
     this.update({ turn: n, status: 'working', prompt: null, activity: null });
   }
 
-  recordEvent(event: OpencodeEvent): void {
+  recordEvent(event: HarnessEvent): void {
     if (this.events) appendFileSync(this.events, `${JSON.stringify(event)}\n`);
   }
 

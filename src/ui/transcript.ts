@@ -16,8 +16,8 @@ import {
   readData,
   sessionIdOf,
   toolName,
-  type OpencodeEvent,
-} from '../opencode/events.js';
+  type HarnessEvent,
+} from '../harness/events.js';
 import type { TranscriptEntry } from './types.js';
 
 /** Identifies a text or reasoning part across its start, deltas and end. */
@@ -68,7 +68,7 @@ export class TranscriptBuilder {
     return [...this.entries.values()];
   }
 
-  push(event: OpencodeEvent): TranscriptEntry[] {
+  push(event: HarnessEvent): TranscriptEntry[] {
     const session = sessionIdOf(event);
     const time = typeof event['created'] === 'number' ? { time: event['created'] } : {};
     if (event.type === TURN_STARTED_EVENT) {

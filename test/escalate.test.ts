@@ -7,7 +7,7 @@ import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/
 import { parseEscalation, projectGuidance, runEscalation } from '../src/loop/escalate.js';
 import { buildEscalationPrompt } from '../src/prompt/escalate.js';
 import { agentActionsFor } from '../src/human/request.js';
-import { OpencodeClient } from '../src/opencode/client.js';
+import { opencodeHarness } from './helpers/opencode.js';
 import { ConfigSchema } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 import { TEMPLATES_DIR } from '../src/init/scaffold.js';
@@ -141,7 +141,7 @@ describe('runEscalation', () => {
   async function escalate(root: string, script: (count: number) => ScriptedEvent[]) {
     server = await startFakeServer({ script });
     return runEscalation({
-      client: new OpencodeClient({ baseUrl: server.url }),
+      harness: await opencodeHarness(server.url),
       config: ConfigSchema.parse({ projectRoot: root, escalation: { enabled: true } }),
       logger,
       runId: '20261004-120000',

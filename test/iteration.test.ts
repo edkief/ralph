@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
-import { OpencodeClient } from '../src/opencode/client.js';
+import { opencodeHarness } from './helpers/opencode.js';
 import { FORM_CANCEL_MESSAGE, FORM_EXPIRED_MESSAGE, joinTurns, runIteration, type IterationResult } from '../src/loop/iteration.js';
 import { fileAskRelay, type AskRelay, type FormOutcome } from '../src/loop/asks.js';
 import { listAsks, readAsk, writeAskAnswer } from '../src/human/asks.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { OpencodeEvent } from '../src/opencode/events.js';
+import type { HarnessEvent } from '../src/harness/events.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { Logger } from '../src/report/logger.js';
 
@@ -30,12 +30,9 @@ async function iterate(
   extra: Pick<Parameters<typeof runIteration>[0], 'sessionId' | 'permissions' | 'formMessage' | 'asks' | 'wrapUp' | 'park' | 'hooks' | 'iterationMs'> = {},
 ) {
   server = await startFakeServer(scenario);
-  const client = new OpencodeClient({
-    baseUrl: server.url,
-    ...(server.password ? { password: server.password } : {}),
-  });
+  const harness = await opencodeHarness(server.url, server.password);
   return runIteration({
-    client,
+    harness,
     config: cfg,
     prompt: 'do the thing',
     title: 'test',
@@ -81,9 +78,9 @@ describe('runIteration', () => {
         { type: 'session.execution.succeeded' },
       ],
     });
-    const client = new OpencodeClient({ baseUrl: server.url });
+    const harness = await opencodeHarness(server.url);
     await runIteration({
-      client,
+      harness,
       config: config(),
       prompt: 'p',
       title: 't',
@@ -211,10 +208,10 @@ describe('runIteration', () => {
 
   it('interrupts the session when the turn is stopped from outside, as the server may outlive it', async () => {
     server = await startFakeServer({ script: [{ after: 30_000, type: 'session.execution.succeeded' }] });
-    const client = new OpencodeClient({ baseUrl: server.url });
+    const harness = await opencodeHarness(server.url);
     const stop = new AbortController();
     setTimeout(() => stop.abort(), 300);
-    const result = await runIteration({ client, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
+    const result = await runIteration({ harness, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
 
     expect(result.status).toBe('interrupted');
     expect(server.interrupted).toEqual(['ses_fake_1']);
@@ -227,10 +224,10 @@ describe('runIteration', () => {
         { after: 30_000, type: 'session.execution.succeeded' },
       ],
     });
-    const client = new OpencodeClient({ baseUrl: server.url });
+    const harness = await opencodeHarness(server.url);
     const stop = new AbortController();
     setTimeout(() => stop.abort(), 300);
-    await runIteration({ client, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
+    await runIteration({ harness, config: config(), prompt: 'do the thing', title: 'test', logger, signal: stop.signal });
 
     expect([...server.interrupted].sort()).toEqual(['ses_child', 'ses_fake_1']);
   });
@@ -254,9 +251,9 @@ describe('runIteration', () => {
         { after: 700, type: 'session.execution.succeeded' },
       ],
     });
-    const client = new OpencodeClient({ baseUrl: server.url });
+    const harness = await opencodeHarness(server.url);
     const result = await runIteration({
-      client,
+      harness,
       config: config({ timeouts: { inactivityMs: 1_200, iterationMs: 60_000 } }),
       prompt: 'p',
       title: 't',
@@ -524,7 +521,7 @@ describe('runIteration', () => {
   });
 
   it('continues an existing session instead of opening a new one', async () => {
-    const seen: OpencodeEvent[] = [];
+    const seen: HarnessEvent[] = [];
     const result = await iterate(
       {
         script: [

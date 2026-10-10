@@ -6,7 +6,7 @@ import { restrictWrites } from './permissions.js';
 import { splitDir } from './split.js';
 import { buildAssessPrompt } from '../prompt/assess.js';
 import type { Task } from '../tasks/store.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -76,14 +76,14 @@ export function shouldAssess(config: Config, task: Task): boolean {
  * task: with no estimate the verdict is `unknown`.
  */
 export async function assessTask(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   task: Task;
   signal: AbortSignal;
   hooks?: IterationHooks;
 }): Promise<AssessOutcome> {
-  const { client, config, logger, task, signal } = args;
+  const { harness, config, logger, task, signal } = args;
   const { projectRoot, ralphDir } = config;
   const threshold = thresholdMs(config);
   const thresholdMinutes = Math.max(1, Math.round(threshold / 60_000));
@@ -91,7 +91,7 @@ export async function assessTask(args: {
   const model = config.plan.model ?? config.model;
 
   const result = await runIteration({
-    client,
+    harness,
     // The turn's own budget, with no wrap-up: there is nothing to hand off.
     config: {
       ...config,

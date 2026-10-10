@@ -1,4 +1,4 @@
-import { sleep } from '../opencode/server.js';
+import { sleep } from '../util/sleep.js';
 import { DONE_COMMAND } from './interview.js';
 import { planStopRequested, readPlanReply, RecordingIO, type PlanRecorder } from './record.js';
 

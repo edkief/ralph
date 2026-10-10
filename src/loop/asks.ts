@@ -1,7 +1,7 @@
 import { clearAsk, rejectAskAnswer, waitForAskAnswer, writeAsk, type PermissionDecisionReply } from '../human/asks.js';
 import type { FormAnswer } from '../ui/form-check.js';
 import type { FormField } from '../ui/types.js';
-import type { PermissionRequest } from '../opencode/events.js';
+import type { PermissionRequest } from '../harness/events.js';
 
 /** A form the agent opened and waits on: the question tool's, or an MCP server's request for input. */
 export interface FormRequest {

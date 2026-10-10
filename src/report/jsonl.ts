@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { OpencodeEvent } from '../opencode/events.js';
+import type { HarnessEvent } from '../harness/events.js';
 import type { IterationResult } from '../loop/iteration.js';
 import type { ProgressDelta } from '../loop/progress.js';
 import type { IterationStatus } from '../loop/outcome.js';
@@ -183,7 +183,7 @@ export class RunRecorder {
     appendFileSync(resolve(this.dir, 'escalations.jsonl'), `${JSON.stringify(entry)}\n`);
   }
 
-  recordEvent(event: OpencodeEvent): void {
+  recordEvent(event: HarnessEvent): void {
     if (!this.current) return;
     appendFileSync(this.current, `${JSON.stringify(event)}\n`);
     this.meter.push(event, Date.now());

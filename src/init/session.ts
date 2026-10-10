@@ -5,7 +5,7 @@ import { planState } from './plan.js';
 import { runInterview, type InterviewOutcome } from './interview.js';
 import type { PlanMode, RecordingIO } from './record.js';
 import type { AskRelay } from '../loop/asks.js';
-import type { OpencodeClient } from '../opencode/client.js';
+import type { AgentHarness } from '../harness/types.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -40,7 +40,7 @@ export function preparePlan(projectRoot: string, reload: () => Config, mode: Pla
 
 /** Hold the interview through `io`, keeping each turn's events and the outcome with its record. */
 export async function planWith(args: {
-  client: OpencodeClient;
+  harness: AgentHarness;
   config: Config;
   logger: Logger;
   io: RecordingIO;
@@ -55,7 +55,7 @@ export async function planWith(args: {
   recorder.update({ model: config.plan.model ?? config.model ?? null, maxTurns: config.plan.maxTurns });
   try {
     const outcome = await runInterview({
-      client: args.client,
+      harness: args.harness,
       config,
       logger: args.logger,
       io,
