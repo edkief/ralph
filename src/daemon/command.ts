@@ -115,7 +115,7 @@ export async function runDaemon(args: {
   };
 
   const runPlan = async (request: PlanRequest, interrupt: AbortSignal): Promise<void> => {
-    const recorder = new PlanRecorder(ralphRoot, { id: request.id, mode: request.mode, by: 'daemon' });
+    const recorder = new PlanRecorder(ralphRoot, { id: request.id, mode: request.mode, by: 'daemon', harness: harness.name });
     const stop = new AbortController();
     const signal = AbortSignal.any([interrupt, stop.signal]);
     // The description came with the request: it answers the interview's first question.

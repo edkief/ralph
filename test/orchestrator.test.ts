@@ -1574,6 +1574,8 @@ describe('runLoop', () => {
       'utf8',
     );
     expect(events).toContain('"type":"text.ended"');
+    // Led by the harness that wrote it, and the vocabulary it is in.
+    expect(JSON.parse(events.split('\n')[0]!)).toEqual({ type: 'history.header', harness: 'opencode', vocabulary: 1 });
   });
 
   it('keeps the run state and its log lines beside the history', async () => {

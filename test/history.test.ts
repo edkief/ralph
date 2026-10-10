@@ -4,6 +4,12 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HistoryDecoder, historyHeaderLine, startHistoryFile } from '../src/harness/history.js';
 import { HISTORY_VOCABULARY, type HarnessEvent } from '../src/harness/events.js';
+import { PlanRecorder } from '../src/init/record.js';
+import { usageOfEventsFile } from '../src/metrics/usage.js';
+import type { OpencodeFrame } from '../src/opencode/frames.js';
+import { RunRecorder } from '../src/report/jsonl.js';
+import { TranscriptBuilder } from '../src/ui/transcript.js';
+import { translated } from './helpers/opencode.js';
 
 const lines = (...events: unknown[]) => events.map((event) => JSON.stringify(event));
 const header = (extra: Record<string, unknown> = {}) => ({ type: 'history.header', harness: 'opencode', vocabulary: HISTORY_VOCABULARY, ...extra });
@@ -98,5 +104,63 @@ describe('HistoryDecoder', () => {
 
   it('reads an empty file as no events', () => {
     expect(new HistoryDecoder().decode([])).toEqual([]);
+  });
+});
+
+const temp = () => mkdtempSync(resolve(tmpdir(), 'ralph-history-'));
+const firstLine = (path: string) => readFileSync(path, 'utf8').split('\n')[0];
+
+describe('the files the recorders start', () => {
+  it('lead with the header naming the harness, whatever the turn', () => {
+    const run = new RunRecorder(temp(), '20261004-120000', 'pi');
+    const files = [
+      (run.beginIteration(1), 'iteration-001.events.jsonl'),
+      (run.beginSplit('T-1'), 'split-T-1.events.jsonl'),
+      (run.beginEscalation(2), 'escalation-2.events.jsonl'),
+    ];
+    for (const file of files) expect(firstLine(resolve(run.directory, file))).toBe(historyHeaderLine('pi').trim());
+
+    const plan = new PlanRecorder(temp(), { mode: 'new', by: 'cli', harness: 'pi' });
+    plan.turn(1);
+    expect(firstLine(resolve(plan.dir, 'turn-001.events.jsonl'))).toBe(historyHeaderLine('pi').trim());
+  });
+
+  it('start over, header again, when a turn begins again', () => {
+    const run = new RunRecorder(temp(), '20261004-120000', 'opencode');
+    run.beginSplit('T-1');
+    run.recordEvent({ type: 'activity', session: 's' });
+    run.beginSplit('T-1');
+    expect(readFileSync(resolve(run.directory, 'split-T-1.events.jsonl'), 'utf8')).toBe(historyHeaderLine('opencode'));
+  });
+});
+
+/**
+ * A file the current release writes must show what the same session shows when
+ * it was written as raw frames: the legacy goldens are the reference for both.
+ */
+describe.each(['session-events', 'legacy-extra-events'])('a recorded session: %s', (name) => {
+  const frames = readFileSync(resolve(__dirname, `fixtures/${name}.jsonl`), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as OpencodeFrame);
+  const golden = (suffix: string): unknown => JSON.parse(readFileSync(resolve(__dirname, `fixtures/${name}.${suffix}.golden.json`), 'utf8'));
+
+  function record(): string {
+    const run = new RunRecorder(temp(), '20261004-120000', 'opencode');
+    run.beginIteration(1);
+    for (const event of translated(...frames)) run.recordEvent(event);
+    return resolve(run.directory, 'iteration-001.events.jsonl');
+  }
+
+  it('renders the transcript the raw frames rendered', () => {
+    const builder = new TranscriptBuilder();
+    const decoder = new HistoryDecoder();
+    for (const event of decoder.decode(readFileSync(record(), 'utf8').split('\n').filter(Boolean))) builder.push(event);
+    expect(decoder.fileHeader).toEqual({ type: 'history.header', harness: 'opencode', vocabulary: HISTORY_VOCABULARY });
+    expect(JSON.parse(JSON.stringify(builder.all))).toEqual(golden('transcript'));
+  });
+
+  it('counts the usage the raw frames counted', () => {
+    expect(JSON.parse(JSON.stringify(usageOfEventsFile(record())))).toEqual(golden('usage'));
   });
 });

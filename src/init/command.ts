@@ -69,7 +69,7 @@ export async function runInit(args: {
   const harness = await startHarness(config, { cwd: config.projectRoot, logger });
   const terminal = new TerminalIO(out, process.stdin, () => controller.abort());
   // Recorded under history/plans/, so the web UI shows the interview too.
-  const io = new RecordingIO(terminal, new PlanRecorder(resolve(config.projectRoot, config.ralphDir), { mode: existing ? 'replan' : 'new', by: 'cli' }));
+  const io = new RecordingIO(terminal, new PlanRecorder(resolve(config.projectRoot, config.ralphDir), { mode: existing ? 'replan' : 'new', by: 'cli', harness: harness.name }));
 
   try {
     reporter.banner([

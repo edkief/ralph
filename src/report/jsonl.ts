@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { HarnessEvent } from '../harness/events.js';
+import { startHistoryFile } from '../harness/history.js';
 import type { IterationResult } from '../loop/iteration.js';
 import type { ProgressDelta } from '../loop/progress.js';
 import type { IterationStatus } from '../loop/outcome.js';
@@ -142,7 +143,8 @@ export class RunRecorder {
   /** The usage of the turn in progress, written with its record. */
   private readonly meter = new UsageMeter();
 
-  constructor(historyRoot: string, readonly runId: string) {
+  /** `harness` is the name of the harness whose events the run records, written at the head of each event file. */
+  constructor(historyRoot: string, readonly runId: string, private readonly harness: string) {
     this.dir = resolve(historyRoot, runId);
     mkdirSync(this.dir, { recursive: true });
   }
@@ -153,14 +155,14 @@ export class RunRecorder {
 
   beginIteration(iteration: number): void {
     this.current = resolve(this.dir, `iteration-${String(iteration).padStart(3, '0')}.events.jsonl`);
-    writeFileSync(this.current, '');
+    startHistoryFile(this.current, this.harness);
     this.meter.reset();
   }
 
   /** Events from here on belong to the split turn for `taskId`. */
   beginSplit(taskId: string): void {
     this.current = resolve(this.dir, `split-${taskId}.events.jsonl`);
-    writeFileSync(this.current, '');
+    startHistoryFile(this.current, this.harness);
     this.meter.reset();
   }
 
@@ -173,7 +175,7 @@ export class RunRecorder {
   /** Events from here on belong to escalation turn `n`. */
   beginEscalation(n: number): void {
     this.current = resolve(this.dir, `escalation-${n}.events.jsonl`);
-    writeFileSync(this.current, '');
+    startHistoryFile(this.current, this.harness);
     this.meter.reset();
   }
 

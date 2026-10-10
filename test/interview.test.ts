@@ -354,7 +354,7 @@ describe('runInterview', () => {
 describe('a recorded interview', () => {
   it('keeps the conversation, each turn\'s events and the outcome under history/plans/', async () => {
     const root = project();
-    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'cli' });
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'cli', harness: 'opencode' });
     const io = new RecordingIO(new ScriptedUser(['An app.', '/done']), recorder);
     server = await startFakeServer({
       onPrompt: (count) => (count === 2 ? writePlan(root) : undefined),

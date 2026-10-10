@@ -34,7 +34,7 @@ afterEach(() => {
 
 function session(seed?: string) {
   const ralphRoot = mkdtempSync(resolve(tmpdir(), 'ralph-plan-'));
-  const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'daemon' });
+  const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'daemon', harness: 'opencode' });
   const controller = new AbortController();
   let stopped = 0;
   const io = new FileInterviewIO(recorder, {
@@ -130,7 +130,7 @@ describe('the file-backed interview IO', () => {
 
   it('leaves an interview held in a terminal to the terminal', () => {
     const ralphRoot = mkdtempSync(resolve(tmpdir(), 'ralph-plan-'));
-    const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'cli' });
+    const recorder = new PlanRecorder(ralphRoot, { mode: 'new', by: 'cli', harness: 'opencode' });
     try {
       recorder.asking('you');
       expect(failure(() => writePlanReply(ralphRoot, recorder.id, { seq: 1, text: 'hi' }, 'ui')).message).toMatch(/held in a terminal/);

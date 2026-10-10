@@ -6,6 +6,7 @@ import { readAs, writeAtomic } from '../human/request.js';
 import { newRunId } from '../report/jsonl.js';
 import { DONE_COMMAND, type InterviewIO, type InterviewOutcome } from './interview.js';
 import type { HarnessEvent } from '../harness/events.js';
+import { startHistoryFile } from '../harness/history.js';
 
 /**
  * A planning interview as it goes, under `history/plans/<id>/`, apart from
@@ -235,14 +236,17 @@ export class PlanRecorder {
   readonly dir: string;
   private readonly state: PlanState;
   private events: string | null = null;
+  private readonly harness: string;
   private heartbeat: NodeJS.Timeout | undefined;
   private lastActivity = 0;
   private pendingActivity: NodeJS.Timeout | undefined;
 
   constructor(
     readonly ralphRoot: string,
-    init: { mode: PlanMode; by: 'daemon' | 'cli'; id?: string },
+    /** `harness` is the name of the harness whose events the turns record, written at the head of each event file. */
+    init: { mode: PlanMode; by: 'daemon' | 'cli'; harness: string; id?: string },
   ) {
+    this.harness = init.harness;
     this.id = init.id ?? newPlanId(ralphRoot);
     this.dir = planDir(ralphRoot, this.id);
     mkdirSync(this.dir, { recursive: true });
@@ -285,7 +289,7 @@ export class PlanRecorder {
   /** A turn begins: its events go to a file of their own. */
   turn(n: number): void {
     this.events = resolve(this.dir, `turn-${String(n).padStart(3, '0')}.events.jsonl`);
-    writeFileSync(this.events, '');
+    startHistoryFile(this.events, this.harness);
     this.update({ turn: n, status: 'working', prompt: null, activity: null });
   }
 

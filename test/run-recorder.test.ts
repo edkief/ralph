@@ -11,7 +11,7 @@ const step = (created: number, input: number): HarnessEvent[] => [
 ];
 
 function recorder() {
-  return new RunRecorder(mkdtempSync(resolve(tmpdir(), 'ralph-recorder-')), '20261004-120000');
+  return new RunRecorder(mkdtempSync(resolve(tmpdir(), 'ralph-recorder-')), '20261004-120000', 'opencode');
 }
 
 function lines<T>(path: string): T[] {
