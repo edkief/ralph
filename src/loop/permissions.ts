@@ -5,7 +5,8 @@ import type { PermissionRequest } from '../opencode/events.js';
 export type PermissionReply = 'once' | 'always' | 'reject';
 
 export interface PermissionDecision {
-  reply: PermissionReply;
+  /** `ask`: a person decides, or, with none to ask, it is rejected. */
+  reply: PermissionReply | 'ask';
   /** The pattern that decided it, for the audit log. */
   matched?: string;
   reason: 'deny-rule' | 'allow-rule' | 'fallback' | 'outside-scope';
@@ -34,7 +35,7 @@ export function decidePermission(
   if (allowed) return { reply: 'always', matched: allowed, reason: 'allow-rule' };
 
   return {
-    reply: config.fallback === 'allow' ? 'once' : 'reject',
+    reply: config.fallback === 'allow' ? 'once' : config.fallback === 'ask' ? 'ask' : 'reject',
     reason: 'fallback',
   };
 }

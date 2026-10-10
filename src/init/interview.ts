@@ -3,6 +3,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { runIteration } from '../loop/iteration.js';
+import type { AskRelay } from '../loop/asks.js';
 import { isInside, restrictWrites } from '../loop/permissions.js';
 import { RALPH_DIR_PLACEHOLDER } from '../prompt/build.js';
 import { TaskStore, type Task } from '../tasks/store.js';
@@ -31,6 +32,11 @@ export const DONE_COMMAND = '/done';
 export const PLAN_FORM_MESSAGE =
   'Nobody can answer this form. Never use the question tool: ask your questions in your reply ' +
   'text and end your turn, and the owner will answer them.';
+
+/** Why a form put to the owner is cancelled once nobody answered it in time. */
+export const PLAN_FORM_EXPIRED_MESSAGE =
+  'The owner did not answer this form in time. Ask your questions in your reply text instead ' +
+  'and end your turn.';
 
 const WRITE_NOW =
   'Stop asking questions. Write the plan now, recording anything still open under Assumptions ' +
@@ -80,6 +86,8 @@ export async function runInterview(args: {
   templatesDir?: string;
   /** Each turn's raw opencode events, for its record. */
   onEvent?: (event: OpencodeEvent) => void;
+  /** Puts the agent's forms and asked permissions to the owner; without it, forms are cancelled. */
+  asks?: AskRelay;
 }): Promise<InterviewOutcome> {
   const { client, config, logger, io, signal, replan = false } = args;
   const templatesDir = args.templatesDir ?? TEMPLATES_DIR;
@@ -117,6 +125,7 @@ export async function runInterview(args: {
       ...(sessionId ? { sessionId } : {}),
       permissions,
       formMessage: PLAN_FORM_MESSAGE,
+      ...(args.asks ? { asks: args.asks, formExpiredMessage: PLAN_FORM_EXPIRED_MESSAGE } : {}),
       logger,
       hooks: {
         onText: (text) => {

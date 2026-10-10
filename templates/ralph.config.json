@@ -5,7 +5,8 @@
     "iterationMs": 2700000,
     "inactivityMs": 300000,
     "wrapUpMs": 600000,
-    "confirmMs": 300000
+    "confirmMs": 300000,
+    "askMs": 0
   },
   "retries": {
     "providerRetriesPerIteration": 3,

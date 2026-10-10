@@ -4,6 +4,7 @@ import { formatDuration, runBadge, statusLabel } from './format';
 import { Overview } from './views/Overview';
 import { Plan } from './views/Plan';
 import { pendingTitle } from './views/Pending';
+import { askTitle } from './views/Ask';
 import { Tasks } from './views/Tasks';
 import { Metrics } from './views/Metrics';
 import { Transcript } from './views/Transcript';
@@ -20,10 +21,14 @@ export function App() {
 
   // The planner's question, when the owner answers it here.
   const planAsks = status?.plan?.live === true && status.plan.status === 'asking' && status.plan.by === 'daemon';
+  // Forms and permissions an agent waits on, from a run or from the planner.
+  const runAsk = status?.asks.find((ask) => ask.origin === 'run' && !ask.answered);
+  const planAsk = status?.asks.find((ask) => ask.origin === 'plan' && !ask.answered);
+  const planNeedsYou = planAsks || Boolean(planAsk);
 
   useEffect(() => {
     const run = status?.run;
-    const state = status?.pending?.waiting || planAsks
+    const state = status?.pending?.waiting || planNeedsYou || runAsk
       ? '⏸ needs you'
       : run?.live
         ? `▶ ${run.iteration}/${run.maxIterations ?? '?'}`
@@ -31,7 +36,7 @@ export function App() {
           ? statusLabel(run.status)
           : '';
     document.title = status ? `${status.project} · ${state || 'ralph'}` : 'Ralph';
-  }, [status, planAsks]);
+  }, [status, planNeedsYou, runAsk]);
 
   // The header wraps on narrow screens; views that fill the window need its height.
   const top = useRef<HTMLDivElement>(null);
@@ -59,9 +64,9 @@ export function App() {
                 aria-current={route.tab === tab.id ? 'page' : undefined}
               >
                 {tab.label}
-                {tab.id === 'overview' && status?.pending ? <span className="needs-dot" aria-label="needs you" /> : null}
-                {tab.id === 'plan' && planAsks ? <span className="needs-dot" aria-label="needs you" /> : null}
-                {tab.id === 'plan' && status?.plan?.live && !planAsks ? <span className="live-dot" aria-label="live" /> : null}
+                {tab.id === 'overview' && (status?.pending || runAsk) ? <span className="needs-dot" aria-label="needs you" /> : null}
+                {tab.id === 'plan' && planNeedsYou ? <span className="needs-dot" aria-label="needs you" /> : null}
+                {tab.id === 'plan' && status?.plan?.live && !planNeedsYou ? <span className="live-dot" aria-label="live" /> : null}
                 {tab.id === 'transcript' && status?.run?.live && status.run.status !== 'waiting' ? <span className="live-dot" aria-label="live" /> : null}
               </a>
             ))}
@@ -69,7 +74,15 @@ export function App() {
         </nav>
       </div>
       <main className="main">
-        {status?.pending && route.tab !== 'overview' ? (
+        {runAsk && route.tab !== 'overview' ? (
+          <a className="banner warn needs-you" href={href('overview')}>
+            <strong>Ralph needs you.</strong> {askTitle(runAsk)} →
+          </a>
+        ) : planAsk && route.tab !== 'plan' ? (
+          <a className="banner warn needs-you" href={href('plan')}>
+            <strong>Ralph needs you.</strong> {askTitle(planAsk)} →
+          </a>
+        ) : status?.pending && route.tab !== 'overview' ? (
           <a className="banner warn needs-you" href={href('overview')}>
             <strong>Ralph needs you.</strong> {pendingTitle(status.pending)} →
           </a>

@@ -149,6 +149,11 @@ export class OpencodeClient {
     });
   }
 
+  /** Answer a form, by field key. A 400 says the answer does not fit the form. */
+  async replyForm(sessionID: string, formID: string, answer: Record<string, unknown>): Promise<void> {
+    await this.json('POST', `/api/session/${sessionID}/form/${formID}/reply`, { answer });
+  }
+
   /**
    * Cancel a form waiting on an answer. The asker gets `message` as the
    * reason; without one, the question tool fails the tool call outright.

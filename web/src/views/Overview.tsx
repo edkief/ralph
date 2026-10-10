@@ -4,6 +4,7 @@ import { formatCount, formatDateTime, formatDuration, formatRunId, runBadge, sta
 import { href } from '../route';
 import { TaskRow, activeTaskId } from './TaskRow';
 import { Pending, RunButtons, StopButtons } from './Pending';
+import { Asks } from './Ask';
 
 /** Tasks listed before the one in progress: those just finished, as a rule. */
 const DONE_BEFORE = 3;
@@ -49,6 +50,7 @@ export function Overview({ status }: { status: StatusView }) {
 
   return (
     <div className="stack">
+      <Asks status={status} origin="run" />
       <Pending status={status} />
       {status.planState !== 'written' ? <Unplanned status={status} /> : null}
       <section className="cards">

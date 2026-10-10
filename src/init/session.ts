@@ -4,6 +4,7 @@ import { scaffold } from './scaffold.js';
 import { planState } from './plan.js';
 import { runInterview, type InterviewOutcome } from './interview.js';
 import type { PlanMode, RecordingIO } from './record.js';
+import type { AskRelay } from '../loop/asks.js';
 import type { OpencodeClient } from '../opencode/client.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -46,6 +47,8 @@ export async function planWith(args: {
   signal: AbortSignal;
   replan: boolean;
   templatesDir?: string;
+  /** How the agent's forms and asked permissions reach the owner. */
+  asks?: AskRelay;
 }): Promise<InterviewOutcome> {
   const { config, io } = args;
   const { recorder } = io;
@@ -60,6 +63,7 @@ export async function planWith(args: {
       replan: args.replan,
       ...(args.templatesDir ? { templatesDir: args.templatesDir } : {}),
       onEvent: (event) => recorder.recordEvent(event),
+      ...(args.asks ? { asks: args.asks } : {}),
     });
     recorder.finish(outcome);
     return outcome;

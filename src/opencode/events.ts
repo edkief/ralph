@@ -109,8 +109,13 @@ export const FormCreatedSchema = z.looseObject({
     sessionID: z.string(),
     title: z.string().optional(),
     metadata: z.looseObject({ kind: z.string().optional() }).optional(),
+    fields: z.array(z.looseObject({ key: z.string(), type: z.string() })).optional(),
   }),
 });
+
+/** `form.replied` or `form.cancelled`: a form settled, by whoever answered it. */
+export const FORM_SETTLED_EVENTS = new Set(['form.replied', 'form.cancelled']);
+export const FormSettledSchema = z.looseObject({ id: z.string(), sessionID: z.string().optional() });
 
 /**
  * Not opencode's: Ralph records this in a turn's event file when the turn

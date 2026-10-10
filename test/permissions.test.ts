@@ -39,6 +39,13 @@ describe('decidePermission', () => {
     expect(decidePermission(request('shell', ['ls']), config).reply).toBe('reject');
   });
 
+  it('leaves what no rule matches to a person with an ask fallback, rules first', () => {
+    const config = { ...defaults, fallback: 'ask' as const, allow: ['ls'] };
+    expect(decidePermission(request('shell', ['make deploy']), config)).toEqual({ reply: 'ask', reason: 'fallback' });
+    expect(decidePermission(request('shell', ['ls']), config).reply).toBe('always');
+    expect(decidePermission(request('shell', ['git push']), config).reply).toBe('reject');
+  });
+
   it('matches case-insensitively across action, resources and message', () => {
     const config = { ...defaults, deny: ['SHUTDOWN'] };
     expect(decidePermission(request('shell', ['sudo shutdown now']), config).reply).toBe('reject');

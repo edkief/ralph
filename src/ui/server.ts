@@ -10,6 +10,8 @@ import { costEstimator, energyEstimator } from '../metrics/cost.js';
 import { AnswerInputSchema, requestStop, RespondError, STOP_MESSAGES, STOP_MODES } from '../human/request.js';
 import { respond } from '../human/respond.js';
 import { parkIdle } from '../human/stop.js';
+import { AskAnswerInputSchema, AskError, readAsk, writeAskAnswer } from '../human/asks.js';
+import { checkFormAnswer, cleanAnswer } from './form-check.js';
 import { DaemonRequestError, requestPlan, requestRun } from '../daemon/control.js';
 import { conversationPath, MAX_PLAN_TEXT, PLAN_MODES, PlanRequestError, readConversation, requestPlanStop, writePlanReply } from '../init/record.js';
 import { COMMIT_HASH, gitCommit, gitStatus } from './git.js';
@@ -60,6 +62,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 const ACTION_PATHS = new Set([
   '/api/actions/respond',
+  '/api/actions/ask',
   '/api/actions/stop',
   '/api/actions/run',
   '/api/actions/plan/start',
@@ -344,6 +347,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return sendJson(res, 200, { message: STOP_MESSAGES[parsed.data.mode] });
     }
 
+    if (path === '/api/actions/ask') return askAction(res, body);
+
     const parsed = AnswerInputSchema.safeParse(body);
     if (!parsed.success) throw new RequestError(400, 'The answer needs an id and an action');
     try {
@@ -360,6 +365,33 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       if (cause instanceof RespondError) throw new RequestError(cause.code === 'conflict' ? 409 : 400, cause.message);
       throw cause;
     }
+  };
+
+  /** Answer a form or a permission an agent waits on, or decline the form. */
+  const askAction = (res: ServerResponse, body: unknown): void => {
+    const parsed = AskAnswerInputSchema.safeParse(body);
+    if (!parsed.success) throw new RequestError(400, 'An answer names the ask and gives an answer, a cancel or a decision');
+    const input = parsed.data;
+    const ask = readAsk(project.ralphRoot, input.id);
+    if (!ask || !project.askLive(ask)) throw new RequestError(409, 'That is no longer asked');
+    if ('answer' in input) {
+      if (ask.kind !== 'form' || !ask.form) throw new RequestError(400, 'Only a form takes an answer');
+      const answer = cleanAnswer(ask.form.fields, input.answer);
+      const problems = checkFormAnswer(ask.form.fields, answer);
+      if (problems.length > 0) throw new RequestError(400, problems.join('; '));
+      input.answer = answer;
+    }
+    try {
+      writeAskAnswer(project.ralphRoot, { ...input, by: 'ui', answeredAt: new Date().toISOString() });
+    } catch (cause) {
+      if (cause instanceof AskError) throw new RequestError(cause.code === 'conflict' ? 409 : 400, cause.message);
+      throw cause;
+    }
+    const what = 'decision' in input ? `decision-${input.decision}` : 'cancel' in input ? 'decline' : 'answer';
+    options.logger.info('web UI action', { action: 'ask', ask: input.id, kind: ask.kind, what });
+    return sendJson(res, 200, {
+      message: 'cancel' in input ? 'Declined: the agent carries on without it.' : 'Sent: the agent carries on.',
+    });
   };
 
   /** Have the daemon plan the project, answer the planner, or stop it. */

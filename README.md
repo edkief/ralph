@@ -40,8 +40,8 @@ Then, in a terminal, it starts an interview with the configured opencode agent:
 1. You describe the project in a few sentences.
 2. The agent reads the repository and asks what it still needs to know: goals, scope,
    stack, what done looks like. It asks a few questions at a time and suggests defaults.
-   It asks in its message, not with opencode's question tool: Ralph cancels that tool's
-   form and tells the agent to ask in its reply instead.
+   It asks in its message, or with opencode's question tool, whose form Ralph asks you
+   field by field (type `/skip` to decline it).
 3. It writes `prd/PRD.md`, `tasks.json` and one spec per task in `tasks/`, sized so each
    task fits one loop iteration.
 4. Ralph checks the result: task ids the loop can recognise, a spec with acceptance criteria
@@ -132,13 +132,14 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
 
 - **Plan**: plan the project with the agent, through the [daemon](#daemon-mode): describe it
   (or, once there is a plan, say what should change) and start. The conversation shows as it
-  happens, with the agent's current tool activity; when the agent asks, reply, **Write the
-  plan now** (the terminal's `/done`) or **Stop**. The outcome follows: the tasks written, the
+  happens, with the agent's current tool activity; when the agent asks, reply (or fill in the
+  form it opened), **Write the plan now** (the terminal's `/done`) or **Stop**. The outcome follows: the tasks written, the
   problems left, or why it failed, and any file the agent changed outside `.ralph/`. Review
   `.ralph/` and commit it, as in a terminal. Without a live daemon the tab says how to plan
   instead. An interview `ralph init` holds in a terminal shows here too, to follow
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
-  buttons to answer; buttons to stop the run (to pause it, under a [daemon](#daemon-mode)),
+  buttons to answer, and any [form or permission](#questions-in-the-middle-of-a-turn) an
+  agent waits on mid-turn; buttons to stop the run (to pause it, under a [daemon](#daemon-mode)),
   and to have an idle daemon run a batch; the run's status, then each iteration's outcome,
   duration, tool calls, tokens and changes, with a row for every split turn, assessment or
   [escalation](#the-escalation-agent) and its outcome,
@@ -214,8 +215,8 @@ whether or not a page is open. Open **Notify me** in the header, choose what to 
 and **Turn on**:
 
 - **Ralph needs me**: a request reached a person (after any [escalation agent](#the-escalation-agent)
-  passed it on), or the planner asks a question in an interview held from the web UI. On by
-  default.
+  passed it on), the planner asks a question in an interview held from the web UI, or an
+  agent waits on [a form or a permission](#questions-in-the-middle-of-a-turn). On by default.
 - **A run ends**: it finished, failed, stalled or stopped. A run that ended over a request is
   told once, as the request. On by default.
 - **An iteration ends**, with its outcome, and **a task passes**: off unless you tick them.
@@ -282,6 +283,35 @@ Whatever you write (an answer, a note) is appended to `.ralph/decisions.jsonl` a
 20 entries are shown to the agent at the top of every later prompt, in this run and the next,
 as decided. Ralph commits the file with its other [records](#carrying-on-from-another-machine),
 and an answer given with no run waiting is committed straight away.
+
+#### Questions in the middle of a turn
+
+An agent can also stop mid-turn to ask: opencode's `question` tool and an MCP server's request
+for input open a form, and with `permissions.fallback: "ask"` a permission request no `allow`
+or `deny` rule matches waits for a person too. When a person can answer — the run waits for
+people (`--wait`, `ui.wait`, or `--ui`), or the planner's interview is held from the web UI or
+a terminal — Ralph puts it to them:
+
+- **Web UI.** Each one is a card on the Overview (the Plan tab for the planner's), with a
+  push notification under **Ralph needs me**. A form shows each field as its type asks:
+  choices (with an answer of your own where the form allows one), checkboxes, numbers, yes/no
+  and links to follow, the fields a condition hides appearing as you answer. **Send answer**,
+  or **Decline** with an optional note the agent reads. A permission is **Allow once**,
+  **Always allow** or **Reject**. Only the first answer stands; if opencode turns an answer
+  down, the card says why and takes another.
+- **`ralph init` in a terminal.** The form is asked field by field (options by number,
+  `y`/`n`, comma-separated lists; `/skip` declines it), and a permission as `o`nce, `a`lways or
+  `r`eject.
+
+While it waits the turn's clocks stop: neither `timeouts.iterationMs` nor `inactivityMs` runs.
+`timeouts.askMs` (0, the default, waits for as long as it takes) gives up on one nobody
+answered: the form is cancelled, telling the agent to carry on with a sensible default or
+raise `DECIDE`, and the permission rejected. With nobody to answer (a run that does not wait),
+forms are cancelled at once, as below, and `ask` permissions rejected.
+
+The ask and its answer are files in `.ralph/history/asks/`, so the UI may run in another
+process or container that shares the folder. `ralph respond` does not answer them. The
+[escalation agent](#the-escalation-agent) does not see them either: they go to a person.
 
 #### The escalation agent
 
@@ -492,7 +522,8 @@ See `templates/ralph.config.json` for a complete file.
     "iterationMs": 2700000,        // working time for one turn, then the agent is asked to wrap up
     "inactivityMs": 300000,        // no events for this long means the agent is wedged
     "wrapUpMs": 600000,            // time to hand off after either, on top of iterationMs; 0 = interrupt outright
-    "confirmMs": 300000            // a turn to confirm a task left passing by a cut-short attempt; 0 = reopen it
+    "confirmMs": 300000,           // a turn to confirm a task left passing by a cut-short attempt; 0 = reopen it
+    "askMs": 0                     // how long a form or permission put to a person waits; 0 = as long as it takes
   },
   "retries": {
     "providerRetriesPerIteration": 3,
@@ -519,7 +550,7 @@ See `templates/ralph.config.json` for a complete file.
     "maxPerTask": 2                // requests it may settle per task in a run
   },
   "permissions": {
-    "fallback": "allow",           // unattended runs need to proceed without a human
+    "fallback": "allow",           // allow | reject | ask a person (rejected when none can answer)
     "deny": ["git push", "git remote"]
   },
   "git": {
@@ -639,7 +670,8 @@ Ralph spawns `opencode serve` (or attaches to one with `server.url`), then per i
 1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
 2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.
 3. Opens a session, subscribes to `/api/event`, and sends the prompt.
-4. Consumes the SSE stream, answering permission requests from policy and cancelling forms.
+4. Consumes the SSE stream, answering permission requests from policy, and putting forms (and
+   permissions the policy leaves to a person) to a person, or cancelling them when none can answer.
 5. Snapshots git and the task list before and after, and compares.
 
 Pinning the task matters for smaller self-hosted models: "work on TASK-7" is a far more
@@ -837,19 +869,21 @@ loop, attempting the task again as it is. Delete the folder to have the agent
 propose again. `ralph doctor` warns about a split proposed but not applied, since the loop
 would run the task as it is.
 
-Permission requests are answered from policy, never left waiting for a human. Deny rules beat
+Permission requests are answered from policy; only with `permissions.fallback: "ask"` does one
+wait for [a person](#questions-in-the-middle-of-a-turn). Deny rules beat
 allow rules, so a broad allow list cannot re-enable something explicitly forbidden. If the
 server will not take an answer, the agent would wait on its tool call for good, so Ralph
 interrupts the session and ends the iteration as `failed`, with the server's reason in the log.
 A failure that is not an outright rejection is retried once first; a request that is already
 gone (answered elsewhere) is ignored.
 
-Forms are cancelled. opencode's `question` tool and an MCP server asking for input open a form
-and wait for an answer, which nobody gives during a turn, so Ralph cancels each one, in the
-session or a subagent's, with a message the agent gets as the tool's error. In the loop it says
-to carry on with a sensible default or, for a decision only a person can make, to emit
-`DECIDE`. While planning it says to ask in the reply. The transcript shows a notice for each.
-A cancel the server will not take ends the iteration as `failed`, like a permission reply.
+Forms go to a person when one can answer ([above](#questions-in-the-middle-of-a-turn)), and
+are cancelled otherwise. opencode's `question` tool and an MCP server asking for input open a
+form and wait for an answer; with nobody to give one, Ralph cancels each, in the session or a
+subagent's, with a message the agent gets as the tool's error. In the loop it says to carry on
+with a sensible default or, for a decision only a person can make, to emit `DECIDE`. While
+planning it says to ask in the reply. The transcript shows a notice for each. A cancel or an
+answer the server will not take ends the iteration as `failed`, like a permission reply.
 
 ### Assessing a task before it starts
 

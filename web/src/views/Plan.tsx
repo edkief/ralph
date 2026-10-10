@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { forgetToken, hasToken, postJson, rememberToken, useJson, type LiveState, type PlanLineView, type PlanSummary, type PlanView, type StatusView } from '../api';
 import { formatDateTime } from '../format';
 import { href } from '../route';
+import { Asks } from './Ask';
 
 /** Typed in the terminal, sent by **Write the plan now** here. */
 const DONE_COMMAND = '/done';
@@ -217,6 +218,7 @@ function Session({ status, plan, conversation }: { status: StatusView; plan: Pla
           </li>
         ) : null}
       </ol>
+      {plan.live && here ? <Asks status={status} origin="plan" /> : null}
       <div className="pending-body">
         {plan.live && !here ? (
           <div className="banner">

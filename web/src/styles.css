@@ -762,6 +762,78 @@ button.button {
   min-height: 64px;
 }
 
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ask-input,
+.ask-form textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  max-width: 100%;
+}
+
+.ask-form textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.ask-required {
+  color: var(--warn);
+}
+
+.ask-choices {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.ask-choices legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.ask-choice,
+.ask-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.ask-check {
+  flex-wrap: wrap;
+}
+
+/* Not the boxed text inputs the rest of the app uses. */
+.ask-form input[type='checkbox'],
+.ask-form input[type='radio'],
+.pending-field.inline.ask-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent, currentColor);
+}
+
+.ask-resources {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
 .pending-actions {
   display: flex;
   flex-wrap: wrap;

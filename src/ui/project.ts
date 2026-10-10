@@ -6,6 +6,7 @@ import { readSplitRecords } from '../tasks/splits.js';
 import { planState, TASK_ID } from '../init/plan.js';
 import { listPlanIds, planEnded, planLive, readConversation, readPlanState, type PlanState } from '../init/record.js';
 import { actionsFor, readAnswer, readPending, type PendingState } from '../human/request.js';
+import { askProcessAlive, listAsks, readAskAnswer, type Ask } from '../human/asks.js';
 import { daemonLive, readDaemonState } from '../daemon/control.js';
 import { LineTailer, parseJsonLines } from './tail.js';
 import { readJournalTranscript } from '../report/journal.js';
@@ -16,6 +17,7 @@ import { aggregateMetrics, type TaskInput, type TurnInput } from '../metrics/agg
 import { UNKNOWN_MODEL, usageOfEventsFile, type TurnUsage } from '../metrics/usage.js';
 import type { CostEstimator, EnergyEstimator } from '../metrics/cost.js';
 import type {
+  AskView,
   DaemonView,
   FileContent,
   FileEntry,
@@ -64,8 +66,8 @@ const STALE_MS = 15 * 60_000;
 const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
-/** Where planning sessions are kept in the history, as `history/plans/<id>/`. */
-const PLANS_DIR = 'plans';
+/** Folders beside the runs in the history: planning sessions (`plans/<id>/`) and what agents ask (`asks/`). */
+const NOT_RUNS = new Set(['plans', 'asks']);
 /** A run id as `newRunId` makes it: the start in the local time of the machine that ran it. */
 const RUN_ID_TIME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
 const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
@@ -110,6 +112,7 @@ export class RalphProject {
       tasks: this.tasks(),
       run: latest ? this.run(latest) : null,
       pending: this.pendingView(),
+      asks: this.asks(),
       daemon: this.daemon(),
       plan: this.currentPlan(),
       planState: planState(this.projectRoot, this.ralphDir),
@@ -181,6 +184,49 @@ export class RalphProject {
     };
   }
 
+  /** What agents wait on a person for, oldest first: only asks whose process still waits. */
+  asks(): AskView[] {
+    return listAsks(this.ralphRoot).flatMap((ask) => {
+      if (!this.askLive(ask)) return [];
+      const view: AskView = {
+        id: ask.id,
+        kind: ask.kind,
+        origin: ask.origin,
+        ...(ask.runId ? { runId: ask.runId } : {}),
+        ...(ask.planId ? { planId: ask.planId } : {}),
+        taskId: ask.taskId,
+        ...(ask.form ? { form: ask.form } : {}),
+        ...(ask.permission
+          ? {
+              permission: {
+                action: ask.permission.action,
+                resources: ask.permission.resources,
+                ...(ask.permission.message ? { message: ask.permission.message } : {}),
+              },
+            }
+          : {}),
+        ...(ask.error ? { error: ask.error } : {}),
+        answered: readAskAnswer(this.ralphRoot, ask.id) !== undefined,
+        createdAt: ask.createdAt,
+        ...(ask.expiresAt ? { expiresAt: ask.expiresAt } : {}),
+      };
+      return [view];
+    });
+  }
+
+  /** An ask still waits on someone: its process is there, or, on another machine, its run or interview is live. */
+  askLive(ask: Ask): boolean {
+    const alive = askProcessAlive(ask);
+    if (alive !== undefined) return alive;
+    try {
+      if (ask.origin === 'run' && ask.runId) return this.run(ask.runId).live;
+      const state = ask.planId ? readPlanState(this.ralphRoot, ask.planId) : undefined;
+      return state ? planLive(state) : false;
+    } catch {
+      return false;
+    }
+  }
+
   private pendingView(): PendingView | null {
     const state = this.pending();
     if (!state) return null;
@@ -241,8 +287,8 @@ export class RalphProject {
     for (const root of [this.historyRoot, this.journalRoot]) {
       if (!existsSync(root)) continue;
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        // Planning sessions keep a folder of their own beside the runs.
-        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && entry.name === PLANS_DIR)) ids.add(entry.name);
+        // Planning sessions and asks keep folders of their own beside the runs.
+        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && NOT_RUNS.has(entry.name))) ids.add(entry.name);
       }
     }
     // By when they started, not by id: an id is in the local time of the

@@ -7,6 +7,7 @@ import { scaffold, type ScaffoldResult } from './scaffold.js';
 import { planState } from './plan.js';
 import { DONE_COMMAND, type InterviewOutcome } from './interview.js';
 import { TerminalIO } from './terminal.js';
+import { terminalAskRelay } from './terminal-asks.js';
 import { PlanRecorder, RecordingIO } from './record.js';
 import { planningProblem, planWith } from './session.js';
 import { ownerOf, runInProgress } from '../daemon/command.js';
@@ -83,6 +84,7 @@ export async function runInit(args: {
       io,
       signal: controller.signal,
       replan: existing,
+      asks: terminalAskRelay(io),
     });
     // Leave raw mode before printing the summary.
     terminal.close();
