@@ -7,15 +7,8 @@ import { readProposal, splitDir } from '../loop/split.js';
 import { changedFiles, isRepository } from '../loop/records.js';
 import type { OpencodeClient, OpenApiSpec } from './client.js';
 import type { Config } from '../config/schema.js';
+import type { CheckResult } from '../harness/types.js';
 import { TaskStore } from '../tasks/store.js';
-
-export interface CheckResult {
-  name: string;
-  ok: boolean;
-  detail: string;
-  /** Warnings do not stop the run. */
-  fatal: boolean;
-}
 
 const run = promisify(execFile);
 
@@ -67,24 +60,33 @@ export async function preflight(config: Config, client: OpencodeClient): Promise
   const artifacts = artifactsCheck(config);
   if (artifacts) results.push(artifacts);
 
+  results.push(...(await harnessChecks(client, config)));
+
+  return results;
+}
+
+/**
+ * The checks on the live opencode server: it answers, speaks the API
+ * operations the loop calls, has a model, and has registered its skills.
+ */
+export async function harnessChecks(client: OpencodeClient, config: Config): Promise<CheckResult[]> {
+  let location;
   try {
-    const location = await client.health();
-    results.push({
+    location = await client.health();
+  } catch (cause) {
+    return [{ name: 'server', ok: false, detail: (cause as Error).message, fatal: true }];
+  }
+  return [
+    {
       name: 'server',
       ok: true,
       detail: `ready at ${client.url} (${location.directory ?? 'unknown directory'})`,
       fatal: true,
-    });
-  } catch (cause) {
-    results.push({ name: 'server', ok: false, detail: (cause as Error).message, fatal: true });
-    return results;
-  }
-
-  results.push(await operationsCheck(client));
-  results.push(await modelCheck(client, config));
-  results.push(await skillsCheck(client));
-
-  return results;
+    },
+    await operationsCheck(client),
+    await modelCheck(client, config),
+    await skillsCheck(client),
+  ];
 }
 
 /**

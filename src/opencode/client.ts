@@ -1,15 +1,6 @@
 import { SseParser } from './sse.js';
 import type { HarnessEvent } from '../harness/events.js';
-
-export class OpencodeApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly body: string,
-  ) {
-    super(message);
-  }
-}
+import { HarnessApiError } from '../harness/types.js';
 
 /** The parts of the server's live OpenAPI document that preflight reads. */
 export interface OpenApiSpec {
@@ -105,7 +96,7 @@ export class OpencodeClient {
       title,
     });
     const id = body.data?.id ?? body.id;
-    if (!id) throw new OpencodeApiError('Session create returned no id', 200, JSON.stringify(body));
+    if (!id) throw new HarnessApiError('Session create returned no id', 200, JSON.stringify(body));
     return id;
   }
 
@@ -166,10 +157,8 @@ export class OpencodeClient {
   /**
    * Subscribe to the server event stream.
    *
-   * Connecting is awaited here rather than inside the generator: an async
-   * generator does no work until its first `next()`, which would open the
-   * subscription only after the prompt had already been sent and let early
-   * events slip through the gap.
+   * Connecting is awaited here rather than inside the generator, so the
+   * subscription is live when this resolves: see `AgentHarness.connectEvents`.
    */
   async connectEvents(signal: AbortSignal): Promise<AsyncGenerator<HarnessEvent>> {
     const response = await fetch(`${this.baseUrl}/api/event`, {
@@ -177,7 +166,7 @@ export class OpencodeClient {
       signal,
     });
     if (!response.ok || !response.body) {
-      throw new OpencodeApiError(
+      throw new HarnessApiError(
         `Event stream failed: ${response.status}`,
         response.status,
         await safeText(response),
@@ -202,7 +191,7 @@ export class OpencodeClient {
 
     const response = await fetch(`${this.baseUrl}${path}`, init);
     if (!response.ok) {
-      throw new OpencodeApiError(
+      throw new HarnessApiError(
         `${method} ${path} failed: ${response.status}`,
         response.status,
         await safeText(response),

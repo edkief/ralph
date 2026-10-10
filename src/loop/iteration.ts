@@ -1,4 +1,5 @@
-import { OpencodeApiError, type OpencodeClient } from '../opencode/client.js';
+import { HarnessApiError } from '../harness/types.js';
+import type { OpencodeClient } from '../opencode/client.js';
 import {
   EXECUTION_DONE_EVENTS,
   ExecutionEndedSchema,
@@ -711,7 +712,7 @@ async function deliverPermission(
       await client.replyPermission(request.sessionID, request.id, reply);
       return undefined;
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       // Already answered, by a person or an earlier attempt: nothing is waiting.
       if (status === 404) {
         logger.debug('permission request already gone', { id: request.id });
@@ -721,7 +722,7 @@ async function deliverPermission(
       logger.warn('permission reply failed', {
         error: (cause as Error).message,
         // The server says which field it rejected; without it a 400 is opaque.
-        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+        ...(cause instanceof HarnessApiError && cause.body ? { body: cause.body } : {}),
       });
       if (rejected || attempt >= REPLY_ATTEMPTS) {
         return describeReplyFailure(`Permission reply for ${request.action}`, cause);
@@ -758,7 +759,7 @@ async function deliverCancel(
       await client.cancelForm(form.sessionID, form.id, message);
       return undefined;
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       // Gone or already settled, by a person or an earlier attempt: nothing is waiting.
       if (status === 404 || status === 409) {
         logger.debug('form already settled', { id: form.id });
@@ -767,7 +768,7 @@ async function deliverCancel(
       const rejected = status !== undefined && status >= 400 && status < 500;
       logger.warn('form cancel failed', {
         error: (cause as Error).message,
-        ...(cause instanceof OpencodeApiError && cause.body ? { body: cause.body } : {}),
+        ...(cause instanceof HarnessApiError && cause.body ? { body: cause.body } : {}),
       });
       if (rejected || attempt >= REPLY_ATTEMPTS) {
         return describeReplyFailure(`Cancel of a ${kind} form`, cause);
@@ -799,7 +800,7 @@ async function deliverForm(
       logger.info('form answered by a person', { form: form.title });
       return { status: 'delivered' };
     } catch (cause) {
-      const status = cause instanceof OpencodeApiError ? cause.status : undefined;
+      const status = cause instanceof HarnessApiError ? cause.status : undefined;
       if (status === 404 || status === 409) {
         logger.debug('form already settled', { id: form.id });
         return { status: 'settled' };
@@ -819,7 +820,7 @@ async function deliverForm(
 
 /** `what` names the reply, e.g. `Permission reply for shell`. */
 function describeReplyFailure(what: string, cause: unknown): string {
-  if (!(cause instanceof OpencodeApiError)) {
+  if (!(cause instanceof HarnessApiError)) {
     return `${what} could not be delivered: ${(cause as Error).message}`;
   }
   let detail = cause.body;
