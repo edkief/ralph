@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
 import { OpencodeClient } from '../src/opencode/client.js';
@@ -12,6 +12,7 @@ import { loadConfig } from '../src/config/load.js';
 import { Logger } from '../src/report/logger.js';
 import { respond } from '../src/human/respond.js';
 import { readPending, requestStop, type AnswerInput } from '../src/human/request.js';
+import { listAsks, writeAskAnswer } from '../src/human/asks.js';
 
 const sink = { write: () => true } as NodeJS.WriteStream;
 const logger = new Logger({ level: 'error', stream: sink });
@@ -1403,6 +1404,46 @@ describe('runLoop', () => {
       ]);
       expect(readPending(resolve(root, '.ralph'))).toBeUndefined();
       expect(JSON.parse(readFileSync(resolve(result.historyDir, 'state.json'), 'utf8'))).toMatchObject({ status: 'complete', pending: null });
+    });
+
+    it("puts the agent's form to a person, and delivers the answer", async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      const ralphRoot = resolve(root, '.ralph');
+      const running = waitingLoop(root, config(root, { maxIterations: 1 }), {
+        script: [
+          {
+            type: 'form.created',
+            raw: true,
+            data: { form: { id: 'frm_1', sessionID: 'ses_fake_1', title: 'Questions', fields: [{ key: 'db', type: 'string' }] } },
+          },
+        ],
+        onFormSettled: () => {
+          markPassing(root, 'TASK-1');
+          for (const event of say('done')) server!.emit(event);
+        },
+      });
+      let ask: ReturnType<typeof listAsks>[number] | undefined;
+      while (!(ask = listAsks(ralphRoot)[0])) await new Promise((done) => setTimeout(done, 5));
+      writeAskAnswer(ralphRoot, { id: ask.id, answer: { db: 'Postgres' }, by: 'ui', answeredAt: new Date().toISOString() });
+      const result = await running;
+
+      expect(ask).toMatchObject({ kind: 'form', origin: 'run', runId: basename(result.historyDir), taskId: 'TASK-1' });
+      expect(server?.formReplies).toEqual([{ sessionID: 'ses_fake_1', formID: 'frm_1', answer: { db: 'Postgres' } }]);
+      expect(result.status).toBe('complete');
+      expect(listAsks(ralphRoot)).toEqual([]);
+    });
+
+    it('cancels the form when the run does not wait for people', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+      await loop(root, config(root, { maxIterations: 1 }), {
+        script: [
+          { type: 'form.created', raw: true, data: { form: { id: 'frm_1', sessionID: 'ses_fake_1', title: 'Q', fields: [] } } },
+          ...say('done'),
+        ],
+      });
+
+      expect(server?.formCancels.map((cancel) => cancel.formID)).toEqual(['frm_1']);
+      expect(listAsks(resolve(root, '.ralph'))).toEqual([]);
     });
 
     it('ends as it would have when told to stop', async () => {

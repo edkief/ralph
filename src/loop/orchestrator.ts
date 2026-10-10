@@ -29,6 +29,7 @@ import {
 import { sleep } from '../opencode/server.js';
 import { RunRecorder, newRunId, type IterationRecord, type RunState, type SplitRecord } from '../report/jsonl.js';
 import { truncate } from '../report/console.js';
+import { fileAskRelay, type AskRelay } from './asks.js';
 import type { ConsoleReporter } from '../report/console.js';
 import type { OpencodeClient } from '../opencode/client.js';
 import type { Config } from '../config/schema.js';
@@ -197,6 +198,18 @@ async function loop(
   const runId = recorder.runId;
   const ralphRoot = resolve(config.projectRoot, config.ralphDir);
   const wait = config.ui.wait ?? config.ui.enabled;
+  // The task the coding agent is at, for what it asks a person mid-turn.
+  let taskAtWork: string | null = null;
+  // With a person to answer, forms and asked permissions go to them; without, forms are cancelled.
+  const asks = wait
+    ? fileAskRelay({
+        ralphRoot,
+        origin: { run: runId },
+        taskId: () => taskAtWork,
+        askMs: config.timeouts.askMs,
+        ...(args.pollMs ? { pollMs: args.pollMs } : {}),
+      })
+    : undefined;
 
   // What the coding agent last wrote, and on which task, for the escalation agent.
   let lastAgentText: { taskId: string; text: string } | undefined;
@@ -460,8 +473,9 @@ async function loop(
 
     const before = await snapshotRepo(config.projectRoot, tasks, notProgress);
 
+    taskAtWork = next.id;
     const attempt = await attemptIteration({
-      args: { client, config, logger, reporter, signal, stop, park },
+      args: { client, config, logger, reporter, signal, stop, park, ...(asks ? { asks } : {}) },
       recorder,
       iteration,
       // Built per attempt, so a retry sees the handoff the failed one left.
@@ -776,6 +790,8 @@ async function attemptIteration(context: {
     signal: AbortSignal;
     stop: AbortSignal;
     park: AbortSignal;
+    /** Who answers the agent's forms and asked permissions, when a person can. */
+    asks?: AskRelay;
   };
   recorder: RunRecorder;
   iteration: number;
@@ -788,7 +804,7 @@ async function attemptIteration(context: {
   /** Whether the task is marked passing, read afresh. */
   taskPasses: () => boolean;
 }): Promise<{ result: IterationResult; cutShort: StallCause[]; handoff?: 'agent' | 'fallback' }> {
-  const { client, config, logger, reporter, signal, stop, park } = context.args;
+  const { client, config, logger, reporter, signal, stop, park, asks } = context.args;
   const handoffShown = display(config, context.handoffFile);
   let attempt = 0;
   const cutShort: StallCause[] = [];
@@ -805,6 +821,7 @@ async function attemptIteration(context: {
       prompt,
       title: `ralph ${context.iteration} · ${context.taskId}`,
       ...(resume ?? {}),
+      ...(asks ? { asks } : {}),
       ...(config.timeouts.wrapUpMs > 0
         ? {
             wrapUp: {
