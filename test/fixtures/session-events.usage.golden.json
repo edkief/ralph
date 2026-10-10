@@ -1,0 +1,12 @@
+{
+  "opencode/muse-spark-1.3-contributor-free": {
+    "steps": 2,
+    "input": 10411,
+    "output": 90,
+    "reasoning": 45,
+    "cacheRead": 10225,
+    "cacheWrite": 0,
+    "cost": 0,
+    "inferenceMs": 152
+  }
+}

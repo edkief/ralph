@@ -1,0 +1,61 @@
+{"id": "evt_000", "type": "server.connected", "created": 1789000001010, "data": {}}
+{"id": "evt_001", "type": "ralph.turn.started", "created": 1789000001020, "data": {"continued": false, "sessionID": "ses_a"}}
+{"id": "evt_002", "type": "session.created", "created": 1789000001030, "data": {"title": "legacy", "sessionID": "ses_a"}}
+{"id": "evt_003", "type": "mcp.status.changed", "created": 1789000001040, "data": {"server": "x"}}
+{"id": "evt_004", "type": "session.inbox.enqueued", "created": 1789000001050, "data": {"inboxID": "i1", "item": {"type": "user", "payload": {"text": "Fix the failing test"}, "delivery": "steer"}, "sessionID": "ses_a"}}
+{"id": "evt_005", "type": "session.execution.started", "created": 1789000001060, "data": {"sessionID": "ses_a"}}
+{"id": "evt_006", "type": "session.step.started", "created": 1789000001070, "data": {"assistantMessageID": "msg_1", "model": {"id": "qwen3", "providerID": "ollama"}, "sessionID": "ses_a"}}
+{"id": "evt_007", "type": "session.reasoning.started", "created": 1789000001080, "data": {"assistantMessageID": "msg_1", "ordinal": 0, "sessionID": "ses_a"}}
+{"id": "evt_008", "type": "session.reasoning.delta", "created": 1789000001090, "data": {"assistantMessageID": "msg_1", "ordinal": 0, "delta": "Thinking ", "sessionID": "ses_a"}}
+{"id": "evt_009", "type": "session.reasoning.delta", "created": 1789000001100, "data": {"assistantMessageID": "msg_1", "ordinal": 0, "delta": "hard", "sessionID": "ses_a"}}
+{"id": "evt_010", "type": "session.reasoning.ended", "created": 1789000001110, "data": {"assistantMessageID": "msg_1", "ordinal": 0, "text": "Thinking hard", "sessionID": "ses_a"}}
+{"id": "evt_011", "type": "session.text.started", "created": 1789000001120, "data": {"assistantMessageID": "msg_1", "ordinal": 1, "sessionID": "ses_a"}}
+{"id": "evt_012", "type": "session.text.delta", "created": 1789000001130, "data": {"assistantMessageID": "msg_1", "ordinal": 1, "delta": "Let me ", "sessionID": "ses_a"}}
+{"id": "evt_013", "type": "session.text.delta", "created": 1789000001140, "data": {"assistantMessageID": "msg_1", "ordinal": 1, "delta": "look", "sessionID": "ses_a"}}
+{"id": "evt_014", "type": "session.text.ended", "created": 1789000001150, "data": {"assistantMessageID": "msg_1", "ordinal": 1, "text": "Let me look", "sessionID": "ses_a"}}
+{"id": "evt_015", "type": "session.tool.input.started", "created": 1789000001160, "data": {"id": "c1", "name": "read", "sessionID": "ses_a"}}
+{"id": "evt_016", "type": "session.tool.input.ended", "created": 1789000001170, "data": {"id": "c1", "text": "{\"filePath\":\"a.ts\"}", "sessionID": "ses_a"}}
+{"id": "evt_017", "type": "session.tool.called", "created": 1789000001180, "data": {"id": "c1", "input": {"filePath": "a.ts"}, "sessionID": "ses_a"}}
+{"id": "evt_018", "type": "session.tool.progress", "created": 1789000001190, "data": {"id": "c1", "metadata": {}, "sessionID": "ses_a"}}
+{"id": "evt_019", "type": "session.tool.success", "created": 1789000001200, "data": {"id": "c1", "content": [{"type": "text", "text": "file body"}], "metadata": {"status": "completed"}, "sessionID": "ses_a"}}
+{"id": "evt_020", "type": "session.tool.input.started", "created": 1789000001210, "data": {"id": "c2", "name": "bash", "sessionID": "ses_a"}}
+{"id": "evt_021", "type": "session.tool.called", "created": 1789000001220, "data": {"id": "c2", "input": {"command": "npm test", "description": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}, "sessionID": "ses_a"}}
+{"id": "evt_022", "type": "shell.created", "created": 1789000001230, "data": {"info": {"id": "sh1", "command": "npm test"}}}
+{"id": "evt_023", "type": "session.tool.success", "created": 1789000001240, "data": {"id": "c2", "content": [{"type": "text", "text": "1 failed"}, {"type": "text", "text": "Command exited with code 1."}], "metadata": {"status": "completed", "exit": 1}, "sessionID": "ses_a"}}
+{"id": "evt_024", "type": "session.tool.input.started", "created": 1789000001250, "data": {"id": "c3", "name": "edit", "sessionID": "ses_a"}}
+{"id": "evt_025", "type": "session.tool.called", "created": 1789000001260, "data": {"id": "c3", "input": {"filePath": "a.ts", "oldString": "a", "newString": "b"}, "sessionID": "ses_a"}}
+{"id": "evt_026", "type": "session.tool.error", "created": 1789000001270, "data": {"id": "c3", "content": [{"type": "text", "text": "no match"}], "sessionID": "ses_a"}}
+{"id": "evt_027", "type": "session.step.streamed", "created": 1789000001280, "data": {"assistantMessageID": "msg_1", "sessionID": "ses_a"}}
+{"id": "evt_028", "type": "session.step.ended", "created": 1789000001290, "data": {"assistantMessageID": "msg_1", "finish": "tool-calls", "cost": 0.002, "tokens": {"input": 500, "output": 40, "reasoning": 10, "cache": {"read": 300, "write": 20}}, "files": ["a.ts", "b.ts"], "sessionID": "ses_a"}}
+{"id": "evt_029", "type": "session.usage.updated", "created": 1789000001300, "data": {"cost": 0.002, "tokens": {"input": 500, "output": 40}, "sessionID": "ses_a"}}
+{"id": "evt_030", "type": "session.created", "created": 1789000001310, "data": {"parentID": "ses_a", "title": "sub", "sessionID": "ses_sub"}}
+{"id": "evt_031", "type": "session.step.started", "created": 1789000001320, "data": {"assistantMessageID": "msg_sub", "model": {"id": "small", "providerID": "ollama"}, "sessionID": "ses_sub"}}
+{"id": "evt_032", "type": "session.text.ended", "created": 1789000001330, "data": {"assistantMessageID": "msg_sub", "ordinal": 0, "text": "sub says hi", "sessionID": "ses_sub"}}
+{"id": "evt_033", "type": "session.tool.input.started", "created": 1789000001340, "data": {"id": "s1", "name": "grep", "sessionID": "ses_sub"}}
+{"id": "evt_034", "type": "session.tool.called", "created": 1789000001350, "data": {"id": "s1", "input": {"pattern": "foo"}, "sessionID": "ses_sub"}}
+{"id": "evt_035", "type": "session.tool.success", "created": 1789000001360, "data": {"id": "s1", "content": [{"text": "hit"}], "metadata": {"exit": 0}, "sessionID": "ses_sub"}}
+{"id": "evt_036", "type": "session.step.streamed", "created": 1789000001370, "data": {"assistantMessageID": "msg_sub", "sessionID": "ses_sub"}}
+{"id": "evt_037", "type": "session.step.ended", "created": 1789000001380, "data": {"assistantMessageID": "msg_sub", "finish": "stop", "cost": 0, "tokens": {"input": 50, "output": 5, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "sessionID": "ses_sub"}}
+{"id": "evt_038", "type": "session.retry.scheduled", "created": 1789000001390, "data": {"attempt": 1, "error": {"type": "provider.rate-limit", "message": "slow down", "status": 429}, "sessionID": "ses_sub"}}
+{"id": "evt_039", "type": "session.execution.succeeded", "created": 1789000001400, "data": {"sessionID": "ses_sub"}}
+{"id": "evt_040", "type": "session.permission.requested", "created": 1789000001410, "data": {"id": "per_1", "action": "edit", "resources": ["src/a.ts"], "message": "May I?", "sessionID": "ses_a"}}
+{"id": "evt_041", "type": "permission.replied", "created": 1789000001420, "data": {"id": "per_1", "reply": "once", "sessionID": "ses_a"}}
+{"id": "evt_042", "type": "form.created", "created": 1789000001430, "data": {"form": {"id": "frm_1", "sessionID": "ses_a", "title": "Pick one", "metadata": {"kind": "question"}, "fields": [{"key": "x", "type": "text"}]}}}
+{"id": "evt_043", "type": "form.replied", "created": 1789000001440, "data": {"id": "frm_1", "sessionID": "ses_a"}}
+{"id": "evt_044", "type": "session.compaction.started", "created": 1789000001450, "data": {"reason": "auto", "sessionID": "ses_a"}}
+{"id": "evt_045", "type": "session.compaction.delta", "created": 1789000001460, "data": {"delta": "sum", "sessionID": "ses_a"}}
+{"id": "evt_046", "type": "session.compaction.ended", "created": 1789000001470, "data": {"reason": "auto", "text": "summary", "recent": "", "sessionID": "ses_a"}}
+{"id": "evt_047", "type": "session.step.started", "created": 1789000001480, "data": {"assistantMessageID": "msg_2", "model": {"id": "qwen3", "providerID": "ollama"}, "sessionID": "ses_a"}}
+{"id": "evt_048", "type": "session.retry.scheduled", "created": 1789000001490, "data": {"attempt": 2, "error": {"type": "provider.unavailable"}, "sessionID": "ses_a"}}
+{"id": "evt_049", "type": "session.step.started", "created": 1789000001500, "data": {"assistantMessageID": "msg_2", "model": {"id": "qwen3", "providerID": "ollama"}, "sessionID": "ses_a"}}
+{"id": "evt_050", "type": "session.step.failed", "created": 1789000001510, "data": {"error": {"type": "x", "message": "prompt is too long"}, "sessionID": "ses_a"}}
+{"id": "evt_051", "type": "session.step.ended", "created": 1789000001520, "data": {"finish": "stop", "tokens": {"input": 10, "output": 1}, "sessionID": "ses_a"}}
+{"id": "evt_052", "type": "session.weird.frame", "created": 1789000001530, "data": {}}
+{"id": "evt_053", "type": "ralph.turn.started", "created": 1789000001540, "data": {"continued": false, "sessionID": "ses_b"}}
+{"id": "evt_054", "type": "session.step.started", "created": 1789000001550, "data": {"assistantMessageID": "msg_b", "model": {"id": "qwen3", "providerID": "ollama"}, "sessionID": "ses_b"}}
+{"id": "evt_055", "type": "session.text.delta", "created": 1789000001560, "data": {"delta": "no ids here", "sessionID": "ses_b"}}
+{"id": "evt_056", "type": "session.text.ended", "created": 1789000001570, "data": {"text": "no ids here, ended", "sessionID": "ses_b"}}
+{"id": "evt_057", "type": "session.step.ended", "created": 1789000001580, "data": {"finish": "stop", "cost": 0.5, "tokens": {"input": 7, "output": 3, "reasoning": 2, "cache": {"read": 1, "write": 1}}, "sessionID": "ses_b"}}
+{"id": "evt_058", "type": "session.execution.failed", "created": 1789000001590, "data": {"error": {"name": "APIError", "data": {"message": "context window exceeds limit"}}, "sessionID": "ses_a"}}
+{"id": "evt_059", "type": "session.execution.aborted", "created": 1789000001600, "data": {"sessionID": "ses_b"}}
+{"id": "evt_060", "type": "session.execution.succeeded", "created": 1789000001610, "data": {"sessionID": "ses_b"}}

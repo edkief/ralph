@@ -1,0 +1,67 @@
+[
+  {
+    "time": 1789723242026,
+    "id": "prompt:1",
+    "kind": "prompt",
+    "text": "Run the shell command 'echo capture-ok', then reply with exactly: <promise>TASK-99:DONE</promise>"
+  },
+  {
+    "time": 1789723242966,
+    "id": "notice:2",
+    "kind": "notice",
+    "level": "warn",
+    "text": "provider retry 2: Error from provider (Console): Upstream request failed: [rate_limit_exceeded] Rate limit exceeded. Please retry after a brief wait."
+  },
+  {
+    "time": 1789723246793,
+    "id": "text:ses_f4c2e92e8ffePw5Gsj1phgs0z1:msg_0b3d16e44001i06S99X1RAlX1o:0",
+    "kind": "text",
+    "text": "Executing shell command, then final marker.",
+    "done": true
+  },
+  {
+    "time": 1789723246822,
+    "id": "tool:call_01a0b3d17e8d73d2b035db69f9439826",
+    "kind": "tool",
+    "name": "shell",
+    "status": "success",
+    "input": {
+      "command": "echo capture-ok"
+    },
+    "output": "capture-ok\n\nCommand exited with code 0.",
+    "exit": 0
+  },
+  {
+    "time": 1789723246841,
+    "id": "step:3",
+    "kind": "step",
+    "tokens": {
+      "input": 10253,
+      "output": 69,
+      "reasoning": 29,
+      "cacheRead": 0
+    },
+    "cost": 0,
+    "finish": "tool-calls"
+  },
+  {
+    "time": 1789723248366,
+    "id": "text:ses_f4c2e92e8ffePw5Gsj1phgs0z1:msg_0b3d180ff001XS2q9DKnumlhjj:0",
+    "kind": "text",
+    "text": "<promise>TASK-99:DONE</promise>",
+    "done": true
+  },
+  {
+    "time": 1789723248505,
+    "id": "step:4",
+    "kind": "step",
+    "tokens": {
+      "input": 158,
+      "output": 21,
+      "reasoning": 16,
+      "cacheRead": 10225
+    },
+    "cost": 0,
+    "finish": "stop"
+  }
+]
