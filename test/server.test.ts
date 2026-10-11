@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { guardScript, startServer, type ServerHandle } from '../src/opencode/server.js';
+import { startServer, type ServerHandle } from '../src/opencode/server.js';
+import { guardScript } from '../src/util/process-guard.js';
 import { Logger } from '../src/report/logger.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WriteStream });

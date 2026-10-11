@@ -1,7 +1,7 @@
-import { ConfigError } from '../config/load.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 import { startOpencode } from '../opencode/index.js';
+import { startPi } from '../pi/index.js';
 import type { AgentHarness } from './types.js';
 
 /** A harness that was selected but did not come up; the message names it. Exit code 5. */
@@ -27,9 +27,10 @@ export async function startHarness(
         throw new HarnessStartError('opencode', cause);
       }
     case 'pi':
-      // Selectable in the config before its adapter exists, so say so rather than crash.
-      throw new ConfigError(
-        'The pi harness is not yet available in this version of Ralph. Set "harness" to "opencode" (or drop it, or RALPH_HARNESS / --harness).',
-      );
+      try {
+        return await startPi(config, options);
+      } catch (cause) {
+        throw new HarnessStartError('pi', cause);
+      }
   }
 }

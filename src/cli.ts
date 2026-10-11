@@ -20,7 +20,7 @@ import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
 import type { AgentHarness } from './harness/types.js';
 
-const HELP = `ralph — long-running agent loop for coding agents (opencode; pi is coming)
+const HELP = `ralph — long-running agent loop for coding agents (opencode, or pi experimentally)
 
 Usage:
   ralph [run] [options]     Run the loop until the backlog is done
@@ -70,7 +70,7 @@ Respond options:
 Options:
   -n, --max-iterations <n>  Iteration budget (default 10)
   -m, --model <id>          provider/model, e.g. ollama/qwen3-coder
-      --harness <name>      Agent backend: opencode (default) | pi (not yet available)
+      --harness <name>      Agent backend: opencode (default) | pi (experimental)
   -a, --agent <name>        opencode agent profile (opencode harness only)
   -C, --cwd <path>          Project root (default: current directory)
       --ralph-dir <path>    Ralph's project folder (default: .ralph)

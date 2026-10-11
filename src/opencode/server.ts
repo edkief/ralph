@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
 import { OpencodeClient } from './client.js';
+import { keepWithParent, stopChild } from '../util/process-guard.js';
 import { sleep } from '../util/sleep.js';
 import type { ServerConfig } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -48,13 +48,7 @@ export async function startServer(
   });
   // A child is not stopped by its parent ending: not by an exit that skips
   // stop(), and not by a crash, which runs no exit hook either.
-  const killOnExit = () => child.kill('SIGTERM');
-  process.once('exit', killOnExit);
-  const disarm = stopWhenParentDies(child, config.shutdownTimeoutMs);
-  child.once('exit', () => {
-    process.off('exit', killOnExit);
-    disarm();
-  });
+  keepWithParent(child, config.shutdownTimeoutMs);
 
   const { url, password } = await readStartupBanner(child, config.startupTimeoutMs, options.logger);
   const client = new OpencodeClient({ baseUrl: url, password });
@@ -64,52 +58,6 @@ export async function startServer(
   return {
     client,
     stop: () => stopChild(child, config.shutdownTimeoutMs),
-  };
-}
-
-/**
- * What the guard process runs: wait for stdin to end, which it does when the
- * process holding the other end of the pipe is gone, then stop `pid`.
- */
-export function guardScript(pid: number, graceMs: number): string {
-  return `
-    const alive = () => { try { process.kill(${pid}, 0); return true; } catch { return false; } };
-    const signal = (name) => { try { process.kill(${pid}, name); } catch {} };
-    process.stdin.resume();
-    process.stdin.on('error', () => {});
-    process.stdin.on('close', () => {
-      signal('SIGTERM');
-      const deadline = Date.now() + ${graceMs};
-      setInterval(() => {
-        if (!alive()) process.exit(0);
-        if (Date.now() < deadline) return;
-        signal('SIGKILL');
-        process.exit(0);
-      }, 100);
-    });
-  `;
-}
-
-/**
- * Have `child` stopped when this process dies without stopping it: killed, or
- * aborted by V8 when the heap is full. Nothing runs here then, so a small
- * guard process holds a pipe from this one and acts when it closes. Returns
- * a function that calls the guard off.
- */
-function stopWhenParentDies(child: ChildProcess, graceMs: number): () => void {
-  if (child.pid === undefined) return () => undefined;
-  // In a process group of its own: a Ctrl-C that kills Ralph must not kill the guard first.
-  const guard = spawn(process.execPath, ['-e', guardScript(child.pid, graceMs)], {
-    stdio: ['pipe', 'ignore', 'ignore'],
-    detached: true,
-  });
-  guard.on('error', () => undefined);
-  guard.stdin?.on('error', () => undefined);
-  // Neither the guard nor its pipe should keep Ralph running.
-  guard.unref();
-  (guard.stdin as (NodeJS.WritableStream & { unref?: () => void }) | null)?.unref?.();
-  return () => {
-    guard.kill('SIGKILL');
   };
 }
 
@@ -192,16 +140,4 @@ async function waitForHealth(client: OpencodeClient, timeoutMs: number): Promise
   throw new ServerStartError(
     `opencode server at ${client.url} never became healthy: ${(lastError as Error)?.message ?? 'unknown error'}`,
   );
-}
-
-async function stopChild(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill('SIGTERM');
-  const exited = once(child, 'exit');
-  const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-  try {
-    await exited;
-  } finally {
-    clearTimeout(timer);
-  }
 }

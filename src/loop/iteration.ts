@@ -509,7 +509,7 @@ export async function runIteration(args: {
 
   return {
     sessionId,
-    status: classify({ trip, signal, executionError, permissionFailure, tags, wrapUp: wrapped }),
+    status: classify({ trip, signal, executionError, permissionFailure, tags, wrapUp: wrapped, lastProviderError }),
     text,
     tags,
     usage,
@@ -599,6 +599,7 @@ function classify(args: {
   permissionFailure: string | undefined;
   tags: PromiseTags;
   wrapUp: { completed: boolean } | null;
+  lastProviderError: string | undefined;
 }): IterationStatus {
   if (args.signal.aborted) return 'interrupted';
   if (args.trip === 'retry-storm') return 'provider-error';
@@ -610,7 +611,12 @@ function classify(args: {
   // Out of time: whatever else the agent claimed, the task was cut short.
   if (args.wrapUp) return args.wrapUp.completed ? 'wrapped-up' : 'timeout';
   if (args.tags.complete) return 'complete';
-  if (args.executionError) return isContextOverflow(args.executionError) ? 'context-overflow' : 'failed';
+  if (args.executionError) {
+    if (isContextOverflow(args.executionError)) return 'context-overflow';
+    // The harness gave up retrying the provider: the same failure as a retry storm, and it wants the same backoff.
+    if (args.lastProviderError && args.executionError.includes(args.lastProviderError)) return 'provider-error';
+    return 'failed';
+  }
   return 'progressed';
 }
 

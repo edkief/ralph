@@ -123,6 +123,35 @@ describe('runIteration', () => {
     expect(server?.interrupts).toBe(1);
   });
 
+  it('classifies a turn that fails with the error the harness was retrying as a provider error', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.retry.scheduled', data: { attempt: 1, error: { message: '503 upstream unavailable', status: 503 } } },
+          { type: 'session.execution.failed', data: { error: { message: '503 upstream unavailable' } } },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('provider-error');
+    expect(result.error).toBe('503 upstream unavailable');
+  });
+
+  it('keeps an execution failure that has nothing to do with the provider retries a failure', async () => {
+    const result = await iterate(
+      {
+        script: [
+          { type: 'session.retry.scheduled', data: { attempt: 1, error: { message: '503 upstream unavailable', status: 503 } } },
+          { type: 'session.execution.failed', data: { error: { message: 'tool crashed' } } },
+        ],
+      },
+      config(),
+    );
+
+    expect(result.status).toBe('failed');
+  });
+
   it('times out a silent agent instead of hanging forever', async () => {
     const result = await iterate(
       { script: [{ after: 30_000, type: 'session.execution.succeeded' }] },

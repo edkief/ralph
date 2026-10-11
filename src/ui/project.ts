@@ -66,8 +66,11 @@ const STALE_MS = 15 * 60_000;
 const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
-/** Folders beside the runs in the history: planning sessions (`plans/<id>/`) and what agents ask (`asks/`). */
-const NOT_RUNS = new Set(['plans', 'asks']);
+/**
+ * Folders beside the runs in the history: planning sessions (`plans/<id>/`), what agents ask (`asks/`), and
+ * the session files of the pi harness (`pi/`), which it keeps there to continue a session from.
+ */
+const NOT_RUNS = new Set(['plans', 'asks', 'pi']);
 /** A run id as `newRunId` makes it: the start in the local time of the machine that ran it. */
 const RUN_ID_TIME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
 const EVENTS_FILE = /^iteration-(\d+)\.(?:events|transcript)\.jsonl$/;
