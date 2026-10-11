@@ -138,7 +138,9 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   happens, with the agent's current tool activity; when the agent asks, reply (or fill in the
   form it opened), **Write the plan now** (the terminal's `/done`) or **Stop**. The outcome follows: the tasks written, the
   problems left, or why it failed, and any file the agent changed outside `.ralph/`. Review
-  `.ralph/` and commit it, as in a terminal. Without a live daemon the tab says how to plan
+  `.ralph/` and commit it, as in a terminal. Tick **Start an iteration when planning completes** and the
+  daemon runs a batch (its default iterations, as **Run** does) the moment the plan is written;
+  a plan that ends invalid, stopped or failed starts nothing. Without a live daemon the tab says how to plan
   instead. An interview `ralph init` holds in a terminal shows here too, to follow
 - **Overview**: what the loop is doing now. What it is asking you, if anything, with the
   buttons to answer, and any [form or permission](#questions-in-the-middle-of-a-turn) an
@@ -435,7 +437,10 @@ ralph daemon shutdown        # stop any batch now, and exit
   it plans only while idle. The interview waits for your replies as long as it takes; **Stop**
   in the Plan tab, `ralph daemon pause` (with any option) or a shutdown ends it, and anything
   the agent wrote stays in `.ralph/`. An interview cut off this way, or by the daemon going
-  away, ends as stopped: **Revise the plan** carries on from the files.
+  away, ends as stopped: **Revise the plan** carries on from the files. If the interview was
+  started with **Start an iteration when planning completes** ticked, the daemon goes straight
+  from a written plan into a batch of its default iterations; a batch that fails its preflight
+  shows as the last batch, as any other, and the daemon stays idle.
 - `--detach` sends the daemon's output to `.ralph/history/daemon.log`.
 - One daemon per project: a second one refuses to start, and so does `ralph` itself while a
   daemon is up. Steer the daemon instead.
