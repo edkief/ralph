@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EventOf } from '../src/harness/events.js';
@@ -241,5 +242,65 @@ describe('PiHarness: processes', () => {
     await made.harness.stop();
     expect(await until(() => pids.every((pid) => !alive(pid)))).toBe(true);
     await expect(made.harness.createSession('c')).rejects.toMatchObject({ status: 503 });
+  });
+});
+
+/** A stand-in for playwright-cli that appends its arguments to a file, one line per run. */
+function recordingCli(): { binary: string; runs(): string[] } {
+  const dir = mkdtempSync(resolve(tmpdir(), 'ralph-browser-cli-'));
+  const binary = resolve(dir, 'playwright-cli');
+  const log = resolve(dir, 'runs.txt');
+  writeFileSync(binary, `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\n`);
+  chmodSync(binary, 0o755);
+  return { binary, runs: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []) };
+}
+
+describe('PiHarness: closing the browser (pi.closeBrowser)', () => {
+  it('is off by default: no session name, and playwright-cli is never run', async () => {
+    const cli = recordingCli();
+    const made = await rig({}, {}, { browserCli: cli.binary });
+    await made.harness.createSession('s');
+    await made.harness.stop();
+    expect(made.fake.browserSessions()).toEqual([undefined]);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    expect(cli.runs()).toEqual([]);
+  });
+
+  it('gives each process a session name of its own, and closes that session when the process stops', async () => {
+    const cli = recordingCli();
+    const made = await rig({}, { pi: { closeBrowser: true } }, { browserCli: cli.binary });
+    await made.harness.createSession('a');
+    await made.harness.createSession('b');
+    const names = made.fake.browserSessions();
+    expect(names).toHaveLength(2);
+    expect(names[0]).toMatch(/^ralph-[0-9a-f]{8}$/);
+    expect(names[1]).not.toBe(names[0]);
+
+    await made.harness.stop();
+    expect(await until(() => cli.runs().length === 2)).toBe(true);
+    expect(cli.runs().sort()).toEqual(names.map((name) => `-s=${name} close`).sort());
+  });
+
+  it('closes the session of a process stopped for being quiet, and the one that continues the session has a new name', async () => {
+    const cli = recordingCli();
+    const made = await rig({ captures: ['tool-turn', 'tool-turn'] }, { pi: { closeBrowser: true } }, { idleMs: 150, browserCli: cli.binary });
+    const session = await made.harness.createSession('s');
+    await made.harness.prompt(session, 'first');
+    await made.waitFor(ended);
+    await until(() => cli.runs().length === 1);
+    const [first] = made.fake.browserSessions();
+    expect(cli.runs()).toEqual([`-s=${first} close`]);
+
+    await made.harness.prompt(session, 'second');
+    await until(() => made.events.filter(ended).length === 2);
+    const [, second] = made.fake.browserSessions();
+    expect(second).toMatch(/^ralph-/);
+    expect(second).not.toBe(first);
+  });
+
+  it('does not fail a stop, or anything else, when playwright-cli is not there', async () => {
+    const made = await rig({}, { pi: { closeBrowser: true } }, { browserCli: '/nonexistent/playwright-cli' });
+    await made.harness.createSession('s');
+    await expect(made.harness.stop()).resolves.toBeUndefined();
   });
 });

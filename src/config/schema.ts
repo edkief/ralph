@@ -20,6 +20,11 @@ const PiSchema = z.object({
   args: z.array(z.string()).default([]),
   /** Reasoning effort for models that have one; omitted means pi's own default. */
   thinking: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+  /**
+   * Close the browser the agent opened with playwright-cli (the `browser-check` skill) when its pi process
+   * ends. Each process gets a playwright-cli session name of its own, so only its browser is closed.
+   */
+  closeBrowser: z.boolean().default(false),
 });
 
 const TimeoutsSchema = z.object({
