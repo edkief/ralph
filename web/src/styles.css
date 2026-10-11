@@ -511,6 +511,45 @@ pre {
   color: var(--accent);
 }
 
+/*
+ * What a task is doing, by shape as well as colour: a ring for the one up
+ * next, a filled dot for the one an iteration is working on, which alone
+ * breathes.
+ */
+.task-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  vertical-align: baseline;
+}
+
+.task.running .task-dot {
+  background: var(--live);
+  border-color: var(--live);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task.running .task-dot {
+    animation: none;
+  }
+}
+
 .task-id {
   font-family: var(--mono);
   font-size: 12px;
@@ -898,8 +937,79 @@ button.button {
   width: 9em;
 }
 
+/*
+ * The run's controls, in a bar under the cards: what to run, then how to stop
+ * it, with the destructive button at the far end.
+ */
+.actions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 16px;
+}
+
+.actions-bar .stop-buttons {
+  margin-top: 0;
+}
+
+.actions-secondary {
+  flex: 1;
+  min-width: 0;
+}
+
+.actions-danger {
+  margin-left: auto;
+}
+
+/* A message takes a line of its own rather than crowding the buttons. */
+.actions-bar .stop-note {
+  order: 1;
+  flex-basis: 100%;
+}
+
 .daemon-line {
   margin-top: 6px;
+}
+
+@media (max-width: 720px) {
+  /* One column of full-width rows, with room for a thumb: run, stop, then the one that interrupts. */
+  .actions-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 16px;
+  }
+
+  .actions-bar .button,
+  .actions-bar input {
+    height: auto;
+    min-height: 40px;
+  }
+
+  /* 16px keeps iOS from zooming into a field on focus. */
+  .actions-bar input {
+    font-size: 16px;
+  }
+
+  .actions-bar .button {
+    flex: 1 1 auto;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .actions-bar .run-iterations {
+    flex: none;
+  }
+
+  .actions-bar .run-token {
+    flex: 1 1 100%;
+  }
+
+  .actions-danger {
+    flex-basis: 100%;
+    margin-left: 0;
+    margin-top: 6px;
+  }
 }
 
 /* ── Planning ───────────────────────────────────────────────────────── */

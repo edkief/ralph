@@ -195,6 +195,16 @@ export function Pending({ status }: { status: StatusView }) {
   );
 }
 
+/** Whether `StopButtons` has anything to offer: a run to stop, or a project to park. */
+export function showsStop(status: StatusView): boolean {
+  const run = status.run;
+  const actions = status.actions;
+  if (!actions?.enabled || run?.status === 'waiting') return false;
+  // An interview has nothing to park: it is stopped from the Plan tab.
+  if (status.daemon?.live && status.daemon.status === 'planning') return false;
+  return run?.live === true || actions.park;
+}
+
 /**
  * Ask a run in progress to stop: after its iteration, at once, or parked (the
  * agent hands off, then the work is committed and pushed, to carry on
@@ -210,11 +220,8 @@ export function StopButtons({ status }: { status: StatusView }) {
   const [needsToken, setNeedsToken] = useState(() => !hasToken());
   const run = status.run;
   const actions = status.actions;
-  if (!actions?.enabled || run?.status === 'waiting') return null;
-  // An interview has nothing to park: it is stopped from the Plan tab.
-  if (status.daemon?.live && status.daemon.status === 'planning') return null;
+  if (!showsStop(status) || !actions) return null;
   const live = run?.live === true;
-  if (!live && !actions.park) return null;
   const daemon = status.daemon?.live === true;
   // An idle daemon's Run controls, just below, already ask for the token.
   const runAsks = !live && daemon && status.daemon?.status === 'idle';
@@ -245,7 +252,7 @@ export function StopButtons({ status }: { status: StatusView }) {
   };
 
   return (
-    <div className="stop-buttons">
+    <div className="stop-buttons actions-secondary">
       {askToken ? (
         <input
           className="run-token"
@@ -271,7 +278,7 @@ export function StopButtons({ status }: { status: StatusView }) {
         Park
       </button>
       {live ? (
-        <button type="button" className="button small danger" disabled={busy} onClick={() => void stop('now')}>
+        <button type="button" className="button small danger actions-danger" disabled={busy} onClick={() => void stop('now')}>
           {daemon ? 'Pause now' : 'Stop now'}
         </button>
       ) : null}
@@ -284,6 +291,25 @@ export function StopButtons({ status }: { status: StatusView }) {
   );
 }
 
+/** Whether `RunButtons` is shown: an idle daemon to give a batch to. */
+export function showsRun(status: StatusView): boolean {
+  return status.daemon?.live === true && status.daemon.status === 'idle' && !status.run?.live && status.actions?.enabled === true;
+}
+
+/**
+ * The run's controls, in a bar under the Overview's cards: what to run, then
+ * how to stop it. Nothing at all when there is nothing to do.
+ */
+export function RunActions({ status }: { status: StatusView }) {
+  if (!showsRun(status) && !showsStop(status)) return null;
+  return (
+    <section className="panel actions-bar" aria-label="Run controls">
+      <RunButtons key={status.run?.runId ?? 'none'} status={status} />
+      <StopButtons status={status} />
+    </section>
+  );
+}
+
 /** Have an idle daemon run a batch of iterations. */
 export function RunButtons({ status }: { status: StatusView }) {
   const daemon = status.daemon;
@@ -293,7 +319,7 @@ export function RunButtons({ status }: { status: StatusView }) {
   // Once asked for, the token field stays until an action goes through: hiding it
   // as soon as a token is held would take it away at the first character typed.
   const [needsToken, setNeedsToken] = useState(() => !hasToken());
-  if (!daemon?.live || daemon.status !== 'idle' || status.run?.live || !status.actions?.enabled) return null;
+  if (!showsRun(status) || !daemon?.live || !status.actions) return null;
   const count = iterations ?? daemon.defaultIterations;
   const askToken = status.actions.token && needsToken;
 
@@ -316,7 +342,7 @@ export function RunButtons({ status }: { status: StatusView }) {
   };
 
   return (
-    <div className="stop-buttons">
+    <div className="stop-buttons actions-primary">
       {askToken ? (
         <input
           className="run-token"

@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import type { SplitTaskView, StatusView } from '../api';
 import { href } from '../route';
-import { TaskRow, activeTaskId } from './TaskRow';
+import { TaskRow, activeTaskId, runningTaskId } from './TaskRow';
 
 /**
  * The whole backlog, in the order the loop works through it. A task that was
@@ -11,6 +11,7 @@ import { TaskRow, activeTaskId } from './TaskRow';
 export function Tasks({ status }: { status: StatusView }) {
   const { tasks } = status;
   const active = activeTaskId(status);
+  const running = runningTaskId(status);
   const splits = new Map((tasks.splits ?? []).map((split) => [split.id, split]));
   const parentOf = new Map<string, string>();
   for (const split of splits.values()) for (const child of split.children) if (!parentOf.has(child)) parentOf.set(child, split.id);
@@ -39,7 +40,7 @@ export function Tasks({ status }: { status: StatusView }) {
       rows.push(<SplitRow key={`split-${split.id}`} split={split} depth={depth} />);
     });
     rows.push(
-      <TaskRow key={task.id} task={task} active={task.id === active} depth={chain.length} parentTitle={chain[chain.length - 1]?.title ?? null} />,
+      <TaskRow key={task.id} task={task} active={task.id === active} running={task.id === running} depth={chain.length} parentTitle={chain[chain.length - 1]?.title ?? null} />,
     );
   }
 

@@ -2,8 +2,8 @@ import { Fragment } from 'react';
 import { useJson, useNow, type EscalationView, type RunDetail, type SplitView, type StatusView } from '../api';
 import { formatCount, formatDateTime, formatDuration, formatRunId, runBadge, statusLabel, statusTone } from '../format';
 import { href } from '../route';
-import { TaskRow, activeTaskId } from './TaskRow';
-import { Pending, RunButtons, StopButtons } from './Pending';
+import { TaskRow, activeTaskId, runningTaskId } from './TaskRow';
+import { Pending, RunActions } from './Pending';
 import { Asks } from './Ask';
 
 /** Tasks listed before the one in progress: those just finished, as a rule. */
@@ -23,6 +23,7 @@ export function Overview({ status }: { status: StatusView }) {
   const splitting = run?.live && !waiting ? run.split : null;
   const escalating = run?.live && !waiting ? escalations.find((turn) => turn.status === 'running') : undefined;
   const active = activeTaskId(status);
+  const running = runningTaskId(status);
   const remaining = tasks.items.filter((task) => !task.passes);
   // A stretch of the Tasks tab's order around the task in progress: what came
   // just before it, then what comes next. With the backlog complete, its end.
@@ -78,8 +79,6 @@ export function Overview({ status }: { status: StatusView }) {
           </div>
           <div className="card-detail">{run ? `Started ${formatDateTime(run.startedAt) !== '–' ? formatDateTime(run.startedAt) : formatRunId(run.runId)}` : status.daemon?.live ? (status.daemon.status === 'planning' ? 'The daemon is planning' : 'Run a batch below') : 'Start one with `ralph`'}</div>
           <DaemonLine status={status} />
-          <StopButtons status={status} />
-          <RunButtons key={run?.runId ?? 'none'} status={status} />
         </div>
         <div className="card">
           <div className="card-label">{run?.live ? 'Current iteration' : 'Iterations'}</div>
@@ -107,6 +106,8 @@ export function Overview({ status }: { status: StatusView }) {
           <div className="card-detail">{iterations.reduce((sum, iteration) => sum + (iteration.toolCalls ?? 0), 0)} tool calls</div>
         </div>
       </section>
+
+      <RunActions status={status} />
 
       {tasks.error && status.planState === 'written' ? <div className="banner bad">{tasks.error}</div> : null}
       {run?.message && !run.live && !status.pending ? (
@@ -207,7 +208,7 @@ export function Overview({ status }: { status: StatusView }) {
         ) : (
           <ul className="task-list">
             {upNext.map((task) => (
-              <TaskRow key={task.id} task={task} active={task.id === active} />
+              <TaskRow key={task.id} task={task} active={task.id === active} running={task.id === running} />
             ))}
             {hidden > 0 ? (
               <li className="task more">
