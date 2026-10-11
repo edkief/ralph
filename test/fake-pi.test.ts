@@ -8,9 +8,9 @@ import { fakePi, type FakePiOptions } from './helpers/pi.js';
 type Line = Record<string, any>;
 
 /** Run the fake as a client would: send commands, collect what it writes until `until` is seen. */
-async function drive(options: FakePiOptions, commands: Line[], until: (line: Line) => boolean): Promise<Line[]> {
+async function drive(options: FakePiOptions, commands: Array<Line | ((lines: Line[]) => Line | Promise<Line>)>, until: (line: Line) => boolean, args: string[] = []): Promise<Line[]> {
   const fake = fakePi(options);
-  const child = spawn(fake.binary, ['--mode', 'rpc', '--session-dir', mkdtempSync(resolve(tmpdir(), 'ralph-pi-sessions-'))], {
+  const child = spawn(fake.binary, ['--mode', 'rpc', '--session-dir', mkdtempSync(resolve(tmpdir(), 'ralph-pi-sessions-')), ...args], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
   const lines: Line[] = [];
@@ -26,7 +26,8 @@ async function drive(options: FakePiOptions, commands: Line[], until: (line: Lin
       }
     });
   });
-  for (const command of commands) child.stdin.write(`${JSON.stringify(command)}\n`);
+  // A command may be a function of what the fake has written so far: an answer to a request it made.
+  for (const command of commands) child.stdin.write(`${JSON.stringify(typeof command === 'function' ? await command(lines) : command)}\n`);
   await done;
   child.stdin.end();
   return lines;
@@ -95,5 +96,76 @@ describe('fake pi', () => {
     expect(order.indexOf('response')).toBeLessThan(order.indexOf('tool_execution_start'));
     expect(order.filter((type) => type === 'response')).toHaveLength(2);
     expect(order.at(-1)).toBe('agent_end');
+  });
+});
+
+describe('fake pi with the permission gate', () => {
+  const GATE = resolve(__dirname, '../extensions/ralph-gate.mjs');
+  const ended = (line: Line) => line.type === 'agent_end';
+
+  /** Wait until the fake has put a gate request, then answer it with `body`. */
+  const answerGate = (body: Line) => async (lines: Line[]) => {
+    for (let waited = 0; waited < 3_000; waited += 20) {
+      const request = lines.find((line) => line.type === 'extension_ui_request' && line.title === 'ralph:gate');
+      if (request) return { type: 'extension_ui_response', id: request.id, ...body };
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error('the fake made no gate request');
+  };
+  const run = (options: FakePiOptions, body: Line) =>
+    drive({ captures: ['gate-allow'], ...options }, [{ id: 'p', type: 'prompt', message: 'go' }, answerGate(body)], ended, ['-e', GATE]);
+  const toolEnd = (lines: Line[]) => lines.find((line) => line.type === 'tool_execution_end');
+
+  it('lists the gate command once the extension is on the command line', async () => {
+    const lines = await drive({}, [{ id: 'c', type: 'get_commands' }], (line) => line.id === 'c', ['-e', GATE]);
+    expect(lines.find((line) => line.id === 'c')?.data.commands).toEqual([expect.objectContaining({ name: 'ralph-gate', source: 'extension' })]);
+  });
+
+  it('lists nothing without it, or when it fails to load, or when the file is not there', async () => {
+    const commands = async (options: FakePiOptions, args: string[]) =>
+      (await drive(options, [{ id: 'c', type: 'get_commands' }], (line) => line.id === 'c', args)).find((line) => line.id === 'c')?.data.commands;
+    expect(await commands({}, [])).toEqual([]);
+    expect(await commands({ gate: 'missing' }, ['-e', GATE])).toEqual([]);
+    expect(await commands({}, ['-e', '/nowhere/ralph-gate.mjs'])).toEqual([]);
+    expect(await commands({}, ['--extension', '/other/extension.ts'])).toEqual([]);
+  });
+
+  it('puts the tool call to the client and waits for the answer before the tool runs', async () => {
+    const lines = await run({ swap: { 'echo hello': 'git push origin main' } }, { value: '{"allow":true}' });
+    const request = lines.find((line) => line.type === 'extension_ui_request');
+    expect(request).toMatchObject({ method: 'input', title: 'ralph:gate' });
+    expect(JSON.parse(request?.placeholder)).toEqual({ v: 1, id: 'call_1', tool: 'bash', input: { command: 'git push origin main' } });
+    const order = lines.map((line) => line.type);
+    expect(order.indexOf('extension_ui_request')).toBeGreaterThan(order.indexOf('tool_execution_start'));
+    expect(order.indexOf('extension_ui_request')).toBeLessThan(order.indexOf('tool_execution_end'));
+    expect(toolEnd(lines)).toMatchObject({ isError: false });
+  });
+
+  it('blocks the call with the reason it was answered with', async () => {
+    const lines = await run({}, { value: JSON.stringify({ allow: false, reason: 'it matches the deny rule "rm -rf /"' }) });
+    expect(toolEnd(lines)).toMatchObject({ isError: true, result: { content: [{ text: 'it matches the deny rule "rm -rf /"' }] } });
+  });
+
+  it('blocks it when the request is cancelled, and when the answer is not a yes', async () => {
+    expect(toolEnd(await run({}, { cancelled: true }))).toMatchObject({ isError: true });
+    expect(toolEnd(await run({}, { value: 'yes' }))).toMatchObject({ isError: true });
+  });
+
+  it('never runs the tool while the request is unanswered', async () => {
+    const lines = await drive(
+      { captures: ['gate-allow'] },
+      [{ id: 'p', type: 'prompt', message: 'go' }],
+      (line) => line.type === 'extension_ui_request',
+      ['-e', GATE],
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(lines.map((line) => line.type)).not.toContain('tool_execution_end');
+  });
+
+  it('gives each request an id of its own', async () => {
+    const first = (await run({}, { value: '{"allow":true}' })).find((line) => line.type === 'extension_ui_request');
+    const second = (await run({}, { value: '{"allow":true}' })).find((line) => line.type === 'extension_ui_request');
+    expect(first?.id).toBeTruthy();
+    expect(first?.id).not.toBe(second?.id);
   });
 });

@@ -76,7 +76,11 @@ export interface AgentHarness {
   /** Stop the session's running turn. */
   interrupt(sessionId: string): Promise<void>;
 
-  replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject'): Promise<void>;
+  /**
+   * Answer a permission request. `reason` says why a `reject` was decided (the rule, the write scope, no
+   * answer in time), for a harness that tells its agent; one that cannot ignores it.
+   */
+  replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject', reason?: string): Promise<void>;
 
   /** Answer a form, by field key. A refusal with status 400 says the answer does not fit the form. */
   replyForm(sessionId: string, formId: string, answer: Record<string, unknown>): Promise<void>;

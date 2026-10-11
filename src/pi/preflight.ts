@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import type { Config } from '../config/schema.js';
 import type { CheckResult } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
+import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
 import { PiProcess } from './rpc.js';
 
 const run = promisify(execFile);
@@ -49,7 +50,8 @@ export interface PiCheckOptions {
 
 /**
  * The checks on pi: the executable runs and is a version this adapter speaks, the models the config names
- * are ones pi has, its skills, and a warning for what Ralph cannot enforce under pi.
+ * are ones pi has, its skills, and that it loads the extension through which Ralph judges every tool call.
+ * Without that extension pi runs everything unasked, so its absence is fatal.
  */
 export async function piChecks(config: Config, options: PiCheckOptions): Promise<CheckResult[]> {
   const binary = await versionCheck(config.pi.binary);
@@ -59,15 +61,7 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
   const probed = await probe(config, options);
   if ('failure' in probed) return [...checks, { name: 'rpc', ok: false, detail: probed.failure, fatal: true }];
 
-  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills));
-  checks.push({
-    name: 'permissions',
-    ok: false,
-    detail:
-      'the `permissions` rules (deny, allow, fallback) and the write scope are not enforced under pi: it runs commands and ' +
-      'writes files unasked, so even the default deny list (`git push`, ...) does not hold. Until #80, run it where that is safe',
-    fatal: false,
-  });
+  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills), gateCheck(probed.gate));
   return checks;
 }
 
@@ -104,13 +98,15 @@ interface Probed {
   /** The model pi starts on when none is asked for. */
   defaultModel: string | undefined;
   skills: string[];
+  /** pi lists the command of Ralph's permission extension. */
+  gate: boolean;
 }
 
 /** Start a throwaway pi and ask it what it has. */
 async function probe(config: Config, options: PiCheckOptions): Promise<Probed | { failure: string }> {
   const pi = PiProcess.spawn({
     binary: config.pi.binary,
-    args: ['--mode', 'rpc', '--no-session', ...(config.pi.thinking ? ['--thinking', config.pi.thinking] : []), ...config.pi.args],
+    args: ['--mode', 'rpc', '--no-session', '--extension', GATE_EXTENSION, ...(config.pi.thinking ? ['--thinking', config.pi.thinking] : []), ...config.pi.args],
     cwd: options.cwd,
     shutdownTimeoutMs: 5_000,
     logger: options.logger,
@@ -128,6 +124,7 @@ async function probe(config: Config, options: PiCheckOptions): Promise<Probed | 
       models: available.flatMap((model) => named(model) ?? []),
       defaultModel: named((state.data as { model?: { provider?: string; id?: string } | null } | undefined)?.model),
       skills: commandList.filter((command) => command.source === 'skill').map((command) => (command.name ?? '').replace(/^skill:/, '')),
+      gate: gateLoaded(commandList),
     };
   } catch (cause) {
     return { failure: `\`${config.pi.binary} --mode rpc\` did not answer: ${(cause as Error).message}` };
@@ -170,6 +167,13 @@ function modelChecks(config: Config, probed: Probed): CheckResult[] {
       fatal: true,
     };
   });
+}
+
+/** pi puts every tool call to Ralph, which judges it by `permissions` and the write scope of the turn. */
+function gateCheck(loaded: boolean): CheckResult {
+  return loaded
+    ? { name: 'permissions', ok: true, detail: 'every tool call is put to Ralph before it runs (extensions/ralph-gate.mjs loaded)', fatal: true }
+    : { name: 'permissions', ok: false, detail: gateMissingMessage(), fatal: true };
 }
 
 function skillsCheck(skills: string[]): CheckResult {

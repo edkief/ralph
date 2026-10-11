@@ -77,6 +77,15 @@ describe('restrictWrites', () => {
     expect(policy(request('shell', ['git push'])).reply).toBe('reject');
   });
 
+  it('recognises the writing tools of pi and of its extensions, and not words that merely contain one', () => {
+    for (const action of ['write', 'edit', 'apply_patch', 'multi_edit', 'multiedit', 'str-replace-edit', 'Write']) {
+      expect(policy(request(action, ['src/index.ts'])).reply, action).toBe('reject');
+    }
+    for (const action of ['editor', 'rewrite', 'bash', 'readwrite2', 'patches']) {
+      expect(policy(request(action, ['src/index.ts'])).reply, action).toBe('once');
+    }
+  });
+
   it('falls back to the base policy for a write that names no path', () => {
     expect(policy(request('edit', [])).reply).toBe('once');
   });

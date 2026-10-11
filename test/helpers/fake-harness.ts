@@ -37,7 +37,7 @@ export class FakeHarness implements AgentHarness {
   readonly calls: string[] = [];
   readonly prompts: Array<{ sessionId: string; text: string; options: PromptOptions }> = [];
   readonly interrupted: string[] = [];
-  readonly permissionReplies: Array<{ sessionId: string; requestId: string; reply: string }> = [];
+  readonly permissionReplies: Array<{ sessionId: string; requestId: string; reply: string; reason?: string }> = [];
   readonly parentLookups: string[] = [];
   preflightCalls = 0;
 
@@ -104,10 +104,10 @@ export class FakeHarness implements AgentHarness {
     this.live?.(event('session.execution.aborted', sessionId));
   }
 
-  async replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject'): Promise<void> {
+  async replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject', reason?: string): Promise<void> {
     this.calls.push('replyPermission');
     if (this.options.replyPermissionError) throw this.options.replyPermissionError;
-    this.permissionReplies.push({ sessionId, requestId, reply });
+    this.permissionReplies.push({ sessionId, requestId, reply, ...(reason ? { reason } : {}) });
   }
 
   async replyForm(): Promise<void> {

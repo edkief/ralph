@@ -20,3 +20,20 @@ node summarize.mjs out.jsonl              # one line per event
 ```
 
 `AUTO_UI=1` makes it answer extension dialogs with `cancelled: true`.
+
+## The gate sessions
+
+`gate-allow`, `gate-block`, `gate-cancelled` and `gate-write` were recorded with Ralph's own extension
+(`extensions/ralph-gate.mjs`) loaded, on pi 0.73.1, with the stub scripted to call a tool
+(`STUB_TOOL`, `STUB_ARGS`) and `record.mjs` answering the gate's dialog with `UI_REPLY`:
+
+```sh
+STUB_MODE=tool STUB_TOOL=bash STUB_ARGS='{"command":"echo hello"}' node stub.mjs &
+PI=... AGENT_DIR=... PROJECT_DIR=... SESSIONS_DIR=... UI_REPLY='{"value":"{\"allow\":true}"}' \
+  node record.mjs gate-allow.jsonl '[{"at":1500,"cmd":{"id":"r1","type":"get_commands"}},{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' \
+  '["-e","/path/to/extensions/ralph-gate.mjs"]'
+```
+
+`gate-allow` answers `{"allow":true}`, `gate-block` answers `{"allow":false,"reason":"..."}`, `gate-cancelled` uses
+`AUTO_UI=1`, and `gate-write` is a `write` call. The fake pi plays the continuation that matches the answer a
+client gives.

@@ -227,7 +227,13 @@ export async function runIteration(args: {
       if (!decision && (streamAbort.signal.aborted || openAsks.get(request.id)?.abort.signal.aborted)) return;
       const reply: PermissionReply = decision ?? 'reject';
       logger.info('permission decided', { action: request.action, reply, reason: decision ? 'person' : 'not-answered' });
-      const failure = await deliverPermission(harness, request, reply, logger);
+      const failure = await deliverPermission(
+        harness,
+        request,
+        reply,
+        logger,
+        reply === 'reject' ? (decision ? 'the owner turned it down' : 'nobody answered in time') : undefined,
+      );
       if (failure) failTurn(failure);
     });
   // Whether the harness reported the turn's execution over. Until it does, the
@@ -648,19 +654,35 @@ async function lookupParent(
  * request, so the caller ends the turn rather than wait for the watchdog.
  */
 async function handlePermission(
-  request: PermissionRequest,
+  request: PermissionRequest & { gate?: boolean | undefined },
   decision: PermissionDecision,
   harness: AgentHarness,
   logger: Logger,
 ): Promise<string | undefined> {
   const reply: PermissionReply = decision.reply === 'ask' ? 'reject' : decision.reply;
-  logger.info('permission decided', {
+  // A harness that puts every call to Ralph would fill the log with the calls it lets through.
+  const level = request.gate && reply !== 'reject' ? 'debug' : 'info';
+  logger[level]('permission decided', {
     action: request.action,
+    ...(request.gate ? { resources: request.resources } : {}),
     reply,
     reason: decision.reply === 'ask' ? 'nobody-to-ask' : decision.reason,
     ...(decision.matched ? { matched: decision.matched } : {}),
   });
-  return deliverPermission(harness, request, reply, logger);
+  return deliverPermission(harness, request, reply, logger, reply === 'reject' ? describeRejection(decision) : undefined);
+}
+
+/** Why a request was turned down, for the agent to read. */
+function describeRejection(decision: PermissionDecision): string {
+  if (decision.reply === 'ask') return 'there is nobody to ask';
+  switch (decision.reason) {
+    case 'deny-rule':
+      return `it matches the deny rule "${decision.matched}"`;
+    case 'outside-scope':
+      return `"${decision.matched}" is outside the folder this session may write in`;
+    default:
+      return 'no rule allows it';
+  }
 }
 
 async function deliverPermission(
@@ -668,11 +690,12 @@ async function deliverPermission(
   request: PermissionRequest,
   reply: PermissionReply,
   logger: Logger,
+  reason?: string,
 ): Promise<string | undefined> {
   // A rejected request fails the same way twice; anything else may be a blip.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await harness.replyPermission(request.session, request.id, reply);
+      await harness.replyPermission(request.session, request.id, reply, reason);
       return undefined;
     } catch (cause) {
       const status = cause instanceof HarnessApiError ? cause.status : undefined;

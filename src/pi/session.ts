@@ -3,7 +3,9 @@ import type { PromptOptions } from '../harness/types.js';
 import { HarnessApiError } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import { UiRequestSchema, type PiFrame } from './frames.js';
+import { gateAnswer, parseGateFrame, permissionEvent, type GateFrame } from './gate.js';
 import type { PiExit, PiProcess } from './rpc.js';
+import type { PermissionReply } from '../loop/permissions.js';
 import { PiTranslator } from './translate.js';
 
 /** Dialogs a pi extension can open; each waits for an `extension_ui_response`. */
@@ -34,6 +36,8 @@ export class PiSession {
   private settleTimer: NodeJS.Timeout | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private compactionWaiters: Array<() => void> = [];
+  /** The ids of the gate requests put to Ralph and not yet answered: pi's tool calls wait on them. */
+  private readonly gates = new Set<string>();
   private stopping = false;
 
   constructor(
@@ -101,10 +105,21 @@ export class PiSession {
     await this.process.request({ type: 'abort' });
   }
 
+  /**
+   * Answer a tool call pi put to Ralph (see gate.ts): it runs on `once` or `always`, and is blocked, with
+   * `reason` for the agent, on `reject`. Rejects with status 404 when no such call is waiting, as one that
+   * pi gave up on (the turn was stopped) or that was answered already is not.
+   */
+  async replyGate(id: string, reply: PermissionReply, reason?: string): Promise<void> {
+    if (!this.alive || !this.gates.delete(id)) throw new HarnessApiError(`pi has no tool call ${id} waiting for Ralph`, 404, '');
+    this.process.write({ type: 'extension_ui_response', id, value: gateAnswer(reply, reason) });
+  }
+
   async stop(): Promise<void> {
     this.stopping = true;
     this.cancelIdle();
     clearTimeout(this.settleTimer);
+    this.gates.clear();
     await this.process.stop();
   }
 
@@ -145,7 +160,9 @@ export class PiSession {
   }
 
   private receive(frame: PiFrame): void {
-    if (frame.type === 'extension_ui_request') this.answerDialog(frame);
+    const gate = parseGateFrame(frame);
+    if (gate) this.putGate(gate);
+    else if (frame.type === 'extension_ui_request') this.answerDialog(frame);
     this.publishAll(this.translator.push(frame));
     if (frame.type === 'compaction_end') {
       const waiters = this.compactionWaiters;
@@ -153,6 +170,29 @@ export class PiSession {
       for (const wake of waiters) wake();
     }
     this.armSettle();
+    this.cancelGatesOfAnEndedTurn();
+  }
+
+  /** A tool call pi put to Ralph: the loop judges it, as it does a permission an agent asked for. */
+  private putGate(gate: GateFrame): void {
+    if ('malformed' in gate) {
+      // Blocked, not left waiting: nothing could ever answer it.
+      this.options.logger.warn('pi put a tool call to Ralph in a way Ralph does not understand; it is blocked', { reason: gate.malformed });
+      this.process.write({ type: 'extension_ui_response', id: gate.id, value: gateAnswer('reject', 'Ralph could not read the request') });
+      return;
+    }
+    this.gates.add(gate.id);
+    this.options.publish(permissionEvent(gate.call, gate.id, this.id, Date.now()));
+  }
+
+  /**
+   * Tool calls still waiting on Ralph when the turn is over were cancelled or abandoned: pi blocks them
+   * whatever Ralph says, and an answer written now would belong to no one.
+   */
+  private cancelGatesOfAnEndedTurn(): void {
+    if (this.translator.running || this.gates.size === 0) return;
+    for (const id of this.gates) this.process.write({ type: 'extension_ui_response', id, cancelled: true });
+    this.gates.clear();
   }
 
   /** Nobody is there to answer an extension's dialog, and the tool or command that opened it waits on one. */
@@ -174,6 +214,7 @@ export class PiSession {
       this.settleTimer = setTimeout(() => {
         this.settleTimer = undefined;
         this.publishAll(this.translator.settle());
+        this.cancelGatesOfAnEndedTurn();
         this.armIdle();
       }, delay);
     }
@@ -183,6 +224,7 @@ export class PiSession {
   private lost(exit: PiExit): void {
     clearTimeout(this.settleTimer);
     this.cancelIdle();
+    this.gates.clear();
     const wasRunning = this.running;
     const how = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? 'unknown'}`;
     this.publishAll(this.translator.exited(`pi exited (${how})${exit.stderr ? `: ${exit.stderr}` : ''}`));
