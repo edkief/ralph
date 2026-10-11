@@ -1,8 +1,8 @@
 # ralph
 
 A long-running agent loop that drives a coding agent through a harness: [opencode](https://opencode.ai)
-through its HTTP API today, with [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
-planned (see [Harnesses](#harnesses)).
+through its HTTP API, or, experimentally, [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
+over its RPC mode (see [Harnesses](#harnesses)).
 
 Ralph picks the next unfinished task from a project's `.ralph/tasks.json`, runs one agent turn
 against it, verifies what actually changed in the repository, and repeats until the backlog is
@@ -116,7 +116,7 @@ upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
 | 1 | Iteration budget exhausted with work outstanding |
 | 2 | Agent raised `BLOCKED` |
 | 3 | Agent raised `DECIDE` |
-| 4 | Bad configuration or failed preflight, including a harness that is not yet available (`harness: "pi"`) |
+| 4 | Bad configuration or failed preflight, including a pi version outside the tested range |
 | 5 | Model provider or harness unusable: the opencode server (or the `pi` process) will not start or stay up. The message names the harness |
 | 6 | Stalled: iterations stopped changing anything, or a task kept running out of time |
 | 7 | Push rejected: the remote branch has commits the local one does not (see [pushing](#configuration)) |
@@ -518,7 +518,7 @@ talk to one harness interface, so they behave the same whichever you pick.
 | Harness | Status | How Ralph drives it |
 | --- | --- | --- |
 | `opencode` | Default | Spawns `opencode serve` (or attaches to one with `server.url`) and speaks its HTTP API |
-| `pi` | Not yet available | Will spawn `pi --mode rpc` and speak its JSON protocol over stdin/stdout |
+| `pi` | Experimental | Spawns one `pi --mode rpc` process per session and speaks its JSON protocol over stdin/stdout (see [pi](#pi)) |
 
 Choose one with `harness` in `ralph.config.json`, `RALPH_HARNESS`, or `--harness` on the command
 line (flags beat the environment, which beats the file). Leave it out and you get `opencode`: a
@@ -548,26 +548,91 @@ one file can carry both harnesses' settings and switch between them with `harnes
 
 **What each supports.** The loop branches on what a harness can do, never on its name.
 
-| | opencode | pi (planned) |
+| | opencode | pi |
 | --- | --- | --- |
-| Prompt to a busy session without stopping its tool (steering) | With a server that offers it | To be confirmed |
-| Forms the agent opens (a question tool, an MCP server's request for input) | Yes | Through an extension |
-| Permission requests put to a person | Yes | Through an extension |
+| Prompt to a busy session without stopping its tool (steering) | With a server that offers it | Yes |
+| Forms the agent opens (a question tool, an MCP server's request for input) | Yes | No (#80) |
+| Permission requests put to a person | Yes | No (#80) |
 | Subagents | Yes | No |
-| Skills | Yes | To be confirmed |
-
-**pi caveats.** pi is minimal: four tools (read, write, edit, bash), a system prompt of around a
-thousand tokens, no subagents and no plan mode. That leaves more of a small context window to the
-task, which suits self-hosted models, but it has no built-in permission prompt or question tool;
-Ralph would supply those through extensions. Its adapter is not part of this version: selecting
-`pi` today stops with "not yet available" and exit code 4, before anything runs. Once it lands
-it will be experimental until it has been measured against opencode on the same models.
+| Skills | Yes | Yes |
 
 **What names the harness.** `ralph doctor` and a run's banner say which harness is in use and
 show the harness's own checks, which run after Ralph's checks of the project (for opencode: the
-server, its API, the model, its skills). `ralph config` prints the resolved `harness`. Log lines
+server, its API, the model, its skills; for pi: its version, the models, its skills, and a warning
+about permissions). `ralph config` prints the resolved `harness`. Log lines
 about the provider carry a `harness` field, and [exit code 5](#exit-codes) is the harness or
 provider failing, which the message names.
+
+### pi
+
+pi is minimal: four tools (read, write, edit, bash), a system prompt of around a thousand tokens,
+no subagents and no plan mode. That leaves more of a small context window to the task, which
+suits self-hosted models. The adapter is **experimental** until it has been measured against
+opencode on the same models.
+
+**Setup.**
+
+1. Install the version Ralph is tested with: `npm install -g @mariozechner/pi-coding-agent@0.73.1`.
+   Ralph accepts `>=0.73.1 <0.74.0` and `ralph doctor` rejects any other (pi is 0.x, and a minor
+   release can change its protocol).
+2. Tell pi about your model. pi reads `~/.pi/agent/models.json` itself (`PI_CODING_AGENT_DIR`
+   moves the folder); Ralph has no setting for it. For a local OpenAI-compatible server such as
+   llama.cpp, Ollama or vLLM:
+
+   ```json
+   {
+     "providers": {
+       "local": {
+         "baseUrl": "http://localhost:8080/v1",
+         "api": "openai-completions",
+         "apiKey": "none",
+         "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+         "models": [{ "id": "qwen3-coder-30b", "contextWindow": 32768, "maxTokens": 8192 }]
+       }
+     }
+   }
+   ```
+
+   See pi's `docs/models.md` for the rest.
+3. Choose it, and name the model as `provider/id`, which is what `model`, `plan.model` and
+   `escalation.model` take: `"harness": "pi", "model": "local/qwen3-coder-30b"`. Set `model`: without it
+   pi starts on whatever default its own settings and credentials give, and `ralph doctor` says which.
+4. `ralph doctor`, then `ralph once`.
+
+Everything pi reads for itself applies: `~/.pi/agent/settings.json` (its own retries and
+compaction), `AGENTS.md`, and skills from `.agents/skills/` and `.pi/skills/` in the project, which
+the doctor lists. Extra command-line flags go in `pi.args`.
+
+**How it runs.** One pi process per session: the loop's iteration, a triage (assess) turn, an
+escalation turn and a split proposal each get their own, and they are stopped with Ralph, however
+Ralph ends (a guard process stops them if Ralph is killed outright). A session's files live in
+`.ralph/history/pi/`, which `ralph init` keeps out of git. A session that has been quiet for 60
+seconds has its process stopped; the next turn that carries on in it, as a confirm or split turn
+does, starts a process again and switches to the file. The run's own record, as for opencode, is
+the event files in `.ralph/history/<run>/`, headed `harness: pi`.
+
+**Caveats.**
+
+- **`permissions` are not enforced.** pi has no permission prompt, so the `deny`, `allow` and
+  `fallback` rules and the write scope of the assess and split turns do nothing: pi runs commands
+  and writes files unasked, `git push` included. `ralph doctor` warns of it every time. Run it
+  where that is safe (a container or a throwaway checkout) until permissions arrive with
+  [#80](https://github.com/edkief/ralph/issues/80).
+- **No question tool, no forms.** A dialog a pi extension opens is cancelled at once, and the tool
+  or command waiting on it carries on as if declined.
+- **No Playwright or MCP yet.** pi has no MCP support, so the browser checks an opencode agent makes
+  through a Playwright MCP server are not available. Tracked in
+  [#86](https://github.com/edkief/ralph/issues/86).
+- **Tokens as pi counts them.** `input` leaves out what the provider served from its cache (shown
+  as cache reads), and thinking tokens are counted in `output`, since pi reports no separate figure.
+  pi asks the server for `usage` in the stream (`stream_options.include_usage`); a server that sends
+  none counts as zero tokens, so check that yours does if the token figures read zero.
+- **Retries.** pi retries a failing provider call three times on its own, waiting 2, 4 and 8 seconds.
+  A turn that fails with the error those retries were for is a provider error, like a retry storm: the
+  loop backs off before the next iteration.
+- **Wrap-up.** A steered wrap-up prompt reaches the model after the tool that is running ends, so a
+  command stuck for good is not steered out of: that is the inactivity wrap-up, which interrupts first.
+- **Subagents** do not exist in pi.
 
 ## Configuration
 
@@ -576,7 +641,7 @@ See `templates/ralph.config.json` for a complete file.
 
 ```jsonc
 {
-  "harness": "opencode",           // opencode | pi (not yet available); see Harnesses
+  "harness": "opencode",           // opencode | pi (experimental); see Harnesses
   "model": "ollama/qwen3-coder",   // provider/model, as the harness names it
   "ralphDir": ".ralph",            // project folder; omit to detect .ralph/ (or a legacy .agent/)
   "maxIterations": 20,
@@ -730,7 +795,8 @@ inference time; the tab says how many turns that is.
 ## How it works
 
 With the opencode harness, Ralph spawns `opencode serve` (or attaches to one with `server.url`),
-then per iteration:
+then per iteration (with pi, a `pi --mode rpc` process per session takes the place of the server, and
+the same steps run over it):
 
 1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
 2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.

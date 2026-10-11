@@ -20,7 +20,7 @@ import { ExitCode } from './exit.js';
 import type { Config } from './config/schema.js';
 import type { AgentHarness } from './harness/types.js';
 
-const HELP = `ralph — long-running agent loop for coding agents (opencode; pi is coming)
+const HELP = `ralph — long-running agent loop for coding agents (opencode, or pi experimentally)
 
 Usage:
   ralph [run] [options]     Run the loop until the backlog is done
