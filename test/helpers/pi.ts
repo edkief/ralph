@@ -8,6 +8,8 @@ const fakePath = fileURLToPath(new URL('./fake-pi.mjs', import.meta.url));
 export interface FakePiOptions {
   /** Recorded sessions (test/fixtures/pi/<name>.jsonl) to play, in order; see fake-pi.mjs. */
   captures?: string[];
+  /** Segments to drop from the start of the captures: a recording's set-up turns. */
+  skip?: number;
   scale?: number;
   version?: string;
   models?: Array<{ provider: string; id: string }>;

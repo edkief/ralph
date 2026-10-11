@@ -22,8 +22,6 @@ export interface SessionOptions {
   /** Called when the session has been quiet for `idleMs`. */
   onIdle: (session: PiSession) => void;
   idleMs: number;
-  graceMs?: number;
-  rerunWaitMs?: number;
 }
 
 /**
@@ -33,7 +31,6 @@ export interface SessionOptions {
  */
 export class PiSession {
   private readonly translator: PiTranslator;
-  private settleTimer: NodeJS.Timeout | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private compactionWaiters: Array<() => void> = [];
   /** The ids of the gate requests put to Ralph and not yet answered: pi's tool calls wait on them. */
@@ -48,10 +45,7 @@ export class PiSession {
     private readonly process: PiProcess,
     private readonly options: SessionOptions,
   ) {
-    this.translator = new PiTranslator(id, {
-      ...(options.graceMs !== undefined ? { graceMs: options.graceMs } : {}),
-      ...(options.rerunWaitMs !== undefined ? { rerunWaitMs: options.rerunWaitMs } : {}),
-    });
+    this.translator = new PiTranslator(id);
     process.onFrame((frame) => this.receive(frame));
     process.onExit((exit) => this.lost(exit));
     this.armIdle();
@@ -118,7 +112,6 @@ export class PiSession {
   async stop(): Promise<void> {
     this.stopping = true;
     this.cancelIdle();
-    clearTimeout(this.settleTimer);
     this.gates.clear();
     await this.process.stop();
   }
@@ -169,7 +162,7 @@ export class PiSession {
       this.compactionWaiters = [];
       for (const wake of waiters) wake();
     }
-    this.armSettle();
+    if (!this.translator.running) this.armIdle();
     this.cancelGatesOfAnEndedTurn();
   }
 
@@ -206,23 +199,7 @@ export class PiSession {
     this.process.write({ type: 'extension_ui_response', id: request.id, cancelled: true });
   }
 
-  private armSettle(): void {
-    clearTimeout(this.settleTimer);
-    this.settleTimer = undefined;
-    const delay = this.translator.settleDelay();
-    if (delay !== undefined) {
-      this.settleTimer = setTimeout(() => {
-        this.settleTimer = undefined;
-        this.publishAll(this.translator.settle());
-        this.cancelGatesOfAnEndedTurn();
-        this.armIdle();
-      }, delay);
-    }
-    if (!this.translator.running) this.armIdle();
-  }
-
   private lost(exit: PiExit): void {
-    clearTimeout(this.settleTimer);
     this.cancelIdle();
     this.gates.clear();
     const wasRunning = this.running;

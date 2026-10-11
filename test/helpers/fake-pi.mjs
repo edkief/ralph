@@ -3,6 +3,8 @@
 // Configured by the FAKE_PI environment variable (JSON):
 //   captures   names of recorded sessions, played in order: a command that starts a segment (prompt,
 //              steer, abort, compact, extension_ui_response) plays the next recorded segment for that command
+//   skip       segments to drop from the start of the captures: a recording's set-up turns, such as the turn the
+//              overflow sessions open with to give pi a history to compact
 //   scale      factor on the recorded delays (default 0.02: a 6 s tool run takes 120 ms)
 //   log        file the fake appends what it was run with and every command it received to
 //   version    what `--version` prints (default 1.1.0)
@@ -84,7 +86,7 @@ function segmentsOf(records) {
   return segments;
 }
 
-const segments = (cfg.captures ?? ['tool-turn']).flatMap((name) => segmentsOf(read(name)));
+const segments = (cfg.captures ?? ['tool-turn']).flatMap((name) => segmentsOf(read(name))).slice(cfg.skip ?? 0);
 
 /** What a client's answer to a gate request says: allowed, blocked (with Ralph's reason) or cancelled. */
 function gateAnswer(response) {
@@ -111,8 +113,9 @@ const templates = read('models');
 const response = (command) => templates.find((r) => r.dir === 'out' && r.line.command === command)?.line;
 const modelTemplate = response('get_available_models').data.models[0];
 const stateTemplate = read('tool-turn').find((r) => r.dir === 'out' && r.line.command === 'get_state').line.data;
-const skillTemplate = response('get_commands').data.commands[0];
-const extensionTemplate = read('gate-allow').find((r) => r.dir === 'out' && r.line.command === 'get_commands').line.data.commands[0];
+// pi 1.x lists its built-in extensions' commands (llama, mcp) too: the templates are picked by kind.
+const skillTemplate = response('get_commands').data.commands.find((command) => command.source === 'skill');
+const extensionTemplate = read('gate-allow').find((r) => r.dir === 'out' && r.line.command === 'get_commands').line.data.commands.find((command) => command.name === 'ralph-gate');
 
 const scale = cfg.scale ?? 0.02;
 const sessionDir = flag('--session-dir') ?? process.cwd();
@@ -160,7 +163,8 @@ function play(segment, id, command, replacing) {
         openGates.add(value.id);
       }
       if (value.type === 'agent_start') streaming = true;
-      if (value.type === 'agent_end') streaming = false;
+      // pi 1.x runs until it settles: a retry or an overflow recovery may follow agent_end.
+      if (value.type === 'agent_settled') streaming = false;
       out(value);
       if (cfg.exitAfter && value.type === cfg.exitAfter) process.exit(7);
       if (cfg.stallAfter && value.type === cfg.stallAfter) {

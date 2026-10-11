@@ -23,10 +23,6 @@ export interface PiHarnessOptions {
   logger: Logger;
   /** See `IDLE_MS`. */
   idleMs?: number;
-  /** See `END_GRACE_MS` in translate.ts. */
-  graceMs?: number;
-  /** See `RERUN_WAIT_MS` in translate.ts. */
-  rerunWaitMs?: number;
 }
 
 /**
@@ -183,8 +179,6 @@ export class PiHarness implements AgentHarness {
           void idle.stop();
         },
         idleMs: this.options.idleMs ?? IDLE_MS,
-        ...(this.options.graceMs !== undefined ? { graceMs: this.options.graceMs } : {}),
-        ...(this.options.rerunWaitMs !== undefined ? { rerunWaitMs: this.options.rerunWaitMs } : {}),
       });
     } catch (cause) {
       await process.stop().catch(() => undefined);

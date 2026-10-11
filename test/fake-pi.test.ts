@@ -90,12 +90,12 @@ describe('fake pi', () => {
         { id: 'p', type: 'prompt', message: 'slow' },
         { id: 's', type: 'steer', message: 'wrap up' },
       ],
-      (line) => line.type === 'agent_end',
+      (line) => line.type === 'agent_settled',
     );
     const order = lines.map((line) => line.type);
     expect(order.indexOf('response')).toBeLessThan(order.indexOf('tool_execution_start'));
     expect(order.filter((type) => type === 'response')).toHaveLength(2);
-    expect(order.at(-1)).toBe('agent_end');
+    expect(order.at(-1)).toBe('agent_settled');
   });
 });
 

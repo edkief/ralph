@@ -64,6 +64,9 @@ export const MessageUpdateSchema = z.looseObject({
     content: z.string().optional(),
     partial: MessageSchema.optional(),
     toolCall: ToolCallBlockSchema.optional(),
+    /** pi 1.x names the call on `toolcall_start` itself, and sends no `partial`. */
+    id: z.string().optional(),
+    toolName: z.string().optional(),
   }),
 });
 
@@ -85,6 +88,9 @@ export const ToolEndSchema = z.looseObject({
 });
 
 export const AgentEndSchema = z.looseObject({ messages: z.array(MessageSchema).optional() });
+
+/** pi 1.1's end of a run: no retry or recovery follows. `aborted` when it was stopped. */
+export const SettledSchema = z.looseObject({ aborted: z.boolean().optional() });
 
 export const CompactionEndSchema = z.looseObject({
   reason: z.string().optional(),
