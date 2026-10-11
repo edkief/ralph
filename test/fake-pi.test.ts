@@ -55,7 +55,8 @@ describe('fake pi', () => {
     const lines = await drive(
       { captures: ['tool-turn'] },
       [{ id: 'mine', type: 'prompt', message: 'go' }],
-      (line) => line.type === 'agent_end',
+      // pi 1.x ends a run with agent_settled, a moment after agent_end.
+      (line) => line.type === 'agent_settled',
     );
     const response = lines.find((line) => line.type === 'response');
     expect(response).toMatchObject({ id: 'mine', command: 'prompt', success: true });
@@ -101,7 +102,7 @@ describe('fake pi', () => {
 
 describe('fake pi with the permission gate', () => {
   const GATE = resolve(__dirname, '../extensions/ralph-gate.mjs');
-  const ended = (line: Line) => line.type === 'agent_end';
+  const ended = (line: Line) => line.type === 'agent_settled';
 
   /** Wait until the fake has put a gate request, then answer it with `body`. */
   const answerGate = (body: Line) => async (lines: Line[]) => {
