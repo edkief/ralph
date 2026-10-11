@@ -66,7 +66,7 @@ export class PiHarness implements AgentHarness {
   }
 
   preflight(config: Config): Promise<CheckResult[]> {
-    return piChecks(config, this.options);
+    return piChecks(config, { cwd: this.options.cwd, logger: this.options.logger });
   }
 
   async createSession(title: string): Promise<string> {
