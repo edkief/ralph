@@ -5,7 +5,7 @@ import type { FakePiOptions } from './helpers/pi.js';
 import { piRig, quietLogger, type PiRig } from './helpers/pi-harness.js';
 
 /**
- * The loop's own turn, over a pi harness over a fake pi that replays sessions recorded from pi 0.73.1: what
+ * The loop's own turn, over a pi harness over a fake pi that replays sessions recorded from pi 1.1.0: what
  * the watchdog, the wrap-up, the retry count and the overflow check do with pi's events.
  */
 const rigs: PiRig[] = [];
@@ -103,6 +103,9 @@ describe('the inactivity watchdog', () => {
   });
 });
 
+/** The error the stub's 500 reaches the agent as. */
+const OVERLOADED = '500: {"message":"stub overloaded","type":"server_error"}';
+
 describe('provider retries', () => {
   it('counts the retries pi makes, reports the error, and treats giving up as a provider error', async () => {
     const attempts: Array<[number, string]> = [];
@@ -112,13 +115,14 @@ describe('provider retries', () => {
       { hooks: { onRetry: (attempt, message) => attempts.push([attempt, message]) } },
     );
 
+    // pi 1.x gives the provider's error as `<status>: <its error object>`.
     expect(attempts).toEqual([
-      [1, '500 stub overloaded'],
-      [2, '500 stub overloaded'],
-      [3, '500 stub overloaded'],
+      [1, OVERLOADED],
+      [2, OVERLOADED],
+      [3, OVERLOADED],
     ]);
-    expect(result.lastProviderError).toBe('500 stub overloaded');
-    expect(result.error).toBe('500 stub overloaded');
+    expect(result.lastProviderError).toBe(OVERLOADED);
+    expect(result.error).toBe(OVERLOADED);
     // The orchestrator backs off on this status.
     expect(result.status).toBe('provider-error');
   });
@@ -131,24 +135,32 @@ describe('provider retries', () => {
 
     expect(result.status).toBe('provider-error');
     expect(result.trip).toBe('retry-storm');
-    expect(result.lastProviderError).toBe('500 stub overloaded');
+    expect(result.lastProviderError).toBe(OVERLOADED);
     expect(sent(made, 'abort')).toHaveLength(1);
   });
 });
 
 describe('context overflow', () => {
   it('reports an overflow pi could not recover from, so the loop can start the task over smaller', async () => {
-    const { result } = await iterate({ captures: ['overflow'] });
+    // The recording opens with a turn that gives pi a history to compact.
+    const { result } = await iterate({ captures: ['overflow'], skip: 1 });
 
     expect(result.status).toBe('context-overflow');
     expect(result.error).toMatch(/maximum context length is 4096 tokens/);
   });
 
   it('counts a compaction pi recovered an overflow with, and carries on to the end of the turn', async () => {
-    const { result } = await iterate({ captures: ['overflow-recovered'] });
+    const { result } = await iterate({ captures: ['overflow-recovered'], skip: 1 });
 
     expect(result.compactions).toBe(1);
     expect(result.status).toBe('complete');
     expect(result.error).toBeUndefined();
+  });
+
+  it('reports an overflow pi had nothing to compact for as an overflow', async () => {
+    const { result } = await iterate({ captures: ['overflow-nothing-to-compact'] });
+
+    expect(result.status).toBe('context-overflow');
+    expect(result.error).toMatch(/maximum context length is 4096 tokens/);
   });
 });

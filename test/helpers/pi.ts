@@ -8,6 +8,8 @@ const fakePath = fileURLToPath(new URL('./fake-pi.mjs', import.meta.url));
 export interface FakePiOptions {
   /** Recorded sessions (test/fixtures/pi/<name>.jsonl) to play, in order; see fake-pi.mjs. */
   captures?: string[];
+  /** Segments to drop from the start of the captures: a recording's set-up turns. */
+  skip?: number;
   scale?: number;
   version?: string;
   models?: Array<{ provider: string; id: string }>;
@@ -21,6 +23,8 @@ export interface FakePiOptions {
   gate?: 'missing' | 'missing-after-first';
   /** Text in the recorded lines to replace, e.g. the command a recorded session ran. */
   swap?: Record<string, string>;
+  /** The recordings gate answers play on from; see fake-pi.mjs. */
+  gateSessions?: string[];
 }
 
 export interface FakePi {

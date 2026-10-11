@@ -210,3 +210,16 @@ describe('permission requests in the transcript', () => {
     expect(builder.push({ ...asked, created: 1, gate: true })).toEqual([]);
   });
 });
+
+describe('calls a tool makes', () => {
+  it('shows a codemode script\'s call under the script that made it', () => {
+    const builder = new TranscriptBuilder();
+    const at = { session: 's1', created: 1 };
+    builder.push({ ...at, type: 'tool.called', id: 'call_1', name: 'codemode', input: { code: 'x' } });
+    builder.push({ ...at, type: 'tool.called', id: 'call_1/1', name: 'bash', input: { command: 'ls' }, parent: 'call_1' });
+    const [nested] = builder.push({ ...at, type: 'tool.finished', id: 'call_1/1', name: 'bash', status: 'success', parent: 'call_1' });
+    expect(nested).toMatchObject({ kind: 'tool', id: 'tool:call_1/1', parent: 'tool:call_1', status: 'success' });
+    const [own] = builder.push({ ...at, type: 'tool.finished', id: 'call_1', name: 'codemode', status: 'success' });
+    expect(own).not.toHaveProperty('parent');
+  });
+});

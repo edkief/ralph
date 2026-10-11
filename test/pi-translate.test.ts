@@ -16,12 +16,18 @@ function frames(name: string) {
     .map((record) => FrameSchema.parse(record.line));
 }
 
-/** A recorded session translated, with the end of the turn settled once nothing follows it. */
+/** A recorded session translated: pi's own `agent_settled` ends each turn. */
 function translate(name: string): HarnessEvent[] {
   const translator = new PiTranslator('s1', { now: () => 1000 });
-  const events = frames(name).flatMap((frame) => translator.push(frame));
-  if (translator.settleDelay() !== undefined) events.push(...translator.settle());
-  return events;
+  return frames(name).flatMap((frame) => translator.push(frame));
+}
+
+/**
+ * The events of the last turn of a session: the overflow sessions open with a turn that builds up a history,
+ * since pi compacts only what lies beyond the context it keeps.
+ */
+function lastTurn(events: HarnessEvent[]): HarnessEvent[] {
+  return events.slice(events.findLastIndex((event) => event.type === 'prompt.queued'));
 }
 
 const ofType = <T extends HarnessEvent['type']>(events: HarnessEvent[], type: T) =>
@@ -104,14 +110,15 @@ describe('pi translation: the end of a turn', () => {
   it('is not settled by an agent_end that retrying follows, nor does it show the attempts that fail', () => {
     const events = translate('retry');
     expect(ofType(events, 'retry')).toEqual([
-      expect.objectContaining({ attempt: 1, status: 500, error: '500 stub overloaded' }),
+      // pi 1.x gives the provider's error as `<status>: <its error object>`.
+      expect.objectContaining({ attempt: 1, status: 500, error: expect.stringMatching(/^500: .*stub overloaded/) }),
       expect.objectContaining({ attempt: 2, status: 500 }),
       expect.objectContaining({ attempt: 3, status: 500 }),
     ]);
     // The failed attempts are the retries; the execution carries the error that ended them.
     expect(ofType(events, 'step.failed')).toHaveLength(0);
     expect(ofType(events, 'execution.ended')).toEqual([
-      expect.objectContaining({ outcome: 'failed', error: '500 stub overloaded' }),
+      expect.objectContaining({ outcome: 'failed', error: expect.stringMatching(/^500: .*stub overloaded/) }),
     ]);
   });
 
@@ -123,7 +130,7 @@ describe('pi translation: the end of a turn', () => {
   });
 
   it('settles an overflow that pi could not recover from as failed, with the provider\'s own error', () => {
-    const events = translate('overflow');
+    const events = lastTurn(translate('overflow'));
     const [ended] = ofType(events, 'execution.ended');
     expect(ended).toMatchObject({ outcome: 'failed' });
     expect(isContextOverflow(ended?.error ?? '')).toBe(true);
@@ -134,7 +141,7 @@ describe('pi translation: the end of a turn', () => {
   });
 
   it('carries on through a compaction that recovers an overflow, and ends once', () => {
-    const events = translate('overflow-recovered');
+    const events = lastTurn(translate('overflow-recovered'));
     expect(types(events).filter((type) => type.startsWith('compaction'))).toEqual(['compaction.started', 'compaction.ended']);
     expect(ofType(events, 'step.failed')).toHaveLength(1);
     expect(ofType(events, 'execution.ended')).toEqual([expect.objectContaining({ outcome: 'succeeded' })]);
@@ -148,6 +155,14 @@ describe('pi translation: the end of a turn', () => {
     expect(ofType(events, 'step.ended')).toHaveLength(1);
     // The tool was cut short.
     expect(ofType(events, 'tool.finished')[0]).toMatchObject({ status: 'error' });
+  });
+
+  it('settles an overflow pi had nothing to compact for as failed, with the provider\'s own error', () => {
+    const events = translate('overflow-nothing-to-compact');
+    const [ended] = ofType(events, 'execution.ended');
+    expect(ended).toMatchObject({ outcome: 'failed' });
+    expect(isContextOverflow(ended?.error ?? '')).toBe(true);
+    expect(ofType(events, 'compaction.started')).toHaveLength(0);
   });
 
   it('does not end a turn for a compaction that runs after it, and counts that compaction', () => {
@@ -166,31 +181,36 @@ describe('pi translation: the end of a turn', () => {
 describe('pi translation: settling', () => {
   const frame = (value: Record<string, unknown>) => FrameSchema.parse(value);
 
-  it('waits for what may follow an erroring agent_end, and for nothing after a clean one', () => {
-    const translator = new PiTranslator('s', { graceMs: 123 });
-    translator.push(frame({ type: 'agent_start' }));
-    translator.push(frame({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'boom' } }));
-    expect(translator.push(frame({ type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error', errorMessage: 'boom' }] }))).toEqual([]);
-    expect(translator.running).toBe(true);
-    expect(translator.settleDelay()).toBe(123);
-
-    const clean = new PiTranslator('s');
-    clean.push(frame({ type: 'agent_start' }));
-    const events = clean.push(frame({ type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'stop' }] }));
-    expect(types(events)).toEqual(['execution.ended']);
-    expect(clean.running).toBe(false);
-    expect(clean.settleDelay()).toBeUndefined();
+  it('does not end the execution at agent_end, whatever it carries, but at agent_settled', () => {
+    for (const stopReason of ['error', 'stop']) {
+      const translator = new PiTranslator('s');
+      translator.push(frame({ type: 'agent_start' }));
+      expect(translator.push(frame({ type: 'agent_end', messages: [{ role: 'assistant', stopReason, errorMessage: 'boom' }] }))).toEqual([]);
+      expect(translator.running).toBe(true);
+      const events = translator.push(frame({ type: 'agent_settled', aborted: false }));
+      expect(events).toEqual([expect.objectContaining({ type: 'execution.ended', outcome: stopReason === 'error' ? 'failed' : 'succeeded' })]);
+      expect(translator.running).toBe(false);
+    }
   });
 
-  it('waits out a retry delay and then for the run that follows it', () => {
-    const translator = new PiTranslator('s', { rerunWaitMs: 1000 });
+  it('keeps running through a retry delay, until pi settles', () => {
+    const translator = new PiTranslator('s');
     translator.push(frame({ type: 'agent_start' }));
     translator.push(frame({ type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error', errorMessage: '503' }] }));
     translator.push(frame({ type: 'auto_retry_start', attempt: 1, delayMs: 2000, errorMessage: '503 unavailable' }));
-    expect(translator.settleDelay()).toBe(3000);
-    translator.push(frame({ type: 'agent_start' }));
-    expect(translator.settleDelay()).toBeUndefined();
+    expect(translator.push(frame({ type: 'entry_appended', entry: { type: 'context_edit' } }))).toEqual([]);
     expect(translator.running).toBe(true);
+  });
+
+  it('takes a settle pi marks aborted as an aborted execution', () => {
+    const translator = new PiTranslator('s');
+    translator.push(frame({ type: 'agent_start' }));
+    translator.push(frame({ type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'stop' }] }));
+    expect(translator.push(frame({ type: 'agent_settled', aborted: true }))).toEqual([expect.objectContaining({ type: 'execution.ended', outcome: 'aborted' })]);
+  });
+
+  it('ignores a settle with no run under way', () => {
+    expect(new PiTranslator('s').push(frame({ type: 'agent_settled', aborted: false }))).toEqual([]);
   });
 
   it('ends a running turn as failed when the process dies', () => {
@@ -213,5 +233,16 @@ describe('pi translation: settling', () => {
       { type: 'message_end', message: { role: 'assistant', stopReason: 'stop', usage: { input: 1, output: 2, cost: { total: 0.5 } } } },
     ].flatMap((value) => translator.push(frame(value)));
     expect(ofType(events, 'step.ended')[0]).toMatchObject({ files: ['src/a.ts'], usage: { cost: 0.5 } });
+  });
+});
+
+describe('pi translation: calls a tool makes', () => {
+  it('names the call a codemode script made it from, and counts it as a call of its own', () => {
+    const events = translate('codemode-nested-allow');
+    expect(ofType(events, 'tool.called').map((event) => [event.id, event.name, event.parent])).toEqual([
+      ['call_1', 'codemode', undefined],
+      ['call_1/1', 'bash', 'call_1'],
+    ]);
+    expect(ofType(events, 'tool.finished').find((event) => event.id === 'call_1/1')).toMatchObject({ parent: 'call_1', name: 'bash' });
   });
 });

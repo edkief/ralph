@@ -225,6 +225,13 @@ describe('ralphDir resolution', () => {
   });
 });
 
+/** The pi settings a file that names none of them gets. */
+const PI_DEFAULTS = {
+  trustProject: true,
+  browser: 'skill',
+  playwrightMcp: { command: 'npx', args: ['-y', '@playwright/mcp@0.0.83', '--headless', '--browser', 'chromium', '--output-dir', '.playwright-mcp'] },
+};
+
 describe('harness selection', () => {
   function load(root: string, options: { env?: NodeJS.ProcessEnv; overrides?: Record<string, unknown> } = {}) {
     const warnings: string[] = [];
@@ -257,7 +264,7 @@ describe('harness selection', () => {
     expect(config.harness).toBe('opencode');
     expect(config.agent).toBe('build');
     expect(config.server).toMatchObject({ url: 'http://opencode:4096', password: 'secret', port: 4096 });
-    expect(config.pi).toEqual({ binary: 'pi', args: [] });
+    expect(config.pi).toEqual({ binary: 'pi', args: [], ...PI_DEFAULTS });
     expect(warnings).toEqual([]);
   });
 
@@ -284,7 +291,7 @@ describe('harness selection', () => {
 
     const { config, warnings } = load(root, { env: { RALPH_PI_THINKING: 'high' } });
 
-    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high' });
+    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high', ...PI_DEFAULTS });
     expect(load(root, { env: { RALPH_PI_BINARY: 'pi-next' } }).config.pi.binary).toBe('pi-next');
     expect(load(root, { env: { RALPH_PI_THINKING: '' } }).config.pi.thinking).toBe('low');
     expect(warnings).toEqual([]);

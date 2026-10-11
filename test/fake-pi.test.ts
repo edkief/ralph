@@ -42,20 +42,21 @@ const types = (name: string) =>
     .map((record) => record.line.type);
 
 describe('fake pi', () => {
-  it('prints a version for --version, on stderr as pi does', async () => {
-    const fake = fakePi({ version: '0.99.0' });
-    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  it('prints a version for --version, on stdout as pi 1.x does', async () => {
+    const fake = fakePi({ version: '1.4.2' });
+    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let text = '';
-    child.stderr.on('data', (chunk) => (text += chunk));
+    child.stdout.on('data', (chunk) => (text += chunk));
     await new Promise((done) => child.on('exit', done));
-    expect(text.trim()).toBe('0.99.0');
+    expect(text.trim()).toBe('1.4.2');
   });
 
   it('plays a recorded turn: the recorded events, in order, with the response carrying the command id', async () => {
     const lines = await drive(
       { captures: ['tool-turn'] },
       [{ id: 'mine', type: 'prompt', message: 'go' }],
-      (line) => line.type === 'agent_end',
+      // pi 1.x ends a run with agent_settled, a moment after agent_end.
+      (line) => line.type === 'agent_settled',
     );
     const response = lines.find((line) => line.type === 'response');
     expect(response).toMatchObject({ id: 'mine', command: 'prompt', success: true });
@@ -90,18 +91,18 @@ describe('fake pi', () => {
         { id: 'p', type: 'prompt', message: 'slow' },
         { id: 's', type: 'steer', message: 'wrap up' },
       ],
-      (line) => line.type === 'agent_end',
+      (line) => line.type === 'agent_settled',
     );
     const order = lines.map((line) => line.type);
     expect(order.indexOf('response')).toBeLessThan(order.indexOf('tool_execution_start'));
     expect(order.filter((type) => type === 'response')).toHaveLength(2);
-    expect(order.at(-1)).toBe('agent_end');
+    expect(order.at(-1)).toBe('agent_settled');
   });
 });
 
 describe('fake pi with the permission gate', () => {
   const GATE = resolve(__dirname, '../extensions/ralph-gate.mjs');
-  const ended = (line: Line) => line.type === 'agent_end';
+  const ended = (line: Line) => line.type === 'agent_settled';
 
   /** Wait until the fake has put a gate request, then answer it with `body`. */
   const answerGate = (body: Line) => async (lines: Line[]) => {

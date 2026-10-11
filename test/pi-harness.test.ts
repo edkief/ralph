@@ -61,9 +61,11 @@ describe('PiHarness: sessions', () => {
     expect(starts[0]).toEqual([
       '--mode', 'rpc',
       '--session-dir', resolve(made.projectRoot, '.ralph/history/pi'),
-      '--extension', GATE_EXTENSION,
+      '--approve',
       '--thinking', 'low',
       '--provider', 'stub',
+      // Last: an extension that runs after the gate could change a call it allowed.
+      '--extension', GATE_EXTENSION,
     ]);
     expect(new Set(made.fake.processes().map((p) => p.pid)).size).toBe(2);
     expect(made.fake.processes()[0]?.cwd).toBe(made.projectRoot);

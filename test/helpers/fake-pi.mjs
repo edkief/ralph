@@ -3,9 +3,11 @@
 // Configured by the FAKE_PI environment variable (JSON):
 //   captures   names of recorded sessions, played in order: a command that starts a segment (prompt,
 //              steer, abort, compact, extension_ui_response) plays the next recorded segment for that command
+//   skip       segments to drop from the start of the captures: a recording's set-up turns, such as the turn the
+//              overflow sessions open with to give pi a history to compact
 //   scale      factor on the recorded delays (default 0.02: a 6 s tool run takes 120 ms)
 //   log        file the fake appends what it was run with and every command it received to
-//   version    what `--version` prints (default 0.73.1)
+//   version    what `--version` prints (default 1.1.0)
 //   models     [{provider, id}] get_available_models lists (default stub/stub-model)
 //   skills     names get_commands lists as skills
 //   stallAfter an event type: once a segment has played an event of it, the rest of that segment is dropped
@@ -17,6 +19,9 @@
 //              processes started after the first one
 //   swap       {recorded text: new text}: replaces text in the lines played, e.g. the command a gate-allow
 //              session ran with the one a test wants judged
+//   gateSessions  the recordings gate answers play on from (default gate-allow, gate-block, gate-cancelled,
+//              gate-write); the nth answer since the last prompt plays a recording's nth continuation, as a
+//              codemode script's nested call puts a second request after the first
 //
 // The gate (extensions/ralph-gate.mjs): when `-e <.../ralph-gate.mjs>` is given and the file exists, get_commands
 // lists its command, as pi does. A session recorded with the gate (gate-allow, gate-block, gate-cancelled,
@@ -40,8 +45,8 @@ const log = (entry) => cfg.log && appendFileSync(cfg.log, `${JSON.stringify(entr
 const extensionArgs = (args) => args.flatMap((arg, at) => ((arg === '-e' || arg === '--extension') && args[at + 1] ? [args[at + 1]] : []));
 
 if (argv.includes('--version')) {
-  // pi writes its version to stderr.
-  console.error(cfg.version ?? '0.73.1');
+  // pi 1.x writes its version to stdout (0.x wrote it to stderr).
+  console.log(cfg.version ?? '1.1.0');
   process.exit(0);
 }
 
@@ -57,6 +62,8 @@ const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow
 /** The extension that puts every tool call to Ralph, when it is on the command line and exists. */
 const gatePath = extensionArgs(argv).find((path) => path.endsWith('ralph-gate.mjs') && existsSync(path));
 const gateLoaded = gatePath !== undefined && cfg.gate !== 'missing' && !(cfg.gate === 'missing-after-first' && earlierStarts > 0);
+/** Ralph's Playwright extension registers its server, and then its command, only when told which server to start. */
+const playwrightLoaded = extensionArgs(argv).some((path) => path.endsWith('ralph-playwright.mjs') && existsSync(path)) && Boolean(process.env.RALPH_PLAYWRIGHT_MCP);
 const GATE_TITLE = 'ralph:gate';
 
 function read(name) {
@@ -84,7 +91,7 @@ function segmentsOf(records) {
   return segments;
 }
 
-const segments = (cfg.captures ?? ['tool-turn']).flatMap((name) => segmentsOf(read(name)));
+const segments = (cfg.captures ?? ['tool-turn']).flatMap((name) => segmentsOf(read(name))).slice(cfg.skip ?? 0);
 
 /** What a client's answer to a gate request says: allowed, blocked (with Ralph's reason) or cancelled. */
 function gateAnswer(response) {
@@ -99,20 +106,23 @@ function gateAnswer(response) {
 
 /** The recorded continuations of a gate request, by the kind of answer; they play as often as asked. */
 const gateContinuations = gateLoaded
-  ? ['gate-allow', 'gate-block', 'gate-cancelled', 'gate-write'].flatMap((name) =>
+  ? (cfg.gateSessions ?? ['gate-allow', 'gate-block', 'gate-cancelled', 'gate-write']).flatMap((name) =>
       segmentsOf(read(name))
         .filter((segment) => segment.trigger === 'extension_ui_response')
-        .map((segment) => ({ ...segment, ...gateAnswer(segment.answer), recorded: gateAnswer(segment.answer) })),
+        .map((segment, position) => ({ ...segment, position, ...gateAnswer(segment.answer), recorded: gateAnswer(segment.answer) })),
     )
   : [];
 /** The ids of the gate requests written and not yet answered. */
 const openGates = new Set();
+/** Gate requests answered since the last prompt. */
+let gatesAnswered = 0;
 const templates = read('models');
 const response = (command) => templates.find((r) => r.dir === 'out' && r.line.command === command)?.line;
 const modelTemplate = response('get_available_models').data.models[0];
 const stateTemplate = read('tool-turn').find((r) => r.dir === 'out' && r.line.command === 'get_state').line.data;
-const skillTemplate = response('get_commands').data.commands[0];
-const extensionTemplate = read('gate-allow').find((r) => r.dir === 'out' && r.line.command === 'get_commands').line.data.commands[0];
+// pi 1.x lists its built-in extensions' commands (llama, mcp) too: the templates are picked by kind.
+const skillTemplate = response('get_commands').data.commands.find((command) => command.source === 'skill');
+const extensionTemplate = read('gate-allow').find((r) => r.dir === 'out' && r.line.command === 'get_commands').line.data.commands.find((command) => command.name === 'ralph-gate');
 
 const scale = cfg.scale ?? 0.02;
 const sessionDir = flag('--session-dir') ?? process.cwd();
@@ -160,7 +170,8 @@ function play(segment, id, command, replacing) {
         openGates.add(value.id);
       }
       if (value.type === 'agent_start') streaming = true;
-      if (value.type === 'agent_end') streaming = false;
+      // pi 1.x runs until it settles: a retry or an overflow recovery may follow agent_end.
+      if (value.type === 'agent_settled') streaming = false;
       out(value);
       if (cfg.exitAfter && value.type === cfg.exitAfter) process.exit(7);
       if (cfg.stallAfter && value.type === cfg.stallAfter) {
@@ -183,6 +194,7 @@ function handle(command) {
 
   if (SEGMENT_STARTERS.has(type)) {
     if (type === 'prompt' || type === 'steer') touchSession();
+    if (type === 'prompt') gatesAnswered = 0;
     if (type === 'prompt' && streaming) {
       if (!command.streamingBehavior) return reply(id, type, false, { error: 'Agent is already processing. Specify streamingBehavior to queue the message.' });
       // Queued behind the turn under way; pi would run it after that, which no recording covers.
@@ -190,7 +202,8 @@ function handle(command) {
     }
     if (type === 'extension_ui_response' && openGates.delete(command.id)) {
       const answer = gateAnswer(command);
-      const continuation = gateContinuations.find((candidate) => candidate.kind === answer.kind);
+      const position = gatesAnswered++;
+      const continuation = gateContinuations.find((candidate) => candidate.kind === answer.kind && candidate.position === position);
       if (!continuation) return;
       // The reason the client gave, in place of the one that was recorded.
       const replacing = answer.kind === 'block' && continuation.recorded.reason ? { from: continuation.recorded.reason, to: answer.reason } : undefined;
@@ -216,6 +229,7 @@ function handle(command) {
         data: {
           commands: [
             ...(gateLoaded ? [{ ...extensionTemplate, sourceInfo: { ...extensionTemplate.sourceInfo, path: gatePath } }] : []),
+            ...(playwrightLoaded ? [{ ...extensionTemplate, name: 'ralph-playwright', description: 'Playwright, through MCP, for the agent (registered by Ralph)' }] : []),
             ...(cfg.skills ?? []).map((name) => ({ ...skillTemplate, name: `skill:${name}` })),
           ],
         },

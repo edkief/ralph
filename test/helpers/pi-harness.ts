@@ -32,7 +32,7 @@ export async function piRig(
   const { pi: piOverrides, ...rest } = overrides as { pi?: Record<string, unknown> };
   const config = ConfigSchema.parse({ projectRoot, ...rest, harness: 'pi', pi: { binary: fake.binary, ...piOverrides } });
   // Short waits, so a test does not sit through the real ones.
-  const harness = new PiHarness(config, { cwd: projectRoot, logger: quietLogger, graceMs: 30, rerunWaitMs: 400, ...harnessOptions });
+  const harness = new PiHarness(config, { cwd: projectRoot, logger: quietLogger, ...harnessOptions });
 
   const events: HarnessEvent[] = [];
   const controller = new AbortController();

@@ -108,6 +108,7 @@ export class TranscriptBuilder {
           kind: 'tool',
           name,
           status: current?.kind === 'tool' ? current.status : 'running',
+          ...(event.parent ? { parent: `tool:${event.parent}` } : {}),
           ...(event.input ? { input: clipInput(event.input) } : {}),
         });
       }
@@ -115,7 +116,7 @@ export class TranscriptBuilder {
         const id = event.id ? `tool:${event.id}` : this.nextId('tool');
         const current = this.entries.get(id);
         return this.add({
-          ...(current?.kind === 'tool' ? current : { name: event.name ?? 'tool' }),
+          ...(current?.kind === 'tool' ? current : { name: event.name ?? 'tool', ...(event.parent ? { parent: `tool:${event.parent}` } : {}) }),
           ...base,
           id,
           kind: 'tool',

@@ -2,6 +2,7 @@ import type { EventOf, HarnessEvent, StepUsage } from '../harness/events.js';
 import {
   AgentEndSchema,
   CompactionEndSchema,
+  SettledSchema,
   MessageFrameSchema,
   MessageUpdateSchema,
   RetryEndSchema,
@@ -13,48 +14,25 @@ import {
   type PiMessage,
 } from './frames.js';
 
-/** How long after an erroring `agent_end` to wait for the retry or the compaction pi may start next. */
-export const END_GRACE_MS = 400;
-/** How long to wait for the run pi starts again after a retry delay, or after a compaction that will retry. */
-export const RERUN_WAIT_MS = 5_000;
-
 const EXIT_LINE = /Command exited with code (\d+)\s*$/;
 
 export interface TranslatorOptions {
   /** Epoch milliseconds, for events; injectable for tests. */
   now?: () => number;
-  /** See `END_GRACE_MS`. */
-  graceMs?: number;
-  /** See `RERUN_WAIT_MS`. */
-  rerunWaitMs?: number;
 }
-
-type Ending =
-  /** `agent_end` with an error: a retry or a compaction may follow it at once. */
-  | { phase: 'grace' }
-  /** `auto_retry_start`: pi waits out the delay, then runs again. */
-  | { phase: 'retrying'; delayMs: number }
-  /** A compaction is running that will run the agent again when it ends. */
-  | { phase: 'compacting' }
-  /** That compaction ended: the run has to start. */
-  | { phase: 'rerun' };
 
 /**
  * One pi session's frames, translated into Ralph's event vocabulary.
  *
- * pi has no event for the end of a turn. `agent_end` ends one attempt: a failed attempt may be followed,
- * within a millisecond or two, by `auto_retry_start` or by `compaction_start` (an overflow that is recovered
- * by compacting and running again), and the attempts after that are runs of their own. So a turn is over when
- * nothing follows its last `agent_end`. A caller feeds frames to `push`, and after each call asks `settleDelay`
- * how long to wait before calling `settle`: `undefined` means nothing is pending.
+ * `agent_end` ends one attempt: a failed attempt may be followed by `auto_retry_start` or by `compaction_start`
+ * (an overflow that is recovered by compacting and running again), and the attempts after that are runs of their
+ * own. `agent_settled` comes once none follows, so it is what ends the execution.
  *
  * While a retry is pending the failed attempt is kept out of the events: its error is the `retry` event's, and
  * the watchdog counts retries only while nothing else shows the agent is alive.
  */
 export class PiTranslator {
   private readonly now: () => number;
-  private readonly graceMs: number;
-  private readonly rerunWaitMs: number;
   private readonly toolNames = new Map<string, string>();
   /** Files the tools wrote since the last model call ended. */
   private files = new Set<string>();
@@ -63,7 +41,8 @@ export class PiTranslator {
 
   private isRunning = false;
   private isCompacting = false;
-  private ending: Ending | undefined;
+  /** Assistant messages begun so far: with a content index, it names a block (pi 1.x sends no message timestamp on updates). */
+  private messages = 0;
   private last: Pick<PiMessage, 'stopReason' | 'errorMessage'> | undefined;
   /** A failed model call, until it is known not to be retried. */
   private heldFailure: HarnessEvent | undefined;
@@ -79,8 +58,6 @@ export class PiTranslator {
     options: TranslatorOptions = {},
   ) {
     this.now = options.now ?? Date.now;
-    this.graceMs = options.graceMs ?? END_GRACE_MS;
-    this.rerunWaitMs = options.rerunWaitMs ?? RERUN_WAIT_MS;
   }
 
   /** The agent has begun a run and its execution has not ended. */
@@ -104,27 +81,10 @@ export class PiTranslator {
     this.stopRequested = true;
   }
 
-  /** Milliseconds until `settle` is due, or nothing when the execution is not waiting to end. */
-  settleDelay(): number | undefined {
-    switch (this.ending?.phase) {
-      case 'grace':
-        return this.graceMs;
-      case 'retrying':
-        return this.ending.delayMs + this.rerunWaitMs;
-      case 'compacting':
-        return undefined;
-      case 'rerun':
-        return this.rerunWaitMs;
-      default:
-        return undefined;
-    }
-  }
-
   push(frame: PiFrame): HarnessEvent[] {
     switch (frame.type) {
       case 'agent_start': {
         this.isRunning = true;
-        this.ending = undefined;
         return this.retrying ? [] : [this.event({ type: 'activity' })];
       }
       case 'turn_start':
@@ -152,6 +112,7 @@ export class PiTranslator {
             ...(tool?.toolCallId ? { id: tool.toolCallId } : {}),
             ...(tool?.toolName ? { name: tool.toolName } : {}),
             ...(tool?.args ? { input: tool.args } : {}),
+            ...(tool?.parentToolCallId ? { parent: tool.parentToolCallId } : {}),
           }),
         ];
       }
@@ -160,9 +121,7 @@ export class PiTranslator {
       case 'compaction_start': {
         this.isCompacting = true;
         // The attempt that overflowed is a real, failed call.
-        const failure = this.takeFailure();
-        this.ending = this.ending ? { phase: 'compacting' } : undefined;
-        return [...failure, this.event({ type: 'compaction.started' })];
+        return [...this.takeFailure(), this.event({ type: 'compaction.started' })];
       }
       case 'compaction_end':
         return this.compactionEnd(frame);
@@ -170,7 +129,6 @@ export class PiTranslator {
         const retry = RetryStartSchema.safeParse(frame).data;
         this.heldFailure = undefined;
         this.retrying = true;
-        this.ending = { phase: 'retrying', delayMs: retry?.delayMs ?? 0 };
         const status = retry?.errorMessage?.match(/^(\d{3})\b/)?.[1];
         return [
           this.event({
@@ -188,12 +146,17 @@ export class PiTranslator {
           // show the watchdog an agent that is alive.
           this.finalError = end.finalError;
           this.heldFailure = undefined;
-          return this.settle();
+          return [];
         }
         return [this.event({ type: 'activity' })];
       }
       case 'agent_end':
         return this.agentEnd(frame);
+      case 'agent_settled':
+        return this.settle(undefined, SettledSchema.safeParse(frame).data?.aborted === true);
+      case 'entry_appended':
+        // pi's own record keeping, such as leaving a failed attempt out of the context: no sign of life.
+        return [];
       default:
         // tool_execution_update, queue_update, extension_error and what a later pi adds: the agent is alive.
         return [this.event({ type: 'activity' })];
@@ -201,20 +164,23 @@ export class PiTranslator {
   }
 
   /**
-   * End the execution: nothing followed the last `agent_end`. How it ended is that of the last model call;
-   * with nothing run, as when the process died, `error` says why.
+   * End the execution: pi settled, or its process died. How it ended is that of the last model call; with
+   * nothing run, as when the process died, `error` says why. `aborted` is pi's word that the run was stopped.
    */
-  settle(error?: string): HarnessEvent[] {
+  settle(error?: string, aborted = false): HarnessEvent[] {
     if (!this.isRunning) return [];
-    const failure = this.takeFailure();
-    const stop = this.last?.stopReason;
-    const message = error ?? this.finalError ?? (stop === 'error' ? (this.last?.errorMessage ?? 'the model call failed') : undefined);
+    // pi 1.x ends a call it cut short with an error ("This operation was aborted"): that is the stop, not a failure.
+    const cutShort = (this.stopRequested || aborted) && error === undefined;
+    const failure = cutShort ? [] : this.takeFailure();
+    this.heldFailure = undefined;
+    const stop = cutShort && this.last?.stopReason === 'error' ? 'aborted' : this.last?.stopReason;
+    const message = error ?? (cutShort ? undefined : this.finalError) ?? (stop === 'error' ? (this.last?.errorMessage ?? 'the model call failed') : undefined);
     // A retry cut off by the stop ends in an error of its own.
-    const stopped = this.stopRequested && message !== undefined && error === undefined;
-    const outcome: EventOf<'execution.ended'>['outcome'] = stopped ? 'aborted' : message !== undefined ? 'failed' : stop === 'aborted' ? 'aborted' : 'succeeded';
+    const stopped = cutShort && message !== undefined;
+    const outcome: EventOf<'execution.ended'>['outcome'] =
+      stopped ? 'aborted' : message !== undefined ? 'failed' : stop === 'aborted' || aborted ? 'aborted' : 'succeeded';
     this.stopRequested = false;
     this.isRunning = false;
-    this.ending = undefined;
     this.retrying = false;
     this.deferredStep = undefined;
     this.finalError = undefined;
@@ -232,31 +198,21 @@ export class PiTranslator {
     const messages = AgentEndSchema.safeParse(frame).data?.messages ?? [];
     const lastAssistant = messages.findLast((message) => message.role === 'assistant');
     if (lastAssistant) this.last = { stopReason: lastAssistant.stopReason, errorMessage: lastAssistant.errorMessage };
-    // Only an error can be followed by a retry or an overflow recovery.
-    if (this.last?.stopReason === 'error') {
-      this.ending = { phase: 'grace' };
-      return [];
-    }
-    return this.settle();
+    // A retry or an overflow recovery may follow; `agent_settled` says when none does.
+    return [];
   }
 
   private compactionEnd(frame: PiFrame): HarnessEvent[] {
     this.isCompacting = false;
     const end = CompactionEndSchema.safeParse(frame).data;
     const done = end?.result !== undefined && end.result !== null && !end.aborted;
-    const events = [done ? this.event({ type: 'compaction.ended' }) : this.event({ type: 'activity' })];
-    if (!this.ending) return events;
-    if (end?.willRetry) {
-      this.ending = { phase: 'rerun' };
-      return events;
-    }
-    // Recovery failed, or the compaction was only the threshold one after a finished turn.
-    return [...events, ...this.settle()];
+    return [done ? this.event({ type: 'compaction.ended' }) : this.event({ type: 'activity' })];
   }
 
   private messageStart(frame: PiFrame): HarnessEvent[] {
     const message = MessageFrameSchema.safeParse(frame).data?.message;
     if (message?.role !== 'assistant') return [];
+    this.messages += 1;
     const model = message.provider && message.model ? `${message.provider}/${message.model}` : message.model;
     const step = this.event({ type: 'step.started', ...(model ? { model } : {}) });
     if (this.retrying) {
@@ -271,7 +227,7 @@ export class PiTranslator {
     const inner = update?.assistantMessageEvent;
     if (!inner) return [this.event({ type: 'activity' })];
     const index = inner.contentIndex ?? 0;
-    const part = `${update.message?.timestamp ?? inner.partial?.timestamp ?? 0}:${index}`;
+    const part = `${this.messages}:${index}`;
     const block = Array.isArray(inner.partial?.content) ? (inner.partial.content[index] as { thinking?: string; text?: string } | undefined) : undefined;
 
     switch (inner.type) {
@@ -286,10 +242,12 @@ export class PiTranslator {
         return [...this.progress(), this.event({ type: 'reasoning.ended', part, ...(text ? { text } : {}) })];
       }
       case 'toolcall_start': {
-        const call = inner.partial?.content && Array.isArray(inner.partial.content) ? (inner.partial.content[index] as { id?: string; name?: string } | undefined) : undefined;
-        if (!call?.id) return [...this.progress(), this.event({ type: 'activity' })];
-        if (call.name) this.toolNames.set(call.id, call.name);
-        return [...this.progress(), this.event({ type: 'tool.started', id: call.id, ...(call.name ? { name: call.name } : {}) })];
+        const block = Array.isArray(inner.partial?.content) ? (inner.partial.content[index] as { id?: string; name?: string } | undefined) : undefined;
+        const id = inner.id ?? block?.id;
+        const name = inner.toolName ?? block?.name;
+        if (!id) return [...this.progress(), this.event({ type: 'activity' })];
+        if (name) this.toolNames.set(id, name);
+        return [...this.progress(), this.event({ type: 'tool.started', id, ...(name ? { name } : {}) })];
       }
       case 'start':
       case 'text_start':
@@ -348,6 +306,7 @@ export class PiTranslator {
       type: 'tool.finished',
       ...(id ? { id } : {}),
       ...(name ? { name } : {}),
+      ...(tool?.parentToolCallId ? { parent: tool.parentToolCallId } : {}),
       status: exit !== undefined || !tool?.isError ? 'success' : 'error',
       ...(exit !== undefined ? { exit: Number(exit) } : {}),
       ...(output ? { output } : {}),

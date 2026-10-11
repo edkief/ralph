@@ -1,21 +1,30 @@
 import { execFile } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Config } from '../config/schema.js';
 import type { CheckResult } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
+import { piArguments, piEnvironment } from './args.js';
 import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
 import { PiProcess } from './rpc.js';
 
 const run = promisify(execFile);
 
 /**
- * The pi versions whose RPC protocol this adapter was written and tested against: 0.73.1. pi is 0.x, where
- * a minor release can change events and commands, so the range stops short of the next minor. Widening it means
- * recording a session on the new version (test/fixtures/pi/capture/) and checking the fixtures still hold.
+ * The pi versions whose RPC protocol this adapter was written and tested against: 1.1.0 onwards. pi 1.x
+ * keeps its protocol within the major version, so the range stops short of 2.0. Widening it means recording
+ * a session on the new version (test/fixtures/pi/capture/) and checking the fixtures still hold.
  */
-export const PI_VERSION_RANGE = { min: [0, 73, 1], below: [0, 74, 0] } as const;
+export const PI_VERSION_RANGE = { min: [1, 1, 0], below: [2, 0, 0] } as const;
 
-export const PI_VERSION_RANGE_TEXT = '>=0.73.1 <0.74.0';
+export const PI_VERSION_RANGE_TEXT = '>=1.1.0 <2';
+
+/** pi's package. Before 1.0 it was `@mariozechner/pi-coding-agent`, now deprecated and frozen at 0.73.1. */
+export const PI_PACKAGE = '@earendil-works/pi-coding-agent';
+
+const OLD_PI_PACKAGE = '@mariozechner/pi-coding-agent';
 
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -69,7 +78,15 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
   const probed = await probe(config, options);
   if ('failure' in probed) return [...checks, { name: 'rpc', ok: false, detail: probed.failure, fatal: true }];
 
-  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills), await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI), gateCheck(probed.gate));
+  checks.push(
+    ...modelChecks(config, probed),
+    skillsCheck(probed.skills, config.pi.trustProject ? [] : untrustedSkills(options.cwd)),
+    config.pi.browser === 'mcp'
+      ? await playwrightMcpCheck(probed.playwright, config.pi.playwrightMcp.command)
+      : await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI),
+    gateCheck(probed.gate),
+    extensionsCheck(config, options.cwd),
+  );
   return checks;
 }
 
@@ -82,18 +99,28 @@ async function versionCheck(binary: string): Promise<CheckResult> {
     return {
       name: 'pi',
       ok: false,
-      detail: missing ? `\`${binary}\` is not installed or not on the PATH (npm install -g @mariozechner/pi-coding-agent)` : `\`${binary} --version\` failed: ${(cause as Error).message}`,
+      detail: missing ? `\`${binary}\` is not installed or not on the PATH (npm install -g ${PI_PACKAGE})` : `\`${binary} --version\` failed: ${(cause as Error).message}`,
       fatal: true,
     };
   }
   const version = parseVersion(output);
   if (!version) return { name: 'pi', ok: false, detail: `\`${binary} --version\` printed "${output}", which is not a version`, fatal: true };
   const text = version.join('.');
+  if (version[0] === 0) {
+    return {
+      name: 'pi',
+      ok: false,
+      detail:
+        `${text} is the old ${OLD_PI_PACKAGE}, which is deprecated; Ralph needs ${PI_VERSION_RANGE_TEXT}: ` +
+        `npm uninstall -g ${OLD_PI_PACKAGE} && npm install -g ${PI_PACKAGE}@${PI_VERSION_RANGE.min.slice(0, 2).join('.')}`,
+      fatal: true,
+    };
+  }
   if (!inVersionRange(version)) {
     return {
       name: 'pi',
       ok: false,
-      detail: `${text} is outside the versions Ralph is tested with (${PI_VERSION_RANGE_TEXT}): npm install -g @mariozechner/pi-coding-agent@${PI_VERSION_RANGE.min.join('.')}`,
+      detail: `${text} is outside the versions Ralph is tested with (${PI_VERSION_RANGE_TEXT}): npm install -g ${PI_PACKAGE}@${PI_VERSION_RANGE.min.slice(0, 2).join('.')}`,
       fatal: true,
     };
   }
@@ -108,13 +135,16 @@ interface Probed {
   skills: string[];
   /** pi lists the command of Ralph's permission extension. */
   gate: boolean;
+  /** pi lists the command Ralph's Playwright extension registers once it has registered the server. */
+  playwright: boolean;
 }
 
 /** Start a throwaway pi and ask it what it has. */
 async function probe(config: Config, options: PiCheckOptions): Promise<Probed | { failure: string }> {
   const pi = PiProcess.spawn({
     binary: config.pi.binary,
-    args: ['--mode', 'rpc', '--no-session', '--extension', GATE_EXTENSION, ...(config.pi.thinking ? ['--thinking', config.pi.thinking] : []), ...config.pi.args],
+    args: piArguments(config.pi, undefined),
+    env: piEnvironment(config),
     cwd: options.cwd,
     shutdownTimeoutMs: 5_000,
     logger: options.logger,
@@ -133,6 +163,7 @@ async function probe(config: Config, options: PiCheckOptions): Promise<Probed | 
       defaultModel: named((state.data as { model?: { provider?: string; id?: string } | null } | undefined)?.model),
       skills: commandList.filter((command) => command.source === 'skill').map((command) => (command.name ?? '').replace(/^skill:/, '')),
       gate: gateLoaded(commandList),
+      playwright: commandList.some((command) => /^ralph-playwright(:\d+)?$/.test(command.name ?? '') && command.source === 'extension'),
     };
   } catch (cause) {
     return { failure: `\`${config.pi.binary} --mode rpc\` did not answer: ${(cause as Error).message}` };
@@ -185,9 +216,9 @@ function gateCheck(loaded: boolean): CheckResult {
 }
 
 /**
- * Whether the agent can check a screen in a browser. pi has no MCP, so it does it by running playwright-cli
- * through `bash`, as the `browser-check` skill tells it: that takes the command, a Chromium for it to
- * drive and the skill. Not fatal: a project need not test in a browser.
+ * Whether the agent can check a screen in a browser, by the default route (`pi.browser` "skill"): it runs
+ * playwright-cli through `bash`, as the `browser-check` skill tells it, which takes the command, a Chromium
+ * for it to drive and the skill. Not fatal: a project need not test in a browser.
  */
 export async function browserCheck(skills: string[], cli: string): Promise<CheckResult> {
   const name = 'browser';
@@ -216,7 +247,40 @@ export async function browserCheck(skills: string[], cli: string): Promise<Check
   return { name, ok: true, detail: `${cli} ${version} driven through the ${BROWSER_SKILL} skill${note}`, fatal: false };
 }
 
-function skillsCheck(skills: string[]): CheckResult {
+/** The project's skill folders that pi skips without project trust. */
+function untrustedSkills(cwd: string): string[] {
+  return ['.agents/skills', '.pi/skills'].filter((dir) => nonEmpty(join(cwd, dir)));
+}
+
+/**
+ * Whether the agent can check a screen in a browser through the Playwright MCP server (`pi.browser` "mcp"):
+ * Ralph's extension registered it with pi, and the command that starts it is there. Whether the server then
+ * starts shows only in a turn. Not fatal, as for the skill.
+ */
+export async function playwrightMcpCheck(registered: boolean, command: string): Promise<CheckResult> {
+  const name = 'browser';
+  const missing: string[] = [];
+  if (!registered) missing.push('Ralph\'s Playwright extension (extensions/ralph-playwright.mjs) did not register the server with pi');
+  if (!onPath(command)) missing.push(`\`${command}\` (pi.playwrightMcp.command) is not installed or not on the PATH`);
+  if (missing.length > 0) return { name, ok: false, detail: `the agent cannot check a screen in a browser: ${missing.join('; ')}`, fatal: false };
+  return { name, ok: true, detail: `Playwright MCP, started with \`${command}\`, its tools declared to the model (mcp__playwright__*)`, fatal: false };
+}
+
+/** Whether `command` is a path that exists, or a name some directory on the PATH has. */
+function onPath(command: string): boolean {
+  if (command.includes('/')) return existsSync(command);
+  return (process.env['PATH'] ?? '').split(':').some((dir) => dir !== '' && existsSync(join(dir, command)));
+}
+
+function skillsCheck(skills: string[], skipped: string[]): CheckResult {
+  if (skipped.length > 0 && skills.length === 0) {
+    return {
+      name: 'skills',
+      ok: false,
+      detail: `pi.trustProject is off, so pi does not load the project's skills (${skipped.join(', ')}) — the agent will run without them`,
+      fatal: false,
+    };
+  }
   return {
     name: 'skills',
     ok: skills.length > 0,
@@ -226,4 +290,34 @@ function skillsCheck(skills: string[]): CheckResult {
         : 'none found in .agents/skills/ or .pi/skills/ — the agent will run without skills',
     fatal: false,
   };
+}
+
+/**
+ * pi extensions Ralph does not name on the command line: the project's (loaded with project trust) and the
+ * user's. pi runs them after Ralph's gate, so one can change a tool call the gate has already allowed. They
+ * still load; this says so. Extensions in `pi.args` load before the gate, which then judges what they made of a call.
+ */
+export function extensionsCheck(config: Config, cwd: string): CheckResult {
+  const agentDir = process.env['PI_CODING_AGENT_DIR'] ?? join(homedir(), '.pi', 'agent');
+  const found = [
+    ...(config.pi.trustProject && nonEmpty(join(cwd, '.pi', 'extensions')) ? ['.pi/extensions/ (the project\'s)'] : []),
+    ...(nonEmpty(join(agentDir, 'extensions')) ? [`${join(agentDir, 'extensions')}/ (yours)`] : []),
+  ];
+  if (found.length === 0) return { name: 'extensions', ok: true, detail: "none beyond pi's own and Ralph's gate", fatal: false };
+  return {
+    name: 'extensions',
+    ok: false,
+    detail:
+      `pi loads extensions from ${found.join(' and ')} after Ralph's permission gate: one that changes a tool call ` +
+      'can change it after the gate allowed it. Check what they do, or name them in pi.args (-e <path>) so the gate judges what they leave',
+    fatal: false,
+  };
+}
+
+function nonEmpty(dir: string): boolean {
+  try {
+    return existsSync(dir) && readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
 }

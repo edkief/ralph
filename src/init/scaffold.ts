@@ -19,7 +19,7 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['TASK-1.json', `${RALPH_DIR}/tasks/TASK-1.json`],
   ['LOG.md', `${RALPH_DIR}/logs/LOG.md`],
   ['ralph.config.json', 'ralph.config.json'],
-  // Where pi, which has no MCP, learns to check a screen with playwright-cli. Written for any harness: the
+  // Where a pi agent learns to check a screen with playwright-cli (pi.browser "skill"). Written for any harness: the
   // skill says to use it only without a browser tool of one's own, and a project may switch harness later.
   ['skills/browser-check/SKILL.md', '.agents/skills/browser-check/SKILL.md'],
 ];

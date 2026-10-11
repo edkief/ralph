@@ -543,6 +543,8 @@ to any harness. Three belong to one harness alone:
 | `agent` (`-a`, `RALPH_AGENT`) | opencode | The opencode agent profile to run as |
 | `server` (`--server`, `RALPH_SERVER_*`) | opencode | Attach to a server, or how to spawn one |
 | `pi.binary` (`RALPH_PI_BINARY`), `pi.args`, `pi.thinking` (`RALPH_PI_THINKING`) | pi | The executable, extra arguments for it, and the thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; unset leaves pi's own default) |
+| `pi.trustProject` | pi | Give pi project trust (default `true`), so it loads the project's skills and `.pi/` config; see [pi](#pi) |
+| `pi.browser`, `pi.playwrightMcp` | pi | How the agent reaches a browser: `skill` (default) or `mcp`, and the Playwright MCP server for `mcp`; see [browser checks](#pi) |
 
 A setting that does not apply to the chosen harness is ignored with a warning, never an error, so
 one file can carry both harnesses' settings and switch between them with `harness`.
@@ -556,27 +558,30 @@ one file can carry both harnesses' settings and switch between them with `harnes
 | Permissions judged by Ralph's `permissions` rules and write scope | Calls the opencode config marks `ask` | Every tool call |
 | Permission requests put to a person | Yes | Yes |
 | Subagents | Yes | No |
-| Skills | Yes | Yes |
+| Skills | Yes | Yes, with project trust |
+| MCP servers | Yes | Yes, with every call judged like any other |
 
 **What names the harness.** `ralph doctor` and a run's banner say which harness is in use and
 show the harness's own checks, which run after Ralph's checks of the project (for opencode: the
 server, its API, the model, its skills; for pi: its version, the models, its skills, whether the agent
-can use a browser, and that the extension through which Ralph judges every call loaded). `ralph config` prints the resolved `harness`. Log lines
+can use a browser, that the extension through which Ralph judges every call loaded, and which other
+pi extensions load after it). `ralph config` prints the resolved `harness`. Log lines
 about the provider carry a `harness` field, and [exit code 5](#exit-codes) is the harness or
 provider failing, which the message names.
 
 ### pi
 
-pi is minimal: four tools (read, write, edit, bash), a system prompt of around a thousand tokens,
+pi is minimal: four tools (read, write, edit, bash), a system prompt of under a thousand tokens,
 no subagents and no plan mode. That leaves more of a small context window to the task, which
 suits self-hosted models. The adapter is **experimental** until it has been measured against
 opencode on the same models.
 
 **Setup.**
 
-1. Install the version Ralph is tested with: `npm install -g @mariozechner/pi-coding-agent@0.73.1`.
-   Ralph accepts `>=0.73.1 <0.74.0` and `ralph doctor` rejects any other (pi is 0.x, and a minor
-   release can change its protocol).
+1. Install pi 1.1 or later: `npm install -g @earendil-works/pi-coding-agent@1.1`. Ralph accepts
+   `>=1.1.0 <2` and `ralph doctor` rejects any other. pi used to be published as
+   `@mariozechner/pi-coding-agent`, which is deprecated and stops at 0.73.1: `ralph doctor` recognises
+   it and says to swap packages (`npm uninstall -g @mariozechner/pi-coding-agent` first).
 2. Tell pi about your model. pi reads `~/.pi/agent/models.json` itself (`PI_CODING_AGENT_DIR`
    moves the folder); Ralph has no setting for it. For a local OpenAI-compatible server such as
    llama.cpp, Ollama or vLLM:
@@ -605,6 +610,14 @@ Everything pi reads for itself applies: `~/.pi/agent/settings.json` (its own ret
 compaction), `AGENTS.md`, and skills from `.agents/skills/` and `.pi/skills/` in the project, which
 the doctor lists. Extra command-line flags go in `pi.args`.
 
+**Project trust.** pi 1.x loads a project's own configuration only once the project is trusted:
+its skills (`.agents/skills/`, `.pi/skills/`), `.pi/settings.json`, `.pi/mcp.json` and
+`.pi/extensions/`. Run without a terminal, as Ralph runs it, pi cannot ask, and skips them all. Ralph
+therefore starts pi with `--approve`, as opencode loads the project's own configuration. Set
+`pi.trustProject: false` to start it with `--no-approve` instead; `ralph doctor` then says that the
+project's skills will not load. Trust is decided on the command line either way, so a
+`defaultProjectTrust` in your own pi settings does not change it.
+
 **How it runs.** One pi process per session: the loop's iteration, a triage (assess) turn, an
 escalation turn and a split proposal each get their own, and they are stopped with Ralph, however
 Ralph ends (a guard process stops them if Ralph is killed outright). A session's files live in
@@ -615,10 +628,22 @@ the event files in `.ralph/history/<run>/`, headed `harness: pi`. Each process i
 `--extension` for Ralph's permission extension and checked to have loaded it (see the caveats).
 
 **Browser checks under pi.** An opencode agent checks a screen through a Playwright MCP server you
-configure in opencode. pi has no MCP, so Ralph gives its agent the same ability as a skill and a
-command: the `browser-check` skill that `ralph init` writes to `.agents/skills/` tells the agent to
-run `playwright-cli` (Playwright's command-line tool for agents) through `bash`. That costs no tool
-description in each request, and the `bash` calls go through `permissions` like any other.
+configure in opencode. Under pi there are two routes, set with `pi.browser`:
+
+- **`skill`** (the default): the `browser-check` skill that `ralph init` writes to `.agents/skills/`
+  tells the agent to run `playwright-cli` (Playwright's command-line tool for agents) through `bash`.
+  It costs no tool descriptions in each request, which matters on a small context window, and the
+  `bash` calls go through `permissions` like any other.
+- **`mcp`**: pi's built-in MCP support starts the Playwright MCP server, as opencode does, and its
+  tools (`mcp__playwright__browser_navigate`, `..._snapshot`, `..._take_screenshot`, ...) are declared
+  to the model. That is some 25 tool descriptions in every model call. `pi.playwrightMcp` says how to
+  start the server; the default is `npx -y @playwright/mcp@0.0.83 --headless --browser chromium
+  --output-dir .playwright-mcp`. Ralph registers it through a small extension of its own
+  (`extensions/ralph-playwright.mjs`), loaded before the permission extension, so every Playwright call
+  is judged too. A `playwright` server in your own or the project's `mcp.json` takes its place.
+  `ralph doctor` checks that the server was registered and that its command is there.
+
+For the skill:
 
 1. Install the command and a browser once: `npm install -g @playwright/cli`, then
    `playwright-cli install-browser chromium`.
@@ -653,9 +678,15 @@ browser has to be closed (`playwright-cli close`), since it runs on after the co
   answer, answers something it cannot read, or the extension errors, the call is blocked. pi will
   not start without the extension, and `ralph doctor` and `ralph run` refuse a pi that does not
   list it. Ralph checks again each time it starts a pi process, which is how `ralph init` and
-  `ralph split` are covered. Other extensions pi finds for itself (`~/.pi/agent/extensions/`,
-  `.pi/extensions/`) still load, and one loaded after Ralph's can change a call's arguments once
-  Ralph has judged it; add `"--no-extensions"` to `pi.args` to leave them out.
+  `ralph split` are covered.
+- **Other extensions can change a call after Ralph has judged it.** pi runs extensions' handlers in
+  the order it loads them, and an extension that rewrites a tool call's arguments after Ralph's has
+  allowed it gets its way. Ralph's comes last on the command line, after any you name in `pi.args`
+  (`-e <path>`), so Ralph judges what those leave. But pi loads the extensions it finds for itself
+  later: the project's `.pi/extensions/` (with project trust) and yours in `~/.pi/agent/extensions/`.
+  They still load, and `ralph doctor` warns when there are any. To run without them, add
+  `"--no-extensions"` to `pi.args`. That also leaves out pi's built-in extensions, so name the ones you
+  want back, e.g. `"-e", "builtin:mcp"` for MCP servers and the `mcp` browser route.
 - **`permissions.fallback: "ask"` asks about every call** no rule settles, reads included. Put what
   you do not want to be asked about in `allow` (`"read"`, `"ls"`, `"npm test"`). An ask looks like
   an opencode one: the same card in the web UI, the same push notification, answered in the UI or
@@ -666,8 +697,20 @@ browser has to be closed (`playwright-cli close`), since it runs on after the co
   every request, which is what pi is chosen to avoid. The planning interview asks in the agent's
   reply, as it does under opencode when the agent leaves its question tool alone, and the loop's
   agent raises `DECIDE`. A dialog some other extension opens is cancelled at once.
-- **No MCP.** pi has none, so an MCP server you gave opencode is not there. Browser checks have
-  their own route, below.
+- **MCP servers.** pi 1.x connects to the servers in `~/.pi/agent/mcp.json` and, with project
+  trust, the project's `.pi/mcp.json` (an MCP server you gave opencode is not among them). Each call to
+  one of their tools (`mcp__<server>__<tool>`) is put to Ralph like any other, and a `deny` rule can
+  name the tool. pi declares a server's tools to the model only with `"exposure": "direct"`; by
+  default it leaves them to codemode, below.
+- **Codemode.** pi's `codemode` tool, which runs a script the model writes, is off unless you turn
+  it on (`"--tools", "+codemode"` in `pi.args`, or pi's own settings), and pi turns it on itself when
+  an MCP server with the default exposure connects. Ralph judges the script, then each call the
+  script makes, on its own: a script that assembles `git push` from pieces is still stopped at the
+  `bash` call that would run it. The transcript shows those calls under the script.
+- **Context overflow.** When a request no longer fits the model's context, pi compacts the session
+  and tries once more, but only if there is something older than what it keeps
+  (`compaction.keepRecentTokens` in pi's settings, 20k tokens by default). Otherwise the turn ends
+  with the provider's overflow error, and the loop treats it as it treats an opencode overflow.
 - **Tokens as pi counts them.** `input` leaves out what the provider served from its cache (shown
   as cache reads), and thinking tokens are counted in `output`, since pi reports no separate figure.
   pi asks the server for `usage` in the stream (`stream_options.include_usage`); a server that sends
@@ -733,7 +776,13 @@ See `templates/ralph.config.json` for a complete file.
     "remote": "origin"
   },
   "server": { "url": "http://opencode:4096" }, // opencode: attach instead of spawning
-  "pi": { "binary": "pi", "args": [], "thinking": "low" }, // pi only
+  "pi": {                         // pi only
+    "binary": "pi",
+    "args": [],
+    "thinking": "low",
+    "trustProject": true,          // load the project's skills and .pi/ config (--approve)
+    "browser": "skill"             // skill (playwright-cli through bash) | mcp (pi.playwrightMcp)
+  },
   "plan": {
     "model": "anthropic/claude-x", // for the `ralph init` interview; defaults to `model`
     "maxTurns": 30,                // agent turns before the interview gives up
