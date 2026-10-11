@@ -5,6 +5,7 @@ import type { HarnessEvent } from '../harness/events.js';
 import { HarnessApiError, type AgentHarness, type CheckResult, type HarnessCapabilities, type PromptOptions } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import { EventBus } from './bus.js';
+import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
 import { piChecks } from './preflight.js';
 import { PiCommandError, PiProcess } from './rpc.js';
 import { PiSession } from './session.js';
@@ -39,9 +40,11 @@ export class PiHarness implements AgentHarness {
   readonly capabilities: HarnessCapabilities = {
     // A steered prompt waits for the tool that is running, then reaches the model before its next call.
     steering: true,
-    // Permissions and questions are what a pi extension supplies (#80); until then there are none.
+    // pi has no question tool, and Ralph adds none: the interview asks in the agent's reply, as it does
+    // whenever an agent leaves its question tool alone.
     forms: false,
-    permissionAsks: false,
+    // Every tool call is put to Ralph by the gate extension (see gate.ts), and answered from its policy.
+    permissionAsks: true,
     // pi has no subagents.
     subagents: false,
     skills: true,
@@ -89,8 +92,11 @@ export class PiHarness implements AgentHarness {
     if (session?.alive) await session.interrupt();
   }
 
-  async replyPermission(): Promise<void> {
-    throw new HarnessApiError('pi asks no permissions', 404, '');
+  /** Under pi `always` is `once`: every call is judged anew, so there is no grant to keep. */
+  async replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject', reason?: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new HarnessApiError(`pi has no live session ${sessionId}`, 404, '');
+    await session.replyGate(requestId, reply, reason);
   }
 
   async replyForm(): Promise<void> {
@@ -151,6 +157,7 @@ export class PiHarness implements AgentHarness {
     const process = PiProcess.spawn({
       binary: this.config.pi.binary,
       args: piArguments(this.config.pi, this.sessionDir),
+      env: gateEnvironment(this.config),
       cwd: this.options.cwd,
       shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
       logger: this.options.logger,
@@ -163,6 +170,7 @@ export class PiHarness implements AgentHarness {
         }
       }
       const state = await readState(process);
+      await requireGate(process);
       return new PiSession(state.sessionId, state.sessionFile, state.model, process, {
         logger: this.options.logger,
         publish: (event) => this.bus.publish(event),
@@ -187,7 +195,33 @@ export class PiHarness implements AgentHarness {
 
 /** The command line of a session's pi process. */
 export function piArguments(pi: PiConfig, sessionDir: string): string[] {
-  return ['--mode', 'rpc', '--session-dir', sessionDir, ...(pi.thinking ? ['--thinking', pi.thinking] : []), ...pi.args];
+  return ['--mode', 'rpc', '--session-dir', sessionDir, '--extension', GATE_EXTENSION, ...(pi.thinking ? ['--thinking', pi.thinking] : []), ...pi.args];
+}
+
+/** How long the gate waits on Ralph beyond `timeouts.askMs`, which Ralph keeps to itself. */
+const GATE_GRACE_MS = 30_000;
+
+/**
+ * pi's environment. The gate waits on Ralph for as long as `timeouts.askMs` lets an ask last, and a little
+ * longer, then blocks the call itself; with no limit on asks it waits for good, which the turn's end or
+ * its stop ends.
+ */
+export function gateEnvironment(config: Config): NodeJS.ProcessEnv {
+  const { askMs } = config.timeouts;
+  // Not one the environment brought along: Ralph alone says how long the gate waits.
+  const { RALPH_GATE_TIMEOUT_MS: _inherited, ...env } = process.env;
+  return { ...env, ...(askMs > 0 ? { RALPH_GATE_TIMEOUT_MS: String(askMs + GATE_GRACE_MS) } : {}) };
+}
+
+/**
+ * pi logs an extension that fails to load and carries on without it, which here would be every tool call
+ * run unchecked. So a process that does not list the gate is never used.
+ */
+async function requireGate(process: PiProcess): Promise<void> {
+  const response = await process.request({ type: 'get_commands' }, STARTUP_TIMEOUT_MS);
+  if (!gateLoaded((response.data as { commands?: unknown } | undefined)?.commands)) {
+    throw new HarnessApiError(gateMissingMessage(), 502, '');
+  }
 }
 
 async function readState(process: PiProcess): Promise<{ sessionId: string; sessionFile: string; model: string | undefined }> {

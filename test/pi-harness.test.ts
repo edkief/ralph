@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EventOf } from '../src/harness/events.js';
 import { HarnessApiError } from '../src/harness/types.js';
+import { GATE_EXTENSION } from '../src/pi/gate.js';
 import { piRig, type PiRig } from './helpers/pi-harness.js';
 
 const rigs: PiRig[] = [];
@@ -32,15 +33,16 @@ const ended = (event: { type: string }) => event.type === 'execution.ended';
 const sent = (made: PiRig, type: string) => made.fake.commands().filter((command) => command['type'] === type);
 
 describe('PiHarness: what it declares', () => {
-  it('claims steering and skills, and nothing it cannot do: no forms, permission asks or subagents', async () => {
+  it('claims steering, permission asks and skills, and nothing it cannot do: no forms or subagents', async () => {
     const { harness } = await rig();
     expect(harness.name).toBe('pi');
-    expect(harness.capabilities).toEqual({ steering: true, forms: false, permissionAsks: false, subagents: false, skills: true });
+    expect(harness.capabilities).toEqual({ steering: true, forms: false, permissionAsks: true, subagents: false, skills: true });
   });
 
   it('refuses replies to what pi never asks, and has no parent sessions', async () => {
     const { harness } = await rig();
-    await expect(harness.replyPermission()).rejects.toMatchObject({ status: 404 });
+    await expect(harness.replyPermission('ses_none', 'req_1', 'once')).rejects.toMatchObject({ status: 404 });
+    await expect(harness.replyPermission('ses_none', 'req_1', 'reject', 'no')).rejects.toBeInstanceOf(HarnessApiError);
     await expect(harness.replyForm()).rejects.toMatchObject({ status: 404 });
     await expect(harness.cancelForm()).rejects.toMatchObject({ status: 404 });
     expect(await harness.parentOf()).toBeUndefined();
@@ -59,6 +61,7 @@ describe('PiHarness: sessions', () => {
     expect(starts[0]).toEqual([
       '--mode', 'rpc',
       '--session-dir', resolve(made.projectRoot, '.ralph/history/pi'),
+      '--extension', GATE_EXTENSION,
       '--thinking', 'low',
       '--provider', 'stub',
     ]);

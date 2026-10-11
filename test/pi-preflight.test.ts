@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../src/config/schema.js';
+import { GATE_EXTENSION } from '../src/pi/gate.js';
+import { preflight } from '../src/loop/preflight.js';
 import { PiHarness } from '../src/pi/harness.js';
 import { PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
 import { fakePi, type FakePiOptions } from './helpers/pi.js';
@@ -89,11 +91,24 @@ describe('piChecks', () => {
     expect(checks['skills']).toMatchObject({ ok: false, fatal: false, detail: expect.stringContaining('without skills') });
   });
 
-  it('always warns that the permissions rules are not enforced, without stopping the run', async () => {
+  it('passes when pi loads the extension through which Ralph judges every tool call, with no warning left', async () => {
     const checks = await check({}, { model: 'stub/stub-model' });
-    expect(checks['permissions']).toMatchObject({ ok: false, fatal: false });
-    expect(checks['permissions']?.detail).toMatch(/not enforced under pi/);
-    expect(checks['permissions']?.detail).toContain('git push');
+    expect(checks['permissions']).toMatchObject({ ok: true, fatal: true, detail: expect.stringContaining('put to Ralph before it runs') });
+    expect(checks['permissions']?.detail).not.toMatch(/not enforced/);
+  });
+
+  it('refuses pi when the extension did not load: it would run every tool call unchecked', async () => {
+    const checks = await check({ gate: 'missing' }, { model: 'stub/stub-model' });
+    expect(checks['permissions']).toMatchObject({ ok: false, fatal: true });
+    expect(checks['permissions']?.detail).toContain('ralph-gate.mjs');
+    expect(checks['permissions']?.detail).toContain('will not run pi');
+  });
+
+  it('starts its probe with the extension', async () => {
+    const pi = fakePi();
+    const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', model: 'stub/stub-model', pi: { binary: pi.binary } });
+    await piChecks(config, { cwd: process.cwd(), logger: quietLogger });
+    expect(pi.starts()[0]).toEqual(expect.arrayContaining(['--extension', GATE_EXTENSION]));
   });
 
   it('stops the probe process it started', async () => {
@@ -113,6 +128,15 @@ describe('piChecks', () => {
     const harness = new PiHarness(config, { cwd: process.cwd(), logger: quietLogger });
     const names = (await harness.preflight(config)).map((result) => result.name);
     expect(names).toEqual(['pi', 'model', 'skills', 'permissions']);
+    await harness.stop();
+  });
+
+  it('stops a run, which refuses on any failed fatal check, when the extension did not load', async () => {
+    const pi = fakePi({ gate: 'missing' });
+    const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', model: 'stub/stub-model', pi: { binary: pi.binary } });
+    const harness = new PiHarness(config, { cwd: process.cwd(), logger: quietLogger });
+    const blocking = (await preflight(config, harness)).filter((result) => !result.ok && result.fatal).map((result) => result.name);
+    expect(blocking).toContain('permissions');
     await harness.stop();
   });
 });

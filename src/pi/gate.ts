@@ -99,3 +99,28 @@ export function gateAnswer(reply: PermissionReply, reason?: string): string {
 function blockedReason(reason: string | undefined): string {
   return `Ralph's permissions do not allow this${reason ? `: ${reason}` : ''}. Do not try another way round it; carry on without it.`;
 }
+
+/**
+ * Whether the commands pi lists (its `get_commands` answer's `commands`) include the gate's: the extension
+ * registers it after the handler, so it is there only if the extension loaded to its end. An extension that
+ * fails to load is logged by pi and left out, and pi then runs every tool call unasked.
+ */
+export function gateLoaded(commands: unknown): boolean {
+  if (!Array.isArray(commands)) return false;
+  return commands.some((command: unknown) => {
+    if (!command || typeof command !== 'object') return false;
+    const { name, source, sourceInfo } = command as { name?: unknown; source?: unknown; sourceInfo?: { path?: unknown } };
+    // pi numbers a command that two extensions register: `ralph-gate:1`.
+    if (typeof name !== 'string' || !new RegExp(`^${GATE_COMMAND}(:\\d+)?$`).test(name) || source !== 'extension') return false;
+    const path = sourceInfo?.path;
+    return typeof path !== 'string' || path.endsWith('ralph-gate.mjs');
+  });
+}
+
+/** Why pi is not run without the gate, for the doctor and for the error that stops a session opening. */
+export function gateMissingMessage(): string {
+  return (
+    `pi did not load Ralph's permission extension (${GATE_EXTENSION}). Without it pi runs every tool call unchecked, ` +
+    "so Ralph will not run pi: check that the file exists and loads, and that pi.args does not undo --extension"
+  );
+}

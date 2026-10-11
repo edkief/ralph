@@ -13,7 +13,8 @@
 //   say        what the model says in place of the recording's closing `<promise>COMPLETE</promise>`: one text, or one per prompt
 //   exitAfter  an event type: exit with code 7 right after writing one of it (a pi that dies mid-turn)
 //   gate       'missing': the permission extension is not loaded, however the command line asks (pi logs an
-//              extension that fails to load and carries on without it)
+//              extension that fails to load and carries on without it); 'missing-after-first': only in the
+//              processes started after the first one
 //   swap       {recorded text: new text}: replaces text in the lines played, e.g. the command a gate-allow
 //              session ran with the one a test wants judged
 //
@@ -48,13 +49,14 @@ const flag = (name) => {
   const at = argv.indexOf(name);
   return at >= 0 ? argv[at + 1] : undefined;
 };
-log({ argv, pid: process.pid, cwd: process.cwd() });
+const earlierStarts = cfg.log && existsSync(cfg.log) ? readFileSync(cfg.log, 'utf8').split('\n').filter((line) => line.includes('"argv"')).length : 0;
+log({ argv, pid: process.pid, cwd: process.cwd(), gateTimeout: process.env.RALPH_GATE_TIMEOUT_MS });
 
 const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow_up', 'extension_ui_response']);
 
 /** The extension that puts every tool call to Ralph, when it is on the command line and exists. */
 const gatePath = extensionArgs(argv).find((path) => path.endsWith('ralph-gate.mjs') && existsSync(path));
-const gateLoaded = gatePath !== undefined && cfg.gate !== 'missing';
+const gateLoaded = gatePath !== undefined && cfg.gate !== 'missing' && !(cfg.gate === 'missing-after-first' && earlierStarts > 0);
 const GATE_TITLE = 'ralph:gate';
 
 function read(name) {

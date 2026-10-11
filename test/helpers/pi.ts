@@ -17,8 +17,8 @@ export interface FakePiOptions {
   exitAfter?: string;
   /** What the model says in place of the recording's closing tag: one text, or one per prompt. */
   say?: string | string[];
-  /** `missing`: the permission extension is not loaded, however the command line asks for it. */
-  gate?: 'missing';
+  /** `missing`: the permission extension is not loaded, however the command line asks for it; `missing-after-first`: not in the processes after the first. */
+  gate?: 'missing' | 'missing-after-first';
   /** Text in the recorded lines to replace, e.g. the command a recorded session ran. */
   swap?: Record<string, string>;
 }
@@ -32,6 +32,8 @@ export interface FakePi {
   starts(): string[][];
   /** The pid and working directory of each process started. */
   processes(): Array<{ pid: number; cwd: string }>;
+  /** The RALPH_GATE_TIMEOUT_MS each process was started with. */
+  gateTimeouts(): Array<string | undefined>;
 }
 
 /** A `pi` on disk that plays back recorded `pi --mode rpc` sessions. */
@@ -51,12 +53,13 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
           .trim()
           .split('\n')
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as { argv?: string[]; pid?: number; cwd?: string; command?: Record<string, unknown> })
+          .map((line) => JSON.parse(line) as { argv?: string[]; pid?: number; cwd?: string; gateTimeout?: string; command?: Record<string, unknown> })
       : [];
   return {
     binary,
     commands: () => entries().flatMap((entry) => (entry.command ? [entry.command] : [])),
     starts: () => entries().flatMap((entry) => (entry.argv ? [entry.argv] : [])),
     processes: () => entries().flatMap((entry) => (entry.argv ? [{ pid: entry.pid!, cwd: entry.cwd! }] : [])),
+    gateTimeouts: () => entries().flatMap((entry) => (entry.argv ? [entry.gateTimeout] : [])),
   };
 }
