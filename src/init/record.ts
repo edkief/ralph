@@ -40,6 +40,8 @@ const PlanStateSchema = z.object({
   /** The agent's latest tool activity, while `working`. */
   activity: z.string().nullable(),
   turn: z.number().int().nonnegative(),
+  /** The web UI asked for a batch to start once the plan is written. */
+  startBatch: z.boolean().optional(),
   maxTurns: z.number().int().positive().nullable(),
   model: z.string().nullable(),
   pid: z.number().int(),
@@ -244,7 +246,7 @@ export class PlanRecorder {
   constructor(
     readonly ralphRoot: string,
     /** `harness` is the name of the harness whose events the turns record, written at the head of each event file. */
-    init: { mode: PlanMode; by: 'daemon' | 'cli'; harness: string; id?: string },
+    init: { mode: PlanMode; by: 'daemon' | 'cli'; harness: string; id?: string; startBatch?: boolean },
   ) {
     this.harness = init.harness;
     this.id = init.id ?? newPlanId(ralphRoot);
@@ -260,6 +262,7 @@ export class PlanRecorder {
       seq: 0,
       activity: null,
       turn: 0,
+      ...(init.startBatch ? { startBatch: true } : {}),
       maxTurns: null,
       model: null,
       pid: process.pid,

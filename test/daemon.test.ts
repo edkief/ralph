@@ -52,7 +52,7 @@ const state = (patch: Partial<DaemonState> = {}): DaemonState => ({
 });
 
 /** A daemon whose batches end when the test says so. */
-function harness(options: { start?: number; fail?: boolean } = {}) {
+function harness(options: { start?: number; fail?: boolean; planned?: boolean } = {}) {
   const root = folder();
   const shutdown = new AbortController();
   const batches: number[] = [];
@@ -70,7 +70,7 @@ function harness(options: { start?: number; fail?: boolean } = {}) {
     runPlan: async (request, interrupt) => {
       plans.push(request);
       return new Promise((resolve) => {
-        finish = resolve;
+        finish = () => resolve({ planned: options.planned ?? false });
         interrupt.addEventListener('abort', () => {
           interrupted = true;
           resolve();
@@ -164,6 +164,15 @@ describe('plan requests', () => {
     expect(() => requestRun(resolve(project('planning').projectRoot, '.ralph'), 3, 'ui')).toThrow(/planning the project/);
     expect(() => requestPlan(project(), 'new', '  ', 'ui')).toThrow(/Describe the project/);
   });
+
+  it('asks for a batch after the plan only when told to', () => {
+    const target = project();
+    const ralph = resolve(target.projectRoot, '.ralph');
+    const { id } = requestPlan(target, 'new', 'A todo app.', 'ui', true);
+    expect(readDaemonRequest(ralph)).toEqual({ kind: 'plan', id, mode: 'new', description: 'A todo app.', startBatch: true });
+    const again = requestPlan(target, 'new', 'A todo app.', 'ui', false);
+    expect(readDaemonRequest(ralph)).toEqual({ kind: 'plan', id: again.id, mode: 'new', description: 'A todo app.' });
+  });
 });
 
 describe('the daemon loop', () => {
@@ -190,6 +199,52 @@ describe('the daemon loop', () => {
     daemon.finish();
     daemon.shutdown.abort();
     await daemon.done;
+  });
+
+  it('runs a batch of the default iterations once the plan is written, when asked to', async () => {
+    const daemon = harness({ planned: true });
+    await until(() => daemon.status() === 'idle');
+    writeDaemonRequest(daemon.root, { kind: 'plan', id: '20261007-120000', mode: 'new', description: 'An app.', startBatch: true }, 'ui');
+    await until(() => daemon.status() === 'planning');
+    expect(daemon.plans).toEqual([{ id: '20261007-120000', mode: 'new', description: 'An app.', startBatch: true }]);
+    daemon.finish();
+    await until(() => daemon.status() === 'running');
+    expect(daemon.batches).toEqual([7]);
+    expect(readDaemonState(daemon.root)?.batch?.iterations).toBe(7);
+    daemon.finish();
+    await until(() => daemon.status() === 'idle');
+    expect(readDaemonState(daemon.root)?.lastBatch).toMatchObject({ status: 'complete' });
+    daemon.shutdown.abort();
+    await daemon.done;
+  });
+
+  it('starts no batch after a plan that was not asked to, or was not written', async () => {
+    for (const [planned, startBatch] of [[true, false], [false, true]] as const) {
+      const daemon = harness({ planned });
+      await until(() => daemon.status() === 'idle');
+      writeDaemonRequest(
+        daemon.root,
+        { kind: 'plan', id: '20261007-120000', mode: 'new', description: 'An app.', ...(startBatch ? { startBatch } : {}) },
+        'ui',
+      );
+      await until(() => daemon.status() === 'planning');
+      daemon.finish();
+      await until(() => daemon.status() === 'idle');
+      await tick();
+      expect(daemon.batches).toEqual([]);
+      daemon.shutdown.abort();
+      await daemon.done;
+    }
+  });
+
+  it('starts no batch when shut down during the interview', async () => {
+    const daemon = harness({ planned: true });
+    await until(() => daemon.status() === 'idle');
+    writeDaemonRequest(daemon.root, { kind: 'plan', id: '20261007-120000', mode: 'new', description: 'An app.', startBatch: true }, 'ui');
+    await until(() => daemon.status() === 'planning');
+    writeDaemonRequest(daemon.root, { kind: 'shutdown' }, 'cli');
+    await daemon.done;
+    expect(daemon.batches).toEqual([]);
   });
 
   it('ends the interview in progress when shut down', async () => {

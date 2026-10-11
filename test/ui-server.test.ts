@@ -540,14 +540,14 @@ describe('web UI server', () => {
 
   it('streams the planning conversation, with no run to follow', async () => {
     const root = mkdtempSync(resolve(tmpdir(), 'ralph-ui-plan-'));
-    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'daemon', harness: 'opencode' });
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: 'new', by: 'daemon', harness: 'opencode', startBatch: true });
     recorder.line('owner', 'A todo app.');
     await start(root);
     const live = subscribe('/api/live');
     try {
       await live.until(() => live.of('plan').length > 0);
       expect(live.of('plan')[0]).toMatchObject({ id: recorder.id, reset: true, lines: [{ role: 'owner', text: 'A todo app.' }] });
-      expect(live.of('status')[0]).toMatchObject({ run: null, plan: { id: recorder.id, status: 'starting' } });
+      expect(live.of('status')[0]).toMatchObject({ run: null, plan: { id: recorder.id, status: 'starting', startBatch: true } });
 
       recorder.line('agent', 'Which stack?');
       recorder.asking('you');
@@ -1181,6 +1181,11 @@ describe('web UI actions', () => {
     const asked = await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.' });
     expect(asked).toMatchObject({ status: 200, body: { message: 'Ralph is planning the project.' } });
     expect(readDaemonRequest(ralph)).toEqual({ kind: 'plan', id: (asked.body as { id: string }).id, mode: 'new', description: 'A todo app.' });
+
+    expect((await post('/api/actions/plan/start', { mode: 'new', description: 'An app.', startBatch: 'yes' })).status).toBe(400);
+    const batch = await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.', startBatch: true });
+    expect(batch).toMatchObject({ status: 200, body: { message: 'Ralph is planning the project. A batch starts once the plan is written.' } });
+    expect(readDaemonRequest(ralph)).toEqual({ kind: 'plan', id: (batch.body as { id: string }).id, mode: 'new', description: 'A todo app.', startBatch: true });
 
     writeDaemonState(ralph, daemon({ status: 'planning' }));
     expect((await post('/api/actions/plan/start', { mode: 'new', description: 'A todo app.' })).status).toBe(409);
