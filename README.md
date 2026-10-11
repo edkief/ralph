@@ -290,7 +290,7 @@ and an answer given with no run waiting is committed straight away.
 
 An agent can also stop mid-turn to ask: a question tool (opencode's `question`) and an MCP server's
 request for input open a form, and with `permissions.fallback: "ask"` a permission request no `allow`
-or `deny` rule matches waits for a person too. When a person can answer — the run waits for
+or `deny` rule matches waits for a person too (under pi, that is every call no rule settles). When a person can answer — the run waits for
 people (`--wait`, `ui.wait`, or `--ui`), or the planner's interview is held from the web UI or
 a terminal — Ralph puts it to them:
 
@@ -551,15 +551,16 @@ one file can carry both harnesses' settings and switch between them with `harnes
 | | opencode | pi |
 | --- | --- | --- |
 | Prompt to a busy session without stopping its tool (steering) | With a server that offers it | Yes |
-| Forms the agent opens (a question tool, an MCP server's request for input) | Yes | No (#80) |
-| Permission requests put to a person | Yes | No (#80) |
+| Forms the agent opens (a question tool, an MCP server's request for input) | Yes | No: pi has no question tool (see [pi](#pi)) |
+| Permissions judged by Ralph's `permissions` rules and write scope | Calls the opencode config marks `ask` | Every tool call |
+| Permission requests put to a person | Yes | Yes |
 | Subagents | Yes | No |
 | Skills | Yes | Yes |
 
 **What names the harness.** `ralph doctor` and a run's banner say which harness is in use and
 show the harness's own checks, which run after Ralph's checks of the project (for opencode: the
-server, its API, the model, its skills; for pi: its version, the models, its skills, and a warning
-about permissions). `ralph config` prints the resolved `harness`. Log lines
+server, its API, the model, its skills; for pi: its version, the models, its skills, and that the
+extension through which Ralph judges every call loaded). `ralph config` prints the resolved `harness`. Log lines
 about the provider carry a `harness` field, and [exit code 5](#exit-codes) is the harness or
 provider failing, which the message names.
 
@@ -609,17 +610,42 @@ Ralph ends (a guard process stops them if Ralph is killed outright). A session's
 `.ralph/history/pi/`, which `ralph init` keeps out of git. A session that has been quiet for 60
 seconds has its process stopped; the next turn that carries on in it, as a confirm or split turn
 does, starts a process again and switches to the file. The run's own record, as for opencode, is
-the event files in `.ralph/history/<run>/`, headed `harness: pi`.
+the event files in `.ralph/history/<run>/`, headed `harness: pi`. Each process is started with
+`--extension` for Ralph's permission extension and checked to have loaded it (see the caveats).
 
 **Caveats.**
 
-- **`permissions` are not enforced.** pi has no permission prompt, so the `deny`, `allow` and
-  `fallback` rules and the write scope of the assess and split turns do nothing: pi runs commands
-  and writes files unasked, `git push` included. `ralph doctor` warns of it every time. Run it
-  where that is safe (a container or a throwaway checkout) until permissions arrive with
-  [#80](https://github.com/edkief/ralph/issues/80).
-- **No question tool, no forms.** A dialog a pi extension opens is cancelled at once, and the tool
-  or command waiting on it carries on as if declined.
+- **`permissions` apply to every call, so they are stricter than under opencode.** opencode asks
+  Ralph only about what its own configuration marks `ask`, and runs the rest. pi has no permission
+  prompt, so Ralph ships a pi extension (`extensions/ralph-gate.mjs`, loaded with `--extension` into
+  every pi process) that puts **every** tool call (`bash`, `read`, `write`, `edit`, and any tool an
+  extension adds) to Ralph before it runs. Ralph answers from the `permissions` rules: `deny` first,
+  then `allow`, then `fallback`. A refused call does not run, and the agent reads the reason as the
+  tool's error (`it matches the deny rule "git push"`). The default deny list therefore holds under
+  pi, and the log records the decision with the rule that made it (`permission decided`,
+  `matched: "git push"`). Allowed calls are logged at `debug` level only.
+- **The write scope is enforced before the write.** The planning interview of `ralph init`, and the
+  assess, split and escalation turns, may write only inside the folder they are given (`.ralph/`
+  for the interview); a `write` or `edit` anywhere else is refused, and the file is never touched.
+  A shell command is not path-checked, as under opencode: a redirect in `bash` can still write
+  outside the scope, and `ralph init` reports the files that changed outside `.ralph/` afterwards.
+- **It fails closed.** The extension lets a call run only when Ralph answers yes. If Ralph does not
+  answer, answers something it cannot read, or the extension errors, the call is blocked. pi will
+  not start without the extension, and `ralph doctor` and `ralph run` refuse a pi that does not
+  list it. Ralph checks again each time it starts a pi process, which is how `ralph init` and
+  `ralph split` are covered. Other extensions pi finds for itself (`~/.pi/agent/extensions/`,
+  `.pi/extensions/`) still load, and one loaded after Ralph's can change a call's arguments once
+  Ralph has judged it; add `"--no-extensions"` to `pi.args` to leave them out.
+- **`permissions.fallback: "ask"` asks about every call** no rule settles, reads included. Put what
+  you do not want to be asked about in `allow` (`"read"`, `"ls"`, `"npm test"`). An ask looks like
+  an opencode one: the same card in the web UI, the same push notification, answered in the UI or
+  the `ralph init` terminal, and given up after `timeouts.askMs`, which blocks the call. With nobody
+  to answer, an `ask` is a block. **Always allow** allows the one call, as **Allow once** does:
+  every call is judged anew, so pi keeps no grant.
+- **No question tool.** pi has none, and Ralph does not add one: a tool's description is paid for in
+  every request, which is what pi is chosen to avoid. The planning interview asks in the agent's
+  reply, as it does under opencode when the agent leaves its question tool alone, and the loop's
+  agent raises `DECIDE`. A dialog some other extension opens is cancelled at once.
 - **No Playwright or MCP yet.** pi has no MCP support, so the browser checks an opencode agent makes
   through a Playwright MCP server are not available. Tracked in
   [#86](https://github.com/edkief/ralph/issues/86).
@@ -1001,7 +1027,8 @@ propose again. `ralph doctor` warns about a split proposed but not applied, sinc
 would run the task as it is.
 
 Permission requests are answered from policy; only with `permissions.fallback: "ask"` does one
-wait for [a person](#questions-in-the-middle-of-a-turn). Deny rules beat
+wait for [a person](#questions-in-the-middle-of-a-turn). (Under pi every tool call is such a
+request, not only those a configuration marks `ask`; see [pi](#pi).) Deny rules beat
 allow rules, so a broad allow list cannot re-enable something explicitly forbidden. If the
 server will not take an answer, the agent would wait on its tool call for good, so Ralph
 interrupts the session and ends the iteration as `failed`, with the server's reason in the log.
@@ -1009,7 +1036,7 @@ A failure that is not an outright rejection is retried once first; a request tha
 gone (answered elsewhere) is ignored.
 
 Forms go to a person when one can answer ([above](#questions-in-the-middle-of-a-turn)), and
-are cancelled otherwise. A question tool (opencode's `question`) and an MCP server asking for input open a
+are cancelled otherwise. (pi opens none: it has no question tool.) A question tool (opencode's `question`) and an MCP server asking for input open a
 form and wait for an answer; with nobody to give one, Ralph cancels each, in the session or a
 subagent's, with a message the agent gets as the tool's error. In the loop it says to carry on
 with a sensible default or, for a decision only a person can make, to emit `DECIDE`. While
