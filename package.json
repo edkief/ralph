@@ -10,6 +10,7 @@
   },
   "files": [
     "dist",
+    "extensions",
     "templates",
     "README.md"
   ],

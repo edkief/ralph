@@ -150,6 +150,11 @@ export const HarnessEventSchema = z.discriminatedUnion('type', [
     action: z.string(),
     resources: z.array(z.string()).default([]),
     message: z.string().optional(),
+    /**
+     * The harness puts every tool call to Ralph, not only those its own config marks `ask`: this is the call
+     * being judged, which most of the time just runs. Absent where the agent stopped to ask.
+     */
+    gate: z.boolean().optional(),
   }),
 
   /** The agent is alive and nothing else is to be recorded: a harness event with no content of its own. */

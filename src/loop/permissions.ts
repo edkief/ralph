@@ -40,8 +40,12 @@ export function decidePermission(
   };
 }
 
-/** Permission actions that write files, as opencode names its editing tools. */
-const WRITE_ACTIONS = /\b(edit|write|patch|multiedit)\b/i;
+/**
+ * Permission actions that write files: opencode's editing tools (`edit`, `write`, `patch`, `multiedit`), pi's
+ * (`write`, `edit`) and the tools an extension adds, which join the word to others with `_` or `-`
+ * (`apply_patch`, `multi_edit`). A letter or digit beside the word makes it another word (`editor`, `rewrite`).
+ */
+const WRITE_ACTIONS = /(?:^|[^a-z0-9])(?:edit|write|patch|multiedit)(?:[^a-z0-9]|$)/i;
 
 /**
  * Narrow a policy so file writes are allowed only inside `scope`. Deny rules
