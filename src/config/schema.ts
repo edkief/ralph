@@ -20,6 +20,11 @@ const PiSchema = z.object({
   args: z.array(z.string()).default([]),
   /** Reasoning effort for models that have one; omitted means pi's own default. */
   thinking: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+  /**
+   * Grant pi project trust (`--approve`): it then loads the project's skills, `.pi/settings.json`,
+   * `.pi/mcp.json` and `.pi/extensions`. Without it pi 1.x skips them all when it runs headless.
+   */
+  trustProject: z.boolean().default(true),
 });
 
 const TimeoutsSchema = z.object({

@@ -5,7 +5,8 @@ import type { HarnessEvent } from '../harness/events.js';
 import { HarnessApiError, type AgentHarness, type CheckResult, type HarnessCapabilities, type PromptOptions } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import { EventBus } from './bus.js';
-import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
+import { piArguments } from './args.js';
+import { gateLoaded, gateMissingMessage } from './gate.js';
 import { piChecks } from './preflight.js';
 import { PiCommandError, PiProcess } from './rpc.js';
 import { PiSession } from './session.js';
@@ -187,10 +188,6 @@ export class PiHarness implements AgentHarness {
   }
 }
 
-/** The command line of a session's pi process. */
-export function piArguments(pi: PiConfig, sessionDir: string): string[] {
-  return ['--mode', 'rpc', '--session-dir', sessionDir, '--extension', GATE_EXTENSION, ...(pi.thinking ? ['--thinking', pi.thinking] : []), ...pi.args];
-}
 
 /** How long the gate waits on Ralph beyond `timeouts.askMs`, which Ralph keeps to itself. */
 const GATE_GRACE_MS = 30_000;

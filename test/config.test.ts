@@ -257,7 +257,7 @@ describe('harness selection', () => {
     expect(config.harness).toBe('opencode');
     expect(config.agent).toBe('build');
     expect(config.server).toMatchObject({ url: 'http://opencode:4096', password: 'secret', port: 4096 });
-    expect(config.pi).toEqual({ binary: 'pi', args: [] });
+    expect(config.pi).toEqual({ binary: 'pi', args: [], trustProject: true });
     expect(warnings).toEqual([]);
   });
 
@@ -284,7 +284,7 @@ describe('harness selection', () => {
 
     const { config, warnings } = load(root, { env: { RALPH_PI_THINKING: 'high' } });
 
-    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high' });
+    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high', trustProject: true });
     expect(load(root, { env: { RALPH_PI_BINARY: 'pi-next' } }).config.pi.binary).toBe('pi-next');
     expect(load(root, { env: { RALPH_PI_THINKING: '' } }).config.pi.thinking).toBe('low');
     expect(warnings).toEqual([]);

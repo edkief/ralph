@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +6,7 @@ import { ConfigSchema } from '../src/config/schema.js';
 import { GATE_EXTENSION } from '../src/pi/gate.js';
 import { preflight } from '../src/loop/preflight.js';
 import { PiHarness } from '../src/pi/harness.js';
-import { BROWSER_SKILL, PI_PACKAGE, PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
+import { BROWSER_SKILL, PI_PACKAGE, PI_VERSION_RANGE_TEXT, extensionsCheck, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
 import { fakePi, type FakePiOptions } from './helpers/pi.js';
 import { quietLogger } from './helpers/pi-harness.js';
 
@@ -179,12 +179,33 @@ describe('piChecks', () => {
     expect(pi.starts()[0]).toContain('--no-session');
   });
 
+  it('gives pi project trust, or withholds it, explicitly', async () => {
+    const trusted = fakePi();
+    await check({}, {}, trusted.binary);
+    expect(trusted.starts()[0]).toContain('--approve');
+    const untrusted = fakePi();
+    await check({}, { pi: { trustProject: false } }, untrusted.binary);
+    expect(untrusted.starts()[0]).toContain('--no-approve');
+    expect(untrusted.starts()[0]).not.toContain('--approve');
+  });
+
+  it('says the project\'s skills are not loaded when pi is not given project trust', async () => {
+    const project = mkdtempSync(resolve(tmpdir(), 'ralph-pi-untrusted-'));
+    mkdirSync(resolve(project, '.agents/skills/demo'), { recursive: true });
+    writeFileSync(resolve(project, '.agents/skills/demo/SKILL.md'), '---\nname: demo\n---\n');
+    const pi = fakePi();
+    const config = ConfigSchema.parse({ projectRoot: project, harness: 'pi', model: 'stub/stub-model', pi: { binary: pi.binary, trustProject: false } });
+    const checks = Object.fromEntries((await piChecks(config, { cwd: project, logger: quietLogger })).map((result) => [result.name, result]));
+    expect(checks['skills']).toMatchObject({ ok: false, fatal: false, detail: expect.stringContaining('pi.trustProject is off') });
+    expect(checks['skills']?.detail).toContain('.agents/skills');
+  });
+
   it('is what the harness reports from its preflight', async () => {
     const pi = fakePi();
     const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', model: 'stub/stub-model', pi: { binary: pi.binary } });
     const harness = new PiHarness(config, { cwd: process.cwd(), logger: quietLogger });
     const names = (await harness.preflight(config)).map((result) => result.name);
-    expect(names).toEqual(['pi', 'model', 'skills', 'browser', 'permissions']);
+    expect(names).toEqual(['pi', 'model', 'skills', 'browser', 'permissions', 'extensions']);
     await harness.stop();
   });
 
@@ -195,5 +216,52 @@ describe('piChecks', () => {
     const blocking = (await preflight(config, harness)).filter((result) => !result.ok && result.fatal).map((result) => result.name);
     expect(blocking).toContain('permissions');
     await harness.stop();
+  });
+});
+
+describe('extensionsCheck', () => {
+  const config = (pi: Record<string, unknown> = {}) => ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', pi });
+  const dirs = () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'ralph-pi-ext-'));
+    const agent = resolve(root, 'agent');
+    const project = resolve(root, 'project');
+    mkdirSync(agent, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    return { agent, project };
+  };
+  const withAgentDir = <T>(dir: string, run: () => T): T => {
+    const before = process.env['PI_CODING_AGENT_DIR'];
+    process.env['PI_CODING_AGENT_DIR'] = dir;
+    try {
+      return run();
+    } finally {
+      if (before === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+      else process.env['PI_CODING_AGENT_DIR'] = before;
+    }
+  };
+
+  it('passes with no extensions beyond pi\'s own and the gate', () => {
+    const { agent, project } = dirs();
+    expect(withAgentDir(agent, () => extensionsCheck(config(), project))).toMatchObject({ ok: true, fatal: false });
+  });
+
+  it('warns about the project\'s and the user\'s extensions, which run after the gate', () => {
+    const { agent, project } = dirs();
+    mkdirSync(resolve(project, '.pi/extensions'), { recursive: true });
+    writeFileSync(resolve(project, '.pi/extensions/rewrite.ts'), 'export default () => {};');
+    mkdirSync(resolve(agent, 'extensions'), { recursive: true });
+    writeFileSync(resolve(agent, 'extensions/mine.ts'), 'export default () => {};');
+    const result = withAgentDir(agent, () => extensionsCheck(config(), project));
+    expect(result).toMatchObject({ ok: false, fatal: false });
+    expect(result.detail).toContain(".pi/extensions/ (the project's)");
+    expect(result.detail).toContain(`${resolve(agent, 'extensions')}/ (yours)`);
+    expect(result.detail).toContain('after Ralph\'s permission gate');
+  });
+
+  it('leaves out the project\'s when pi is not given project trust, as pi then does not load them', () => {
+    const { agent, project } = dirs();
+    mkdirSync(resolve(project, '.pi/extensions'), { recursive: true });
+    writeFileSync(resolve(project, '.pi/extensions/rewrite.ts'), 'export default () => {};');
+    expect(withAgentDir(agent, () => extensionsCheck(config({ trustProject: false }), project))).toMatchObject({ ok: true });
   });
 });

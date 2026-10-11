@@ -1,8 +1,12 @@
 import { execFile } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Config } from '../config/schema.js';
 import type { CheckResult } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
+import { piArguments } from './args.js';
 import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
 import { PiProcess } from './rpc.js';
 
@@ -74,7 +78,13 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
   const probed = await probe(config, options);
   if ('failure' in probed) return [...checks, { name: 'rpc', ok: false, detail: probed.failure, fatal: true }];
 
-  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills), await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI), gateCheck(probed.gate));
+  checks.push(
+    ...modelChecks(config, probed),
+    skillsCheck(probed.skills, config.pi.trustProject ? [] : untrustedSkills(options.cwd)),
+    await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI),
+    gateCheck(probed.gate),
+    extensionsCheck(config, options.cwd),
+  );
   return checks;
 }
 
@@ -129,7 +139,7 @@ interface Probed {
 async function probe(config: Config, options: PiCheckOptions): Promise<Probed | { failure: string }> {
   const pi = PiProcess.spawn({
     binary: config.pi.binary,
-    args: ['--mode', 'rpc', '--no-session', '--extension', GATE_EXTENSION, ...(config.pi.thinking ? ['--thinking', config.pi.thinking] : []), ...config.pi.args],
+    args: piArguments(config.pi, undefined),
     cwd: options.cwd,
     shutdownTimeoutMs: 5_000,
     logger: options.logger,
@@ -231,7 +241,20 @@ export async function browserCheck(skills: string[], cli: string): Promise<Check
   return { name, ok: true, detail: `${cli} ${version} driven through the ${BROWSER_SKILL} skill${note}`, fatal: false };
 }
 
-function skillsCheck(skills: string[]): CheckResult {
+/** The project's skill folders that pi skips without project trust. */
+function untrustedSkills(cwd: string): string[] {
+  return ['.agents/skills', '.pi/skills'].filter((dir) => nonEmpty(join(cwd, dir)));
+}
+
+function skillsCheck(skills: string[], skipped: string[]): CheckResult {
+  if (skipped.length > 0 && skills.length === 0) {
+    return {
+      name: 'skills',
+      ok: false,
+      detail: `pi.trustProject is off, so pi does not load the project's skills (${skipped.join(', ')}) — the agent will run without them`,
+      fatal: false,
+    };
+  }
   return {
     name: 'skills',
     ok: skills.length > 0,
@@ -241,4 +264,34 @@ function skillsCheck(skills: string[]): CheckResult {
         : 'none found in .agents/skills/ or .pi/skills/ — the agent will run without skills',
     fatal: false,
   };
+}
+
+/**
+ * pi extensions Ralph does not name on the command line: the project's (loaded with project trust) and the
+ * user's. pi runs them after Ralph's gate, so one can change a tool call the gate has already allowed. They
+ * still load; this says so. Extensions in `pi.args` load before the gate, which then judges what they made of a call.
+ */
+export function extensionsCheck(config: Config, cwd: string): CheckResult {
+  const agentDir = process.env['PI_CODING_AGENT_DIR'] ?? join(homedir(), '.pi', 'agent');
+  const found = [
+    ...(config.pi.trustProject && nonEmpty(join(cwd, '.pi', 'extensions')) ? ['.pi/extensions/ (the project\'s)'] : []),
+    ...(nonEmpty(join(agentDir, 'extensions')) ? [`${join(agentDir, 'extensions')}/ (yours)`] : []),
+  ];
+  if (found.length === 0) return { name: 'extensions', ok: true, detail: "none beyond pi's own and Ralph's gate", fatal: false };
+  return {
+    name: 'extensions',
+    ok: false,
+    detail:
+      `pi loads extensions from ${found.join(' and ')} after Ralph's permission gate: one that changes a tool call ` +
+      'can change it after the gate allowed it. Check what they do, or name them in pi.args (-e <path>) so the gate judges what they leave',
+    fatal: false,
+  };
+}
+
+function nonEmpty(dir: string): boolean {
+  try {
+    return existsSync(dir) && readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
 }
