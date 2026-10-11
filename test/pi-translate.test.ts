@@ -108,8 +108,8 @@ describe('pi translation: the end of a turn', () => {
       expect.objectContaining({ attempt: 2, status: 500 }),
       expect.objectContaining({ attempt: 3, status: 500 }),
     ]);
-    // Only the last failure is a failed call; the others are the retries.
-    expect(ofType(events, 'step.failed')).toEqual([expect.objectContaining({ error: '500 stub overloaded' })]);
+    // The failed attempts are the retries; the execution carries the error that ended them.
+    expect(ofType(events, 'step.failed')).toHaveLength(0);
     expect(ofType(events, 'execution.ended')).toEqual([
       expect.objectContaining({ outcome: 'failed', error: '500 stub overloaded' }),
     ]);

@@ -184,7 +184,10 @@ export class PiTranslator {
       case 'auto_retry_end': {
         const end = RetryEndSchema.safeParse(frame).data;
         if (end?.success === false) {
+          // The retries are the record of the failures, and the error is the execution's: a failed call here would
+          // show the watchdog an agent that is alive.
           this.finalError = end.finalError;
+          this.heldFailure = undefined;
           return this.settle();
         }
         return [this.event({ type: 'activity' })];
