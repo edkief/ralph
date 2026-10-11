@@ -23,8 +23,11 @@ http.createServer((req, res) => {
     if (call % 2 === 1 && MODE !== 'text' && MODE !== 'overflow-once') {
       chunks.push({ ...base, choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'I should run echo.' } }] });
       chunks.push({ ...base, choices: [{ index: 0, delta: { content: 'Running a command. ' } }] });
-      chunks.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_' + call, type: 'function', function: { name: 'bash', arguments: '{"command":' } }] } }] });
-      chunks.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: MODE==='slow' ? '"sleep 6; echo hi"}' : '"echo hello && echo oops >&2; exit 3"}' } }] } }] });
+      // STUB_TOOL and STUB_ARGS (a JSON object) script another call than the default bash one.
+      const tool = process.env.STUB_TOOL || 'bash';
+      const args = process.env.STUB_ARGS ? JSON.stringify(JSON.parse(process.env.STUB_ARGS)) : null;
+      chunks.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_' + call, type: 'function', function: { name: tool, arguments: args ? args.slice(0, 12) : '{"command":' } }] } }] });
+      chunks.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args ? args.slice(12) : MODE==='slow' ? '"sleep 6; echo hi"}' : '"echo hello && echo oops >&2; exit 3"}' } }] } }] });
       chunks.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
       chunks.push({ ...base, choices: [], usage: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290, prompt_tokens_details: { cached_tokens: 100 }, completion_tokens_details: { reasoning_tokens: 12 } } });
     } else {

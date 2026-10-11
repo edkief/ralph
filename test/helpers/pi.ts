@@ -17,6 +17,10 @@ export interface FakePiOptions {
   exitAfter?: string;
   /** What the model says in place of the recording's closing tag: one text, or one per prompt. */
   say?: string | string[];
+  /** `missing`: the permission extension is not loaded, however the command line asks for it. */
+  gate?: 'missing';
+  /** Text in the recorded lines to replace, e.g. the command a recorded session ran. */
+  swap?: Record<string, string>;
 }
 
 export interface FakePi {

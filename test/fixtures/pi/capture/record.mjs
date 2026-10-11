@@ -5,14 +5,15 @@
 //     node record.mjs out.jsonl '[{"at":2000,"cmd":{"id":"r1","type":"prompt","message":"hi"}}]' ['["-e","ext.ts"]']
 //
 // AGENT_DIR holds the `models.json` that points pi at stub.mjs. TOTAL (ms, default 8000) is how long
-// to record before closing stdin. AUTO_UI=1 answers extension dialogs with `cancelled: true`.
+// to record before closing stdin. AUTO_UI=1 answers extension dialogs with `cancelled: true`;
+// UI_REPLY='{"value":"..."}' (JSON) answers them with that body instead, e.g. what Ralph answers a gate dialog.
 import { spawn } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 
 const [out, stepsJson, extraJson] = process.argv.slice(2);
 const steps = JSON.parse(stepsJson);
 const extra = JSON.parse(extraJson ?? '[]');
-const { PI = 'pi', AGENT_DIR, PROJECT_DIR = process.cwd(), SESSIONS_DIR, TOTAL = '8000', AUTO_UI } = process.env;
+const { PI = 'pi', AGENT_DIR, PROJECT_DIR = process.cwd(), SESSIONS_DIR, TOTAL = '8000', AUTO_UI, UI_REPLY } = process.env;
 if (!AGENT_DIR || !SESSIONS_DIR) throw new Error('Set AGENT_DIR and SESSIONS_DIR');
 
 writeFileSync(out, '');
@@ -32,8 +33,8 @@ pi.stdout.on('data', (chunk) => {
     const line = JSON.parse(buffer.slice(0, at));
     buffer = buffer.slice(at + 1);
     record({ dir: 'out', line });
-    if (AUTO_UI && line.type === 'extension_ui_request' && ['select', 'confirm', 'input', 'editor'].includes(line.method)) {
-      const reply = { type: 'extension_ui_response', id: line.id, cancelled: true };
+    if ((AUTO_UI || UI_REPLY) && line.type === 'extension_ui_request' && ['select', 'confirm', 'input', 'editor'].includes(line.method)) {
+      const reply = { type: 'extension_ui_response', id: line.id, ...(UI_REPLY ? JSON.parse(UI_REPLY) : { cancelled: true }) };
       record({ dir: 'in', line: reply });
       pi.stdin.write(`${JSON.stringify(reply)}\n`);
     }

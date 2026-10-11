@@ -12,6 +12,15 @@
 //   exitOnPrompt  exit with this code, silently, when a prompt arrives (a crashed pi)
 //   say        what the model says in place of the recording's closing `<promise>COMPLETE</promise>`: one text, or one per prompt
 //   exitAfter  an event type: exit with code 7 right after writing one of it (a pi that dies mid-turn)
+//   gate       'missing': the permission extension is not loaded, however the command line asks (pi logs an
+//              extension that fails to load and carries on without it)
+//   swap       {recorded text: new text}: replaces text in the lines played, e.g. the command a gate-allow
+//              session ran with the one a test wants judged
+//
+// The gate (extensions/ralph-gate.mjs): when `-e <.../ralph-gate.mjs>` is given and the file exists, get_commands
+// lists its command, as pi does. A session recorded with the gate (gate-allow, gate-block, gate-cancelled,
+// gate-write) puts its request to the client and waits; what plays on is the recorded continuation for the kind
+// of answer: allowed, blocked (with the reason the client gave) or cancelled.
 //
 // A segment is what pi wrote between one recorded command and the next, with the recorded delays.
 // Commands that only read or set state (get_state, get_available_models, get_commands, set_model,
@@ -25,6 +34,9 @@ const cfg = JSON.parse(process.env.FAKE_PI ?? '{}');
 const argv = process.argv.slice(2);
 const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), '../fixtures/pi');
 const log = (entry) => cfg.log && appendFileSync(cfg.log, `${JSON.stringify(entry)}\n`);
+
+/** Every `-e`/`--extension` on the command line. */
+const extensionArgs = (args) => args.flatMap((arg, at) => ((arg === '-e' || arg === '--extension') && args[at + 1] ? [args[at + 1]] : []));
 
 if (argv.includes('--version')) {
   // pi writes its version to stderr.
@@ -40,6 +52,11 @@ log({ argv, pid: process.pid, cwd: process.cwd() });
 
 const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow_up', 'extension_ui_response']);
 
+/** The extension that puts every tool call to Ralph, when it is on the command line and exists. */
+const gatePath = extensionArgs(argv).find((path) => path.endsWith('ralph-gate.mjs') && existsSync(path));
+const gateLoaded = gatePath !== undefined && cfg.gate !== 'missing';
+const GATE_TITLE = 'ralph:gate';
+
 function read(name) {
   return readFileSync(join(fixtures, `${name}.jsonl`), 'utf8')
     .trim()
@@ -53,7 +70,7 @@ function segmentsOf(records) {
   let current;
   for (const record of records) {
     if (record.dir === 'in') {
-      current = SEGMENT_STARTERS.has(record.line.type) ? { trigger: record.line.type, at: record.t, lines: [] } : undefined;
+      current = SEGMENT_STARTERS.has(record.line.type) ? { trigger: record.line.type, at: record.t, lines: [], answer: record.line } : undefined;
       if (current) segments.push(current);
     } else if (record.dir === 'out' && current) {
       const line = record.line;
@@ -66,11 +83,34 @@ function segmentsOf(records) {
 }
 
 const segments = (cfg.captures ?? ['tool-turn']).flatMap((name) => segmentsOf(read(name)));
+
+/** What a client's answer to a gate request says: allowed, blocked (with Ralph's reason) or cancelled. */
+function gateAnswer(response) {
+  if (response.cancelled) return { kind: 'cancel' };
+  try {
+    const parsed = JSON.parse(response.value);
+    return parsed.allow === true ? { kind: 'allow' } : { kind: 'block', reason: typeof parsed.reason === 'string' ? parsed.reason : '' };
+  } catch {
+    return { kind: 'block', reason: '' };
+  }
+}
+
+/** The recorded continuations of a gate request, by the kind of answer; they play as often as asked. */
+const gateContinuations = gateLoaded
+  ? ['gate-allow', 'gate-block', 'gate-cancelled', 'gate-write'].flatMap((name) =>
+      segmentsOf(read(name))
+        .filter((segment) => segment.trigger === 'extension_ui_response')
+        .map((segment) => ({ ...segment, ...gateAnswer(segment.answer), recorded: gateAnswer(segment.answer) })),
+    )
+  : [];
+/** The ids of the gate requests written and not yet answered. */
+const openGates = new Set();
 const templates = read('models');
 const response = (command) => templates.find((r) => r.dir === 'out' && r.line.command === command)?.line;
 const modelTemplate = response('get_available_models').data.models[0];
 const stateTemplate = read('tool-turn').find((r) => r.dir === 'out' && r.line.command === 'get_state').line.data;
 const skillTemplate = response('get_commands').data.commands[0];
+const extensionTemplate = read('gate-allow').find((r) => r.dir === 'out' && r.line.command === 'get_commands').line.data.commands[0];
 
 const scale = cfg.scale ?? 0.02;
 const sessionDir = flag('--session-dir') ?? process.cwd();
@@ -94,7 +134,14 @@ function touchSession() {
 const RECORDED_REPLY = '<promise>COMPLETE</promise>';
 let prompts = 0;
 
-function play(segment, id, command) {
+/** `text` with the replacements of cfg.swap made, in the JSON as it is written. */
+function swapped(text) {
+  let result = text;
+  for (const [from, to] of Object.entries(cfg.swap ?? {})) result = result.split(JSON.stringify(from).slice(1, -1)).join(JSON.stringify(to).slice(1, -1));
+  return result;
+}
+
+function play(segment, id, command, replacing) {
   let stalled = false;
   // What the model says at the end of this turn: the nth of cfg.say when it is a list.
   const said = command === 'prompt' ? (Array.isArray(cfg.say) ? cfg.say[Math.min(prompts++, cfg.say.length - 1)] : cfg.say) : Array.isArray(cfg.say) ? cfg.say.at(-1) : cfg.say;
@@ -104,6 +151,12 @@ function play(segment, id, command) {
       if (stalled) return;
       let value = line.type === 'response' && line.command === command ? { ...line, id } : line;
       if (said !== undefined) value = JSON.parse(JSON.stringify(value).split(RECORDED_REPLY).join(JSON.stringify(said).slice(1, -1)));
+      if (cfg.swap) value = JSON.parse(swapped(JSON.stringify(value)));
+      if (replacing) value = JSON.parse(JSON.stringify(value).split(JSON.stringify(replacing.from).slice(1, -1)).join(JSON.stringify(replacing.to).slice(1, -1)));
+      if (value.type === 'extension_ui_request' && value.title === GATE_TITLE) {
+        value = { ...value, id: randomUUID() };
+        openGates.add(value.id);
+      }
       if (value.type === 'agent_start') streaming = true;
       if (value.type === 'agent_end') streaming = false;
       out(value);
@@ -133,6 +186,14 @@ function handle(command) {
       // Queued behind the turn under way; pi would run it after that, which no recording covers.
       return reply(id, type, true);
     }
+    if (type === 'extension_ui_response' && openGates.delete(command.id)) {
+      const answer = gateAnswer(command);
+      const continuation = gateContinuations.find((candidate) => candidate.kind === answer.kind);
+      if (!continuation) return;
+      // The reason the client gave, in place of the one that was recorded.
+      const replacing = answer.kind === 'block' && continuation.recorded.reason ? { from: continuation.recorded.reason, to: answer.reason } : undefined;
+      return play(continuation, id, type, replacing);
+    }
     const at = segments.findIndex((s) => s.trigger === type);
     if (at < 0) {
       if (type === 'extension_ui_response') return;
@@ -149,7 +210,14 @@ function handle(command) {
     case 'get_available_models':
       return reply(id, type, true, { data: { models: available() } });
     case 'get_commands':
-      return reply(id, type, true, { data: { commands: (cfg.skills ?? []).map((name) => ({ ...skillTemplate, name: `skill:${name}` })) } });
+      return reply(id, type, true, {
+        data: {
+          commands: [
+            ...(gateLoaded ? [{ ...extensionTemplate, sourceInfo: { ...extensionTemplate.sourceInfo, path: gatePath } }] : []),
+            ...(cfg.skills ?? []).map((name) => ({ ...skillTemplate, name: `skill:${name}` })),
+          ],
+        },
+      });
     case 'set_model': {
       const found = available().find((m) => m.provider === command.provider && m.id === command.modelId);
       if (!found) return reply(id, type, false, { error: `Model not found: ${command.provider}/${command.modelId}` });
