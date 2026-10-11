@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { OpencodeClient } from './client.js';
-import { stopChild, stopWhenParentDies } from '../util/process-guard.js';
+import { keepWithParent, stopChild } from '../util/process-guard.js';
 import { sleep } from '../util/sleep.js';
 import type { ServerConfig } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -48,13 +48,7 @@ export async function startServer(
   });
   // A child is not stopped by its parent ending: not by an exit that skips
   // stop(), and not by a crash, which runs no exit hook either.
-  const killOnExit = () => child.kill('SIGTERM');
-  process.once('exit', killOnExit);
-  const disarm = stopWhenParentDies(child, config.shutdownTimeoutMs);
-  child.once('exit', () => {
-    process.off('exit', killOnExit);
-    disarm();
-  });
+  keepWithParent(child, config.shutdownTimeoutMs);
 
   const { url, password } = await readStartupBanner(child, config.startupTimeoutMs, options.logger);
   const client = new OpencodeClient({ baseUrl: url, password });

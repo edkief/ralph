@@ -35,7 +35,7 @@ export function guardScript(pid: number, graceMs: number): string {
  * guard process holds a pipe from this one and acts when it closes. Returns
  * a function that calls the guard off.
  */
-export function stopWhenParentDies(child: ChildProcess, graceMs: number): () => void {
+function stopWhenParentDies(child: ChildProcess, graceMs: number): () => void {
   if (child.pid === undefined) return () => undefined;
   // In a process group of its own: a Ctrl-C that kills Ralph must not kill the guard first.
   const guard = spawn(process.execPath, ['-e', guardScript(child.pid, graceMs)], {
@@ -62,4 +62,19 @@ export async function stopChild(child: ChildProcess, timeoutMs: number): Promise
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Tie `child` to this process: it is stopped when this process exits without
+ * stopping it, and when this process dies without running anything (killed,
+ * or aborted by V8). The ties are undone once the child has exited.
+ */
+export function keepWithParent(child: ChildProcess, graceMs: number): void {
+  const killOnExit = () => child.kill('SIGTERM');
+  process.once('exit', killOnExit);
+  const disarm = stopWhenParentDies(child, graceMs);
+  child.once('exit', () => {
+    process.off('exit', killOnExit);
+    disarm();
+  });
 }
