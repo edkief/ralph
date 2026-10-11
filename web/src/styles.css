@@ -511,6 +511,45 @@ pre {
   color: var(--accent);
 }
 
+/*
+ * What a task is doing, by shape as well as colour: a ring for the one up
+ * next, a filled dot for the one an iteration is working on, which alone
+ * breathes.
+ */
+.task-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  vertical-align: baseline;
+}
+
+.task.running .task-dot {
+  background: var(--live);
+  border-color: var(--live);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task.running .task-dot {
+    animation: none;
+  }
+}
+
 .task-id {
   font-family: var(--mono);
   font-size: 12px;
