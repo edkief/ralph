@@ -50,7 +50,7 @@ const flag = (name) => {
   return at >= 0 ? argv[at + 1] : undefined;
 };
 const earlierStarts = cfg.log && existsSync(cfg.log) ? readFileSync(cfg.log, 'utf8').split('\n').filter((line) => line.includes('"argv"')).length : 0;
-log({ argv, pid: process.pid, cwd: process.cwd(), gateTimeout: process.env.RALPH_GATE_TIMEOUT_MS });
+log({ argv, pid: process.pid, cwd: process.cwd(), gateTimeout: process.env.RALPH_GATE_TIMEOUT_MS, browserSession: process.env.PLAYWRIGHT_CLI_SESSION });
 
 const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow_up', 'extension_ui_response']);
 

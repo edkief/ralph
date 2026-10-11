@@ -34,6 +34,8 @@ export interface FakePi {
   processes(): Array<{ pid: number; cwd: string }>;
   /** The RALPH_GATE_TIMEOUT_MS each process was started with. */
   gateTimeouts(): Array<string | undefined>;
+  /** The PLAYWRIGHT_CLI_SESSION each process was started with. */
+  browserSessions(): Array<string | undefined>;
 }
 
 /** A `pi` on disk that plays back recorded `pi --mode rpc` sessions. */
@@ -53,7 +55,7 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
           .trim()
           .split('\n')
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as { argv?: string[]; pid?: number; cwd?: string; gateTimeout?: string; command?: Record<string, unknown> })
+          .map((line) => JSON.parse(line) as { argv?: string[]; pid?: number; cwd?: string; gateTimeout?: string; browserSession?: string; command?: Record<string, unknown> })
       : [];
   return {
     binary,
@@ -61,5 +63,6 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
     starts: () => entries().flatMap((entry) => (entry.argv ? [entry.argv] : [])),
     processes: () => entries().flatMap((entry) => (entry.argv ? [{ pid: entry.pid!, cwd: entry.cwd! }] : [])),
     gateTimeouts: () => entries().flatMap((entry) => (entry.argv ? [entry.gateTimeout] : [])),
+    browserSessions: () => entries().flatMap((entry) => (entry.argv ? [entry.browserSession] : [])),
   };
 }

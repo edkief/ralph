@@ -5,8 +5,9 @@ import type { HarnessEvent } from '../harness/events.js';
 import { HarnessApiError, type AgentHarness, type CheckResult, type HarnessCapabilities, type PromptOptions } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import { EventBus } from './bus.js';
+import { browserSessionName, closeBrowserSession } from './browser.js';
 import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
-import { piChecks } from './preflight.js';
+import { BROWSER_CLI, piChecks } from './preflight.js';
 import { PiCommandError, PiProcess } from './rpc.js';
 import { PiSession } from './session.js';
 
@@ -27,6 +28,8 @@ export interface PiHarnessOptions {
   graceMs?: number;
   /** See `RERUN_WAIT_MS` in translate.ts. */
   rerunWaitMs?: number;
+  /** The command that closes a browser session (`pi.closeBrowser`); a test points it at a stand-in. */
+  browserCli?: string;
 }
 
 /**
@@ -154,14 +157,17 @@ export class PiHarness implements AgentHarness {
   private async open(resume?: string): Promise<PiSession> {
     if (this.stopped) throw new HarnessApiError('the pi harness is stopped', 503, '');
     mkdirSync(this.sessionDir, { recursive: true });
+    // With `pi.closeBrowser`, the process has a browser session name of its own, closed when it ends.
+    const browser = this.config.pi.closeBrowser ? browserSessionName() : undefined;
     const process = PiProcess.spawn({
       binary: this.config.pi.binary,
       args: piArguments(this.config.pi, this.sessionDir),
-      env: gateEnvironment(this.config),
+      env: { ...gateEnvironment(this.config), ...(browser ? { PLAYWRIGHT_CLI_SESSION: browser } : {}) },
       cwd: this.options.cwd,
       shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
       logger: this.options.logger,
     });
+    if (browser) process.onExit(() => void closeBrowserSession(this.options.browserCli ?? BROWSER_CLI, browser, this.options.logger));
     try {
       if (resume) {
         const switched = await process.request({ type: 'switch_session', sessionPath: resume }, STARTUP_TIMEOUT_MS);

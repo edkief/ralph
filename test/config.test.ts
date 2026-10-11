@@ -257,7 +257,7 @@ describe('harness selection', () => {
     expect(config.harness).toBe('opencode');
     expect(config.agent).toBe('build');
     expect(config.server).toMatchObject({ url: 'http://opencode:4096', password: 'secret', port: 4096 });
-    expect(config.pi).toEqual({ binary: 'pi', args: [] });
+    expect(config.pi).toEqual({ binary: 'pi', args: [], closeBrowser: false });
     expect(warnings).toEqual([]);
   });
 
@@ -284,10 +284,17 @@ describe('harness selection', () => {
 
     const { config, warnings } = load(root, { env: { RALPH_PI_THINKING: 'high' } });
 
-    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high' });
+    expect(config.pi).toEqual({ binary: '/opt/pi', args: ['--offline'], thinking: 'high', closeBrowser: false });
     expect(load(root, { env: { RALPH_PI_BINARY: 'pi-next' } }).config.pi.binary).toBe('pi-next');
     expect(load(root, { env: { RALPH_PI_THINKING: '' } }).config.pi.thinking).toBe('low');
     expect(warnings).toEqual([]);
+  });
+
+  it('turns pi.closeBrowser on from the file or the environment, and leaves it off otherwise', () => {
+    expect(load(project()).config.pi.closeBrowser).toBe(false);
+    expect(load(withFile({ pi: { closeBrowser: true } })).config.pi.closeBrowser).toBe(true);
+    expect(load(project(), { env: { RALPH_PI_CLOSE_BROWSER: 'true' } }).config.pi.closeBrowser).toBe(true);
+    expect(load(withFile({ pi: { closeBrowser: true } }), { env: { RALPH_PI_CLOSE_BROWSER: 'false' } }).config.pi.closeBrowser).toBe(false);
   });
 
   it('rejects an unknown harness or thinking level with a readable message', () => {

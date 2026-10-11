@@ -55,6 +55,7 @@ function fromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     pi: {
       binary: env['RALPH_PI_BINARY'] || undefined,
       thinking: env['RALPH_PI_THINKING'] || undefined,
+      closeBrowser: bool(env['RALPH_PI_CLOSE_BROWSER']),
     },
     timeouts: {
       iterationMs: num(env['RALPH_ITERATION_TIMEOUT_MS']),
