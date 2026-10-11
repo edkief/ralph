@@ -1,17 +1,28 @@
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../src/config/schema.js';
 import { GATE_EXTENSION } from '../src/pi/gate.js';
 import { preflight } from '../src/loop/preflight.js';
 import { PiHarness } from '../src/pi/harness.js';
-import { PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
+import { BROWSER_SKILL, PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
 import { fakePi, type FakePiOptions } from './helpers/pi.js';
 import { quietLogger } from './helpers/pi-harness.js';
 
-async function check(fake: FakePiOptions = {}, overrides: Record<string, unknown> = {}, binary?: string) {
+/** A stand-in for playwright-cli that prints a version and the browsers it lists. */
+function fakeBrowserCli(listing = '  Browsers:\n    /opt/ms-playwright/chromium-1243\n'): string {
+  const path = resolve(mkdtempSync(resolve(tmpdir(), 'fake-playwright-cli-')), 'playwright-cli');
+  writeFileSync(path, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 0.1.22; exit 0; fi\nif [ "$1" = "install-browser" ]; then printf '%s' '${listing}'; exit 0; fi\nexit 1\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+async function check(fake: FakePiOptions = {}, overrides: Record<string, unknown> = {}, binary?: string, options: { browserCli?: string } = {}) {
   const pi = fakePi(fake);
   const { pi: piOverrides, ...rest } = overrides as { pi?: Record<string, unknown> };
   const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', ...rest, pi: { ...piOverrides, binary: binary ?? pi.binary } });
-  return Object.fromEntries((await piChecks(config, { cwd: process.cwd(), logger: quietLogger })).map((result) => [result.name, result]));
+  return Object.fromEntries((await piChecks(config, { cwd: process.cwd(), logger: quietLogger, ...options })).map((result) => [result.name, result]));
 }
 
 describe('piVersion', () => {
@@ -91,6 +102,44 @@ describe('piChecks', () => {
     expect(checks['skills']).toMatchObject({ ok: false, fatal: false, detail: expect.stringContaining('without skills') });
   });
 
+  describe('browser', () => {
+    const model = { model: 'stub/stub-model' };
+
+    it('says the agent can check a screen when the command, a Chromium and the skill are there', async () => {
+      const checks = await check({ skills: [BROWSER_SKILL] }, model, undefined, { browserCli: fakeBrowserCli() });
+      expect(checks['browser']).toMatchObject({ ok: true, fatal: false });
+      expect(checks['browser']?.detail).toContain('playwright-cli 0.1.22');
+      expect(checks['browser']?.detail).toContain(BROWSER_SKILL);
+    });
+
+    it('warns, without failing, when the command is not installed, and says how to install it', async () => {
+      const checks = await check({ skills: [BROWSER_SKILL] }, model, undefined, { browserCli: '/nonexistent/playwright-cli' });
+      expect(checks['browser']).toMatchObject({ ok: false, fatal: false });
+      expect(checks['browser']?.detail).toContain('npm install -g @playwright/cli');
+    });
+
+    it('warns when the command has no Chromium to drive', async () => {
+      const checks = await check({ skills: [BROWSER_SKILL] }, model, undefined, { browserCli: fakeBrowserCli('  Browsers:\n') });
+      expect(checks['browser']).toMatchObject({ ok: false, fatal: false });
+      expect(checks['browser']?.detail).toContain('install-browser chromium');
+    });
+
+    it('warns when pi lists no browser skill, and points at `ralph init`', async () => {
+      const checks = await check({ skills: ['demo'] }, model, undefined, { browserCli: fakeBrowserCli() });
+      expect(checks['browser']).toMatchObject({ ok: false, fatal: false });
+      expect(checks['browser']?.detail).toContain('ralph init');
+    });
+
+    it('does not claim a Chromium it could not look for', async () => {
+      const path = resolve(mkdtempSync(resolve(tmpdir(), 'fake-playwright-cli-')), 'playwright-cli');
+      writeFileSync(path, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 0.1.22; exit 0; fi\nexit 1\n');
+      chmodSync(path, 0o755);
+      const checks = await check({ skills: [BROWSER_SKILL] }, model, undefined, { browserCli: path });
+      expect(checks['browser']).toMatchObject({ ok: true });
+      expect(checks['browser']?.detail).toContain('was not checked');
+    });
+  });
+
   it('passes when pi loads the extension through which Ralph judges every tool call, with no warning left', async () => {
     const checks = await check({}, { model: 'stub/stub-model' });
     expect(checks['permissions']).toMatchObject({ ok: true, fatal: true, detail: expect.stringContaining('put to Ralph before it runs') });
@@ -127,7 +176,7 @@ describe('piChecks', () => {
     const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', model: 'stub/stub-model', pi: { binary: pi.binary } });
     const harness = new PiHarness(config, { cwd: process.cwd(), logger: quietLogger });
     const names = (await harness.preflight(config)).map((result) => result.name);
-    expect(names).toEqual(['pi', 'model', 'skills', 'permissions']);
+    expect(names).toEqual(['pi', 'model', 'skills', 'browser', 'permissions']);
     await harness.stop();
   });
 
