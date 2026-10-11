@@ -531,7 +531,7 @@ line (flags beat the environment, which beats the file). Leave it out and you ge
   "model": "ollama/qwen3-coder",    // provider/model; both harnesses accept it
   "agent": "build",                 // opencode only
   "server": { "url": "http://opencode:4096" },  // opencode only
-  "pi": { "binary": "pi", "args": [], "thinking": "low" }  // pi only
+  "pi": { "binary": "pi", "args": [], "thinking": "low", "closeBrowser": false }  // pi only
 }
 ```
 
@@ -543,6 +543,7 @@ to any harness. Three belong to one harness alone:
 | `agent` (`-a`, `RALPH_AGENT`) | opencode | The opencode agent profile to run as |
 | `server` (`--server`, `RALPH_SERVER_*`) | opencode | Attach to a server, or how to spawn one |
 | `pi.binary` (`RALPH_PI_BINARY`), `pi.args`, `pi.thinking` (`RALPH_PI_THINKING`) | pi | The executable, extra arguments for it, and the thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; unset leaves pi's own default) |
+| `pi.closeBrowser` (`RALPH_PI_CLOSE_BROWSER`) | pi | Close the browser the agent left open with `playwright-cli` when its pi process ends (default `false`; see [pi](#pi)) |
 
 A setting that does not apply to the chosen harness is ignored with a warning, never an error, so
 one file can carry both harnesses' settings and switch between them with `harness`.
@@ -632,6 +633,14 @@ with `--filename=.ralph/artifacts/TASK-<id>/<name>.png`, where artifacts are kep
 `playwright-cli` keeps its own scratch files in `.playwright-cli/`, which `ralph init` git-ignores.
 Two things the skill tells the agent: pages must be served over http (`file:` is blocked), and the
 browser has to be closed (`playwright-cli close`), since it runs on after the command that opened it.
+
+An agent that forgets leaves a Chromium running for up to an hour. With `pi.closeBrowser: true`
+(`RALPH_PI_CLOSE_BROWSER`), Ralph backs the agent up: each pi process it starts gets a
+`playwright-cli` session name of its own (`PLAYWRIGHT_CLI_SESSION=ralph-<id>`, which the agent's
+shell inherits, so the skill is unchanged), and when the process ends, because it was quiet, was lost
+or Ralph stopped, Ralph runs `playwright-cli -s=<that name> close`. Only that process's browser is
+closed, never another's. A cleanup that cannot run (no `playwright-cli`, a hang) is logged at `debug`
+and ignored. A Ralph that is killed outright cannot run it: the guard process stops pi, not the browser.
 
 **Caveats.**
 
@@ -733,7 +742,7 @@ See `templates/ralph.config.json` for a complete file.
     "remote": "origin"
   },
   "server": { "url": "http://opencode:4096" }, // opencode: attach instead of spawning
-  "pi": { "binary": "pi", "args": [], "thinking": "low" }, // pi only
+  "pi": { "binary": "pi", "args": [], "thinking": "low", "closeBrowser": false }, // pi only
   "plan": {
     "model": "anthropic/claude-x", // for the `ralph init` interview; defaults to `model`
     "maxTurns": 30,                // agent turns before the interview gives up
