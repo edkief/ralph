@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { relative, resolve } from 'node:path';
 import { hostname } from 'node:os';
@@ -20,6 +20,7 @@ const EXPECTED = [
   '.ralph/tasks/TASK-1.json',
   '.ralph/logs/LOG.md',
   'ralph.config.json',
+  '.agents/skills/browser-check/SKILL.md',
 ];
 
 function project(): string {
@@ -56,7 +57,7 @@ describe('scaffold', () => {
     for (const path of EXPECTED) {
       expect(readFileSync(resolve(root, path), 'utf8')).not.toBe('');
     }
-    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('.ralph/history/\n.playwright-mcp/\n');
+    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('.ralph/history/\n.playwright-mcp/\n.playwright-cli/\n');
     expect(readFileSync(resolve(root, '.gitattributes'), 'utf8')).toBe('.ralph/**/*.jsonl merge=union\n');
   });
 
@@ -121,18 +122,33 @@ describe('scaffold', () => {
 
     expect(first.status === 'scaffolded' && first.updated).toEqual(['.gitignore']);
     expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe(
-      'node_modules/\ndist/\n.ralph/history/\n.playwright-mcp/\n',
+      'node_modules/\ndist/\n.ralph/history/\n.playwright-mcp/\n.playwright-cli/\n',
     );
   });
 
   it('recognises equivalent .gitignore entries already present', () => {
     const root = project();
-    writeFileSync(resolve(root, '.gitignore'), '/.ralph/history\n.playwright-mcp\n');
+    writeFileSync(resolve(root, '.gitignore'), '/.ralph/history\n.playwright-mcp\n.playwright-cli\n');
 
     const result = scaffold(root);
 
     expect(result.status === 'scaffolded' && result.skipped).toContain('.gitignore');
-    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('/.ralph/history\n.playwright-mcp\n');
+    expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('/.ralph/history\n.playwright-mcp\n.playwright-cli\n');
+  });
+
+  it('adds the browser skill to a project set up before it existed, and leaves an edited one alone', () => {
+    const root = project();
+    scaffold(root);
+    const skill = resolve(root, '.agents/skills/browser-check/SKILL.md');
+    expect(readFileSync(skill, 'utf8')).toMatch(/^---\nname: browser-check\n/);
+
+    rmSync(skill);
+    const added = scaffold(root);
+    expect(added.status === 'scaffolded' && added.created).toEqual(['.agents/skills/browser-check/SKILL.md']);
+
+    writeFileSync(skill, 'mine');
+    scaffold(root);
+    expect(readFileSync(skill, 'utf8')).toBe('mine');
   });
 
   it('adds the merge attribute to an existing .gitattributes, unless the pattern has attributes already', () => {

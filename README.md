@@ -32,10 +32,11 @@ ralph init -m anthropic/claude-x  # plan with a different model than the loop us
 ```
 
 First it scaffolds: it creates `.ralph/` from `templates/`, writes `ralph.config.json` at the
-project root, adds `.ralph/history/` and `.playwright-mcp/` to `.gitignore`, and has
+project root, adds `.ralph/history/`, `.playwright-mcp/` and `.playwright-cli/` to `.gitignore`, and has
 `.gitattributes` merge `.ralph/**/*.jsonl` as a union, so two machines appending to the same
-record keep both sides' lines. Scaffolding never overwrites a file or removes a line, so
-running it again is harmless.
+record keep both sides' lines. It also writes a `browser-check` skill to
+`.agents/skills/browser-check/` (see "Browser checks under pi" in [pi](#pi)). Scaffolding never
+overwrites a file or removes a line, so running it again is harmless, and is how a project set up earlier gets the skill.
 
 Then, in a terminal, it starts an interview with the configured agent:
 
@@ -559,8 +560,8 @@ one file can carry both harnesses' settings and switch between them with `harnes
 
 **What names the harness.** `ralph doctor` and a run's banner say which harness is in use and
 show the harness's own checks, which run after Ralph's checks of the project (for opencode: the
-server, its API, the model, its skills; for pi: its version, the models, its skills, and that the
-extension through which Ralph judges every call loaded). `ralph config` prints the resolved `harness`. Log lines
+server, its API, the model, its skills; for pi: its version, the models, its skills, whether the agent
+can use a browser, and that the extension through which Ralph judges every call loaded). `ralph config` prints the resolved `harness`. Log lines
 about the provider carry a `harness` field, and [exit code 5](#exit-codes) is the harness or
 provider failing, which the message names.
 
@@ -613,6 +614,25 @@ does, starts a process again and switches to the file. The run's own record, as 
 the event files in `.ralph/history/<run>/`, headed `harness: pi`. Each process is started with
 `--extension` for Ralph's permission extension and checked to have loaded it (see the caveats).
 
+**Browser checks under pi.** An opencode agent checks a screen through a Playwright MCP server you
+configure in opencode. pi has no MCP, so Ralph gives its agent the same ability as a skill and a
+command: the `browser-check` skill that `ralph init` writes to `.agents/skills/` tells the agent to
+run `playwright-cli` (Playwright's command-line tool for agents) through `bash`. That costs no tool
+description in each request, and the `bash` calls go through `permissions` like any other.
+
+1. Install the command and a browser once: `npm install -g @playwright/cli`, then
+   `playwright-cli install-browser chromium`.
+2. Run `ralph init` in a project set up before the skill existed, which adds the skill
+   (a skill you have edited is left alone).
+3. `ralph doctor` shows a `browser` line: the command's version and the skill, or what is missing and
+   how to add it. It is a warning, not a failure: a project need not test in a browser.
+
+The agent opens a page, reads it back as text (`snapshot`, `find`, `eval`) and saves a screenshot
+with `--filename=.ralph/artifacts/TASK-<id>/<name>.png`, where artifacts are kept.
+`playwright-cli` keeps its own scratch files in `.playwright-cli/`, which `ralph init` git-ignores.
+Two things the skill tells the agent: pages must be served over http (`file:` is blocked), and the
+browser has to be closed (`playwright-cli close`), since it runs on after the command that opened it.
+
 **Caveats.**
 
 - **`permissions` apply to every call, so they are stricter than under opencode.** opencode asks
@@ -646,9 +666,8 @@ the event files in `.ralph/history/<run>/`, headed `harness: pi`. Each process i
   every request, which is what pi is chosen to avoid. The planning interview asks in the agent's
   reply, as it does under opencode when the agent leaves its question tool alone, and the loop's
   agent raises `DECIDE`. A dialog some other extension opens is cancelled at once.
-- **No Playwright or MCP yet.** pi has no MCP support, so the browser checks an opencode agent makes
-  through a Playwright MCP server are not available. Tracked in
-  [#86](https://github.com/edkief/ralph/issues/86).
+- **No MCP.** pi has none, so an MCP server you gave opencode is not there. Browser checks have
+  their own route, below.
 - **Tokens as pi counts them.** `input` leaves out what the provider served from its cache (shown
   as cache reads), and thinking tokens are counted in `output`, since pi reports no separate figure.
   pi asks the server for `usage` in the stream (`stream_options.include_usage`); a server that sends
@@ -1118,7 +1137,7 @@ never shows a journal-only run as live.
 **Artifacts.** The prompt template asks the agent to keep evidence worth keeping (a screenshot
 of the finished screen, a short report) in `.ralph/artifacts/<task>/` and commit it with the
 task; the Files tab shows the pictures. Browser tools' own scratch folders, such as
-`.playwright-mcp/`, stay out of git. Keep artifacts small; past 25 MB `ralph doctor` warns, and
+`.playwright-mcp/` and `.playwright-cli/`, stay out of git. Keep artifacts small; past 25 MB `ralph doctor` warns, and
 Git LFS is the way to keep more.
 
 **Parking** hands a project over in one step: `ralph stop --park`, `h` in the terminal menu,

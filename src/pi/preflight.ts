@@ -46,7 +46,15 @@ export function inVersionRange(version: Version): boolean {
 export interface PiCheckOptions {
   cwd: string;
   logger: Logger;
+  /** The command the browser skill drives; a test points it at a stand-in. */
+  browserCli?: string;
 }
+
+/** The command the shipped `browser-check` skill (templates/skills/) tells the agent to run. */
+export const BROWSER_CLI = 'playwright-cli';
+
+/** The skill `ralph init` writes to `.agents/skills/`. */
+export const BROWSER_SKILL = 'browser-check';
 
 /**
  * The checks on pi: the executable runs and is a version this adapter speaks, the models the config names
@@ -61,7 +69,7 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
   const probed = await probe(config, options);
   if ('failure' in probed) return [...checks, { name: 'rpc', ok: false, detail: probed.failure, fatal: true }];
 
-  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills), gateCheck(probed.gate));
+  checks.push(...modelChecks(config, probed), skillsCheck(probed.skills), await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI), gateCheck(probed.gate));
   return checks;
 }
 
@@ -174,6 +182,38 @@ function gateCheck(loaded: boolean): CheckResult {
   return loaded
     ? { name: 'permissions', ok: true, detail: 'every tool call is put to Ralph before it runs (extensions/ralph-gate.mjs loaded)', fatal: true }
     : { name: 'permissions', ok: false, detail: gateMissingMessage(), fatal: true };
+}
+
+/**
+ * Whether the agent can check a screen in a browser. pi has no MCP, so it does it by running playwright-cli
+ * through `bash`, as the `browser-check` skill tells it: that takes the command, a Chromium for it to
+ * drive and the skill. Not fatal: a project need not test in a browser.
+ */
+export async function browserCheck(skills: string[], cli: string): Promise<CheckResult> {
+  const name = 'browser';
+  const missing: string[] = [];
+  let version: string | undefined;
+  let chromium: boolean | undefined;
+
+  try {
+    version = (await run(cli, ['--version'], { timeout: 15_000 })).stdout.trim().split('\n')[0];
+  } catch {
+    missing.push(`\`${cli}\` is not installed or not on the PATH (npm install -g @playwright/cli)`);
+  }
+  if (version !== undefined) {
+    try {
+      // Lists the browsers every Playwright installation on the machine has.
+      chromium = /chromium/i.test((await run(cli, ['install-browser', '--list'], { timeout: 30_000 })).stdout);
+    } catch {
+      chromium = undefined;
+    }
+    if (chromium === false) missing.push(`${cli} has no Chromium to drive (${cli} install-browser chromium)`);
+  }
+  if (!skills.includes(BROWSER_SKILL)) missing.push(`pi lists no ${BROWSER_SKILL} skill (\`ralph init\` writes .agents/skills/${BROWSER_SKILL}/)`);
+
+  if (missing.length > 0) return { name, ok: false, detail: `the agent cannot check a screen in a browser: ${missing.join('; ')}`, fatal: false };
+  const note = chromium === undefined ? ' (whether it has a Chromium was not checked)' : '';
+  return { name, ok: true, detail: `${cli} ${version} driven through the ${BROWSER_SKILL} skill${note}`, fatal: false };
 }
 
 function skillsCheck(skills: string[]): CheckResult {
