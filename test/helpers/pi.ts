@@ -14,6 +14,7 @@ export interface FakePiOptions {
   skills?: string[];
   stallAfter?: string;
   exitOnPrompt?: number;
+  exitAfter?: string;
 }
 
 export interface FakePi {
@@ -23,6 +24,8 @@ export interface FakePi {
   commands(): Array<Record<string, unknown>>;
   /** The argument lists the fake was started with. */
   starts(): string[][];
+  /** The pid and working directory of each process started. */
+  processes(): Array<{ pid: number; cwd: string }>;
 }
 
 /** A `pi` on disk that plays back recorded `pi --mode rpc` sessions. */
@@ -42,11 +45,12 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
           .trim()
           .split('\n')
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as { argv?: string[]; command?: Record<string, unknown> })
+          .map((line) => JSON.parse(line) as { argv?: string[]; pid?: number; cwd?: string; command?: Record<string, unknown> })
       : [];
   return {
     binary,
     commands: () => entries().flatMap((entry) => (entry.command ? [entry.command] : [])),
     starts: () => entries().flatMap((entry) => (entry.argv ? [entry.argv] : [])),
+    processes: () => entries().flatMap((entry) => (entry.argv ? [{ pid: entry.pid!, cwd: entry.cwd! }] : [])),
   };
 }

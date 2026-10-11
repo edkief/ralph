@@ -71,6 +71,8 @@ export class PiTranslator {
   private retrying = false;
   private deferredStep: HarnessEvent | undefined;
   private finalError: string | undefined;
+  /** The turn was asked to stop, so a failure that follows is the stop. */
+  private stopRequested = false;
 
   constructor(
     private readonly session: string,
@@ -89,6 +91,17 @@ export class PiTranslator {
   /** A compaction is under way, whatever started it. */
   get compacting(): boolean {
     return this.isCompacting;
+  }
+
+  /** A prompt was accepted: the run it starts has not reported in yet, but the agent is at work. */
+  markStarting(): void {
+    this.isRunning = true;
+    this.stopRequested = false;
+  }
+
+  /** The turn is being stopped; see `settle`. */
+  markStopping(): void {
+    this.stopRequested = true;
   }
 
   /** Milliseconds until `settle` is due, or nothing when the execution is not waiting to end. */
@@ -193,14 +206,17 @@ export class PiTranslator {
     const failure = this.takeFailure();
     const stop = this.last?.stopReason;
     const message = error ?? this.finalError ?? (stop === 'error' ? (this.last?.errorMessage ?? 'the model call failed') : undefined);
-    const outcome: EventOf<'execution.ended'>['outcome'] = message !== undefined ? 'failed' : stop === 'aborted' ? 'aborted' : 'succeeded';
+    // A retry cut off by the stop ends in an error of its own.
+    const stopped = this.stopRequested && message !== undefined && error === undefined;
+    const outcome: EventOf<'execution.ended'>['outcome'] = stopped ? 'aborted' : message !== undefined ? 'failed' : stop === 'aborted' ? 'aborted' : 'succeeded';
+    this.stopRequested = false;
     this.isRunning = false;
     this.ending = undefined;
     this.retrying = false;
     this.deferredStep = undefined;
     this.finalError = undefined;
     this.last = undefined;
-    return [...failure, this.event({ type: 'execution.ended', outcome, ...(message !== undefined ? { error: message } : {}) })];
+    return [...failure, this.event({ type: 'execution.ended', outcome, ...(message !== undefined && !stopped ? { error: message } : {}) })];
   }
 
   /** The process died: end any execution under way as failed. */

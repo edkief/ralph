@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError } from '../src/config/load.js';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { HarnessStartError, startHarness } from '../src/harness/registry.js';
 import { Logger } from '../src/report/logger.js';
 import { startFakeServer, type FakeServer } from './helpers/fake-server.js';
+import { fakePi } from './helpers/pi.js';
 
 const logger = new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WritableStream });
 
@@ -28,11 +28,18 @@ describe('startHarness', () => {
     await harness.stop();
   });
 
-  it('says pi is not yet available, as a config error, until its adapter exists', async () => {
-    const started = startHarness(config({ harness: 'pi' }), { cwd: process.cwd(), logger });
+  it('starts pi when the config picks it, once its executable runs', async () => {
+    const harness = await startHarness(config({ harness: 'pi', pi: { binary: fakePi().binary } }), { cwd: process.cwd(), logger });
 
-    await expect(started).rejects.toBeInstanceOf(ConfigError);
-    await expect(started).rejects.toThrow(/pi harness is not yet available/);
+    expect(harness.name).toBe('pi');
+    await harness.stop();
+  });
+
+  it('names pi in the error when its executable does not run', async () => {
+    const started = startHarness(config({ harness: 'pi', pi: { binary: '/nonexistent/pi' } }), { cwd: process.cwd(), logger });
+
+    await expect(started).rejects.toBeInstanceOf(HarnessStartError);
+    await expect(started).rejects.toThrow(/^The pi harness did not start: Could not run `\/nonexistent\/pi --version`: .*not installed/);
   });
 
   it('names the harness in the error when it does not come up', async () => {

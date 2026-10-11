@@ -10,6 +10,7 @@
 //   skills     names get_commands lists as skills
 //   stallAfter an event type: once a segment has played an event of it, the rest of that segment is dropped
 //   exitOnPrompt  exit with this code, silently, when a prompt arrives (a crashed pi)
+//   exitAfter  an event type: exit with code 7 right after writing one of it (a pi that dies mid-turn)
 //
 // A segment is what pi wrote between one recorded command and the next, with the recorded delays.
 // Commands that only read or set state (get_state, get_available_models, get_commands, set_model,
@@ -33,7 +34,7 @@ const flag = (name) => {
   const at = argv.indexOf(name);
   return at >= 0 ? argv[at + 1] : undefined;
 };
-log({ argv });
+log({ argv, pid: process.pid, cwd: process.cwd() });
 
 const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow_up', 'extension_ui_response']);
 
@@ -98,6 +99,7 @@ function play(segment, id, command) {
       if (value.type === 'agent_start') streaming = true;
       if (value.type === 'agent_end') streaming = false;
       out(value);
+      if (cfg.exitAfter && value.type === cfg.exitAfter) process.exit(7);
       if (cfg.stallAfter && value.type === cfg.stallAfter) {
         stalled = true;
         for (const pending of timers) clearTimeout(pending);
@@ -118,8 +120,10 @@ function handle(command) {
 
   if (SEGMENT_STARTERS.has(type)) {
     if (type === 'prompt' || type === 'steer') touchSession();
-    if (type === 'prompt' && streaming && !command.streamingBehavior) {
-      return reply(id, type, false, { error: 'Agent is already processing. Specify streamingBehavior to queue the message.' });
+    if (type === 'prompt' && streaming) {
+      if (!command.streamingBehavior) return reply(id, type, false, { error: 'Agent is already processing. Specify streamingBehavior to queue the message.' });
+      // Queued behind the turn under way; pi would run it after that, which no recording covers.
+      return reply(id, type, true);
     }
     const at = segments.findIndex((s) => s.trigger === type);
     if (at < 0) {
