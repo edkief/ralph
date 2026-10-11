@@ -47,7 +47,8 @@ w gate-allow && rec gate-allow tool bash "$B" 7000 '[{"at":1500,"cmd":{"id":"r1"
 w gate-block && rec gate-block tool bash "$B" 7000 '[{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' "$G" UI_REPLY="$BLOCK"
 w gate-cancelled && rec gate-cancelled tool bash "$B" 7000 '[{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' "$G" AUTO_UI=1
 w gate-write && rec gate-write tool write '{"path":"src/app.ts","content":"export const app = 1;\n"}' 7000 '[{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' "$G" UI_REPLY="$ALLOW"
-CM='{"code":"const r = await tools.bash({command:\"git push origin main\"}); return r.output;"}'
+# The script assembles the command, so `git push` shows only in the nested call, not in the script's own text.
+CM='{"code":"const command = [\"git\", \"push\", \"origin\", \"main\"].join(\" \"); const r = await tools.bash({ command }); return r.output;"}'
 GC='["-e","'$GATE'","--tools","+codemode"]'
 w codemode-nested-allow && rec codemode-nested-allow tool codemode "$CM" 7000 '[{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' "$GC" UI_REPLY="$ALLOW"
 w codemode-nested-block && rec codemode-nested-block tool codemode "$CM" 7000 '[{"at":2500,"cmd":{"id":"r3","type":"prompt","message":"run it"}}]' "$GC" UI_REPLIES="[$ALLOW,$BLOCK]"

@@ -23,6 +23,8 @@ export interface FakePiOptions {
   gate?: 'missing' | 'missing-after-first';
   /** Text in the recorded lines to replace, e.g. the command a recorded session ran. */
   swap?: Record<string, string>;
+  /** The recordings gate answers play on from; see fake-pi.mjs. */
+  gateSessions?: string[];
 }
 
 export interface FakePi {

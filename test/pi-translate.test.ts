@@ -235,3 +235,14 @@ describe('pi translation: settling', () => {
     expect(ofType(events, 'step.ended')[0]).toMatchObject({ files: ['src/a.ts'], usage: { cost: 0.5 } });
   });
 });
+
+describe('pi translation: calls a tool makes', () => {
+  it('names the call a codemode script made it from, and counts it as a call of its own', () => {
+    const events = translate('codemode-nested-allow');
+    expect(ofType(events, 'tool.called').map((event) => [event.id, event.name, event.parent])).toEqual([
+      ['call_1', 'codemode', undefined],
+      ['call_1/1', 'bash', 'call_1'],
+    ]);
+    expect(ofType(events, 'tool.finished').find((event) => event.id === 'call_1/1')).toMatchObject({ parent: 'call_1', name: 'bash' });
+  });
+});

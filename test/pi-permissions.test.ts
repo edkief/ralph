@@ -105,6 +105,36 @@ describe('the default deny list under pi', () => {
   });
 });
 
+describe('calls a codemode script makes, under pi 1.x', () => {
+  // The script assembles `git push origin main`, so only the call it makes shows the command.
+  const codemode: FakePiOptions = { captures: ['codemode-nested-allow'], gateSessions: ['codemode-nested-allow', 'codemode-nested-block'] };
+
+  it('judges the script, then each call it makes, and blocks a denied one', async () => {
+    const { result, events, log } = await turn(codemode);
+
+    expect(result.status).toBe('complete');
+    const asked = events.filter(ONLY_ACTION);
+    expect(asked.map((event) => event.action)).toEqual(['codemode', 'bash']);
+    expect(asked[1]).toMatchObject({ gate: true, resources: ['git push origin main'] });
+    const nested = events.find((event): event is EventOf<'tool.finished'> => event.type === 'tool.finished' && event.parent === 'call_1');
+    expect(nested).toMatchObject({ id: 'call_1/1', name: 'bash', status: 'error', output: expect.stringContaining('it matches the deny rule "git push"') });
+    expect(log.decided().map((entry) => entry.fields?.['reply'])).toEqual(['once', 'reject']);
+  });
+});
+
+describe('MCP tools, under pi 1.x', () => {
+  it('puts an MCP tool call to the rules like any other', async () => {
+    const mcp: FakePiOptions = { captures: ['mcp-tool'], gateSessions: ['mcp-tool', 'gate-block'] };
+    const allowed = await turn(mcp);
+    expect(allowed.events.find(ONLY_ACTION)).toMatchObject({ gate: true, action: 'mcp__echo__say', resources: ['{"text":"hello"}'] });
+    expect(finished(allowed.events)).toMatchObject({ status: 'success', name: 'mcp__echo__say', output: 'said: hello' });
+
+    const refused = await turn(mcp, { permissions: { deny: ['mcp__echo__say'] } });
+    expect(refused.log.decided()[0]?.fields).toMatchObject({ reply: 'reject', matched: 'mcp__echo__say' });
+    expect(finished(refused.events)).toMatchObject({ status: 'error' });
+  });
+});
+
 describe('allow rules and the fallback', () => {
   it('rejects what no allow rule names when the fallback is reject, and says so', async () => {
     const overrides = { permissions: { fallback: 'reject', allow: ['npm test'] } };

@@ -106,6 +106,11 @@ describe('the policy over pi tool calls', () => {
     expect(decidePermission(of('bash', { command: 'npm test' }), defaults).reply).toBe('once');
   });
 
+  it('rejects a codemode script whose text names a denied command, before it runs', () => {
+    const script = 'const r = await tools.bash({ command: "git push origin main" }); return r.output;';
+    expect(decidePermission(of('codemode', { code: script }), defaults)).toMatchObject({ reply: 'reject', matched: 'git push' });
+  });
+
   it('keeps writes inside the scope, pi tool names and others', () => {
     const scoped = restrictWrites(defaults, '/project', '.ralph');
     expect(scoped(of('write', { path: '.ralph/prd/PRD.md' })).reply).toBe('once');

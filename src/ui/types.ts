@@ -399,6 +399,8 @@ export type TranscriptEntry =
   | (EntryBase & {
       kind: 'tool';
       name: string;
+      /** The entry id of the tool call that made this one (a codemode script's), shown under it. */
+      parent?: string;
       input?: Record<string, unknown>;
       status: 'running' | 'success' | 'error';
       output?: string;

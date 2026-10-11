@@ -394,10 +394,15 @@ function Tool({
   const [open, setOpen] = useState(false);
   const icon = entry.status === 'running' ? '◌' : entry.status === 'success' ? '✓' : '✗';
   return (
-    <li className={`entry tool ${entry.status}`}>
+    <li className={`entry tool ${entry.status}${entry.parent ? ' nested' : ''}`}>
       {time}
       <details className="entry-body" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary>
+          {entry.parent ? (
+            <span className="tool-nested" title="Called by the tool above, from its script">
+              ↳
+            </span>
+          ) : null}
           <span className={`tool-icon ${entry.status}`}>{icon}</span>
           <span className="tool-name">{entry.name}</span>
           <code className="tool-detail">{describe(entry.input)}</code>

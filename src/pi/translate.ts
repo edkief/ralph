@@ -112,6 +112,7 @@ export class PiTranslator {
             ...(tool?.toolCallId ? { id: tool.toolCallId } : {}),
             ...(tool?.toolName ? { name: tool.toolName } : {}),
             ...(tool?.args ? { input: tool.args } : {}),
+            ...(tool?.parentToolCallId ? { parent: tool.parentToolCallId } : {}),
           }),
         ];
       }
@@ -305,6 +306,7 @@ export class PiTranslator {
       type: 'tool.finished',
       ...(id ? { id } : {}),
       ...(name ? { name } : {}),
+      ...(tool?.parentToolCallId ? { parent: tool.parentToolCallId } : {}),
       status: exit !== undefined || !tool?.isError ? 'success' : 'error',
       ...(exit !== undefined ? { exit: Number(exit) } : {}),
       ...(output ? { output } : {}),

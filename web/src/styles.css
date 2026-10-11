@@ -1115,6 +1115,14 @@ button.button {
   padding: 6px 16px;
 }
 
+.entry.tool.nested .entry-body {
+  padding-left: 20px;
+}
+
+.tool-nested {
+  color: var(--muted);
+}
+
 .entry-time {
   color: var(--muted);
   font-family: var(--mono);

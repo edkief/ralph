@@ -78,11 +78,14 @@ export const ToolStartSchema = z.looseObject({
   toolCallId: z.string().optional(),
   toolName: z.string().optional(),
   args: z.record(z.string(), z.unknown()).optional(),
+  /** pi 1.x: the call whose script made this one (a codemode `tools.<name>(...)`); its id is `<parent>/<n>`. */
+  parentToolCallId: z.string().optional(),
 });
 
 export const ToolEndSchema = z.looseObject({
   toolCallId: z.string().optional(),
   toolName: z.string().optional(),
+  parentToolCallId: z.string().optional(),
   result: ToolResultSchema.optional(),
   isError: z.boolean().optional(),
 });

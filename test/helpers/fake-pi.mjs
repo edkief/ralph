@@ -19,6 +19,9 @@
 //              processes started after the first one
 //   swap       {recorded text: new text}: replaces text in the lines played, e.g. the command a gate-allow
 //              session ran with the one a test wants judged
+//   gateSessions  the recordings gate answers play on from (default gate-allow, gate-block, gate-cancelled,
+//              gate-write); the nth answer since the last prompt plays a recording's nth continuation, as a
+//              codemode script's nested call puts a second request after the first
 //
 // The gate (extensions/ralph-gate.mjs): when `-e <.../ralph-gate.mjs>` is given and the file exists, get_commands
 // lists its command, as pi does. A session recorded with the gate (gate-allow, gate-block, gate-cancelled,
@@ -101,14 +104,16 @@ function gateAnswer(response) {
 
 /** The recorded continuations of a gate request, by the kind of answer; they play as often as asked. */
 const gateContinuations = gateLoaded
-  ? ['gate-allow', 'gate-block', 'gate-cancelled', 'gate-write'].flatMap((name) =>
+  ? (cfg.gateSessions ?? ['gate-allow', 'gate-block', 'gate-cancelled', 'gate-write']).flatMap((name) =>
       segmentsOf(read(name))
         .filter((segment) => segment.trigger === 'extension_ui_response')
-        .map((segment) => ({ ...segment, ...gateAnswer(segment.answer), recorded: gateAnswer(segment.answer) })),
+        .map((segment, position) => ({ ...segment, position, ...gateAnswer(segment.answer), recorded: gateAnswer(segment.answer) })),
     )
   : [];
 /** The ids of the gate requests written and not yet answered. */
 const openGates = new Set();
+/** Gate requests answered since the last prompt. */
+let gatesAnswered = 0;
 const templates = read('models');
 const response = (command) => templates.find((r) => r.dir === 'out' && r.line.command === command)?.line;
 const modelTemplate = response('get_available_models').data.models[0];
@@ -187,6 +192,7 @@ function handle(command) {
 
   if (SEGMENT_STARTERS.has(type)) {
     if (type === 'prompt' || type === 'steer') touchSession();
+    if (type === 'prompt') gatesAnswered = 0;
     if (type === 'prompt' && streaming) {
       if (!command.streamingBehavior) return reply(id, type, false, { error: 'Agent is already processing. Specify streamingBehavior to queue the message.' });
       // Queued behind the turn under way; pi would run it after that, which no recording covers.
@@ -194,7 +200,8 @@ function handle(command) {
     }
     if (type === 'extension_ui_response' && openGates.delete(command.id)) {
       const answer = gateAnswer(command);
-      const continuation = gateContinuations.find((candidate) => candidate.kind === answer.kind);
+      const position = gatesAnswered++;
+      const continuation = gateContinuations.find((candidate) => candidate.kind === answer.kind && candidate.position === position);
       if (!continuation) return;
       // The reason the client gave, in place of the one that was recorded.
       const replacing = answer.kind === 'block' && continuation.recorded.reason ? { from: continuation.recorded.reason, to: answer.reason } : undefined;

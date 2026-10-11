@@ -86,12 +86,15 @@ export const HarnessEventSchema = z.discriminatedUnion('type', [
     id: z.string().optional(),
     name: z.string().optional(),
     input: z.record(z.string(), z.unknown()).optional(),
+    /** The id of the call that made this one, as a codemode script does; absent for the agent's own calls. */
+    parent: z.string().optional(),
   }),
   /** `output` is the tool's text, parts joined by newlines. A tool that ran and exited non-zero is `success` with its `exit`. */
   Base.extend({
     type: z.literal('tool.finished'),
     id: z.string().optional(),
     name: z.string().optional(),
+    parent: z.string().optional(),
     status: z.enum(['success', 'error']),
     exit: z.number().optional(),
     output: z.string().optional(),
