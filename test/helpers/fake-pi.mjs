@@ -10,6 +10,7 @@
 //   skills     names get_commands lists as skills
 //   stallAfter an event type: once a segment has played an event of it, the rest of that segment is dropped
 //   exitOnPrompt  exit with this code, silently, when a prompt arrives (a crashed pi)
+//   say        what the model says in place of the recording's closing `<promise>COMPLETE</promise>`: one text, or one per prompt
 //   exitAfter  an event type: exit with code 7 right after writing one of it (a pi that dies mid-turn)
 //
 // A segment is what pi wrote between one recorded command and the next, with the recorded delays.
@@ -26,7 +27,8 @@ const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), '../fixtures/p
 const log = (entry) => cfg.log && appendFileSync(cfg.log, `${JSON.stringify(entry)}\n`);
 
 if (argv.includes('--version')) {
-  console.log(cfg.version ?? '0.73.1');
+  // pi writes its version to stderr.
+  console.error(cfg.version ?? '0.73.1');
   process.exit(0);
 }
 
@@ -89,13 +91,19 @@ function touchSession() {
   writeFileSync(sessionFile, `${JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`);
 }
 
+const RECORDED_REPLY = '<promise>COMPLETE</promise>';
+let prompts = 0;
+
 function play(segment, id, command) {
   let stalled = false;
+  // What the model says at the end of this turn: the nth of cfg.say when it is a list.
+  const said = command === 'prompt' ? (Array.isArray(cfg.say) ? cfg.say[Math.min(prompts++, cfg.say.length - 1)] : cfg.say) : Array.isArray(cfg.say) ? cfg.say.at(-1) : cfg.say;
   for (const { after, line } of segment.lines) {
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (stalled) return;
-      const value = line.type === 'response' && line.command === command ? { ...line, id } : line;
+      let value = line.type === 'response' && line.command === command ? { ...line, id } : line;
+      if (said !== undefined) value = JSON.parse(JSON.stringify(value).split(RECORDED_REPLY).join(JSON.stringify(said).slice(1, -1)));
       if (value.type === 'agent_start') streaming = true;
       if (value.type === 'agent_end') streaming = false;
       out(value);

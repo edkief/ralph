@@ -897,6 +897,17 @@ describe('web UI actions', () => {
     expect((await get<StatusView>('/api/status')).body.asks[0]).toMatchObject({ answered: true });
   });
 
+  it("does not list the pi harness's session folder as a run", async () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph', 'history', 'pi'), { recursive: true });
+    writeFileSync(resolve(root, '.ralph', 'history', 'pi', '2026-10-10T00-00-00-000Z_abc.jsonl'), line({ type: 'session' }));
+    await start(root);
+
+    const { body } = await get<Array<{ runId: string }>>('/api/runs');
+    expect(body.map((run) => run.runId)).not.toContain('pi');
+    expect(body.length).toBeGreaterThan(0);
+  });
+
   it('takes a decision on an asked permission', async () => {
     const root = project();
     const ralphRoot = resolve(root, '.ralph');

@@ -1,7 +1,5 @@
-import { execFile } from 'node:child_process';
 import { mkdirSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import type { Config, PiConfig } from '../config/schema.js';
 import type { HarnessEvent } from '../harness/events.js';
 import { HarnessApiError, type AgentHarness, type CheckResult, type HarnessCapabilities, type PromptOptions } from '../harness/types.js';
@@ -10,8 +8,6 @@ import { EventBus } from './bus.js';
 import { piChecks } from './preflight.js';
 import { PiCommandError, PiProcess } from './rpc.js';
 import { PiSession } from './session.js';
-
-const run = promisify(execFile);
 
 /** Time pi gets to start and say who it is. */
 const STARTUP_TIMEOUT_MS = 60_000;
@@ -202,10 +198,4 @@ async function readState(process: PiProcess): Promise<{ sessionId: string; sessi
   }
   const model = data.model?.provider && data.model.id ? `${data.model.provider}/${data.model.id}` : data.model?.id;
   return { sessionId: data.sessionId, sessionFile: data.sessionFile, model };
-}
-
-/** Run `pi --version`: that the binary starts is all `startPi` asks; whether it is a version Ralph speaks is for the doctor. */
-export async function piVersion(binary: string): Promise<string> {
-  const { stdout } = await run(binary, ['--version'], { timeout: 15_000 });
-  return stdout.trim();
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../src/config/schema.js';
 import { PiHarness } from '../src/pi/harness.js';
-import { PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks } from '../src/pi/preflight.js';
+import { PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
 import { fakePi, type FakePiOptions } from './helpers/pi.js';
 import { quietLogger } from './helpers/pi-harness.js';
 
@@ -11,6 +11,12 @@ async function check(fake: FakePiOptions = {}, overrides: Record<string, unknown
   const config = ConfigSchema.parse({ projectRoot: process.cwd(), harness: 'pi', ...rest, pi: { ...piOverrides, binary: binary ?? pi.binary } });
   return Object.fromEntries((await piChecks(config, { cwd: process.cwd(), logger: quietLogger })).map((result) => [result.name, result]));
 }
+
+describe('piVersion', () => {
+  it('reads the version from stderr, where pi writes it', async () => {
+    expect(await piVersion(fakePi({ version: '0.73.1' }).binary)).toBe('0.73.1');
+  });
+});
 
 describe('pi version range', () => {
   it('takes the tested release and its patch releases, and nothing newer or older', () => {

@@ -41,11 +41,11 @@ const types = (name: string) =>
     .map((record) => record.line.type);
 
 describe('fake pi', () => {
-  it('prints a version for --version', async () => {
+  it('prints a version for --version, on stderr as pi does', async () => {
     const fake = fakePi({ version: '0.99.0' });
-    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'ignore', 'pipe'] });
     let text = '';
-    child.stdout.on('data', (chunk) => (text += chunk));
+    child.stderr.on('data', (chunk) => (text += chunk));
     await new Promise((done) => child.on('exit', done));
     expect(text.trim()).toBe('0.99.0');
   });

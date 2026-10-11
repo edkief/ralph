@@ -20,6 +20,15 @@ const PROBE_TIMEOUT_MS = 30_000;
 
 type Version = readonly [number, number, number];
 
+/**
+ * What `pi --version` prints. pi writes it to stderr, so both streams are read; a pi that writes it to
+ * stdout instead is no different.
+ */
+export async function piVersion(binary: string): Promise<string> {
+  const { stdout, stderr } = await run(binary, ['--version'], { timeout: 15_000 });
+  return `${stdout}${stderr}`.trim();
+}
+
 export function parseVersion(text: string): Version | undefined {
   const match = text.match(/(\d+)\.(\d+)\.(\d+)/);
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
@@ -65,7 +74,7 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
 async function versionCheck(binary: string): Promise<CheckResult> {
   let output: string;
   try {
-    output = (await run(binary, ['--version'], { timeout: 15_000 })).stdout.trim();
+    output = await piVersion(binary);
   } catch (cause) {
     const missing = (cause as NodeJS.ErrnoException).code === 'ENOENT';
     return {

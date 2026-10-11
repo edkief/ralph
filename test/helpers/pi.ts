@@ -15,6 +15,8 @@ export interface FakePiOptions {
   stallAfter?: string;
   exitOnPrompt?: number;
   exitAfter?: string;
+  /** What the model says in place of the recording's closing tag: one text, or one per prompt. */
+  say?: string | string[];
 }
 
 export interface FakePi {

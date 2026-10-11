@@ -1,6 +1,7 @@
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
-import { PiHarness, piVersion } from './harness.js';
+import { PiHarness } from './harness.js';
+import { piVersion } from './preflight.js';
 
 /**
  * Start the pi harness: check that the `pi` executable runs. Its processes are started per session, so
