@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { Config } from '../config/schema.js';
 import type { CheckResult } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
-import { piArguments } from './args.js';
+import { piArguments, piEnvironment } from './args.js';
 import { GATE_EXTENSION, gateLoaded, gateMissingMessage } from './gate.js';
 import { PiProcess } from './rpc.js';
 
@@ -81,7 +81,9 @@ export async function piChecks(config: Config, options: PiCheckOptions): Promise
   checks.push(
     ...modelChecks(config, probed),
     skillsCheck(probed.skills, config.pi.trustProject ? [] : untrustedSkills(options.cwd)),
-    await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI),
+    config.pi.browser === 'mcp'
+      ? await playwrightMcpCheck(probed.playwright, config.pi.playwrightMcp.command)
+      : await browserCheck(probed.skills, options.browserCli ?? BROWSER_CLI),
     gateCheck(probed.gate),
     extensionsCheck(config, options.cwd),
   );
@@ -133,6 +135,8 @@ interface Probed {
   skills: string[];
   /** pi lists the command of Ralph's permission extension. */
   gate: boolean;
+  /** pi lists the command Ralph's Playwright extension registers once it has registered the server. */
+  playwright: boolean;
 }
 
 /** Start a throwaway pi and ask it what it has. */
@@ -140,6 +144,7 @@ async function probe(config: Config, options: PiCheckOptions): Promise<Probed | 
   const pi = PiProcess.spawn({
     binary: config.pi.binary,
     args: piArguments(config.pi, undefined),
+    env: piEnvironment(config),
     cwd: options.cwd,
     shutdownTimeoutMs: 5_000,
     logger: options.logger,
@@ -158,6 +163,7 @@ async function probe(config: Config, options: PiCheckOptions): Promise<Probed | 
       defaultModel: named((state.data as { model?: { provider?: string; id?: string } | null } | undefined)?.model),
       skills: commandList.filter((command) => command.source === 'skill').map((command) => (command.name ?? '').replace(/^skill:/, '')),
       gate: gateLoaded(commandList),
+      playwright: commandList.some((command) => /^ralph-playwright(:\d+)?$/.test(command.name ?? '') && command.source === 'extension'),
     };
   } catch (cause) {
     return { failure: `\`${config.pi.binary} --mode rpc\` did not answer: ${(cause as Error).message}` };
@@ -210,9 +216,9 @@ function gateCheck(loaded: boolean): CheckResult {
 }
 
 /**
- * Whether the agent can check a screen in a browser. pi has no MCP, so it does it by running playwright-cli
- * through `bash`, as the `browser-check` skill tells it: that takes the command, a Chromium for it to
- * drive and the skill. Not fatal: a project need not test in a browser.
+ * Whether the agent can check a screen in a browser, by the default route (`pi.browser` "skill"): it runs
+ * playwright-cli through `bash`, as the `browser-check` skill tells it, which takes the command, a Chromium
+ * for it to drive and the skill. Not fatal: a project need not test in a browser.
  */
 export async function browserCheck(skills: string[], cli: string): Promise<CheckResult> {
   const name = 'browser';
@@ -244,6 +250,26 @@ export async function browserCheck(skills: string[], cli: string): Promise<Check
 /** The project's skill folders that pi skips without project trust. */
 function untrustedSkills(cwd: string): string[] {
   return ['.agents/skills', '.pi/skills'].filter((dir) => nonEmpty(join(cwd, dir)));
+}
+
+/**
+ * Whether the agent can check a screen in a browser through the Playwright MCP server (`pi.browser` "mcp"):
+ * Ralph's extension registered it with pi, and the command that starts it is there. Whether the server then
+ * starts shows only in a turn. Not fatal, as for the skill.
+ */
+export async function playwrightMcpCheck(registered: boolean, command: string): Promise<CheckResult> {
+  const name = 'browser';
+  const missing: string[] = [];
+  if (!registered) missing.push('Ralph\'s Playwright extension (extensions/ralph-playwright.mjs) did not register the server with pi');
+  if (!onPath(command)) missing.push(`\`${command}\` (pi.playwrightMcp.command) is not installed or not on the PATH`);
+  if (missing.length > 0) return { name, ok: false, detail: `the agent cannot check a screen in a browser: ${missing.join('; ')}`, fatal: false };
+  return { name, ok: true, detail: `Playwright MCP, started with \`${command}\`, its tools declared to the model (mcp__playwright__*)`, fatal: false };
+}
+
+/** Whether `command` is a path that exists, or a name some directory on the PATH has. */
+function onPath(command: string): boolean {
+  if (command.includes('/')) return existsSync(command);
+  return (process.env['PATH'] ?? '').split(':').some((dir) => dir !== '' && existsSync(join(dir, command)));
 }
 
 function skillsCheck(skills: string[], skipped: string[]): CheckResult {

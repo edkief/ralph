@@ -25,6 +25,19 @@ const PiSchema = z.object({
    * `.pi/mcp.json` and `.pi/extensions`. Without it pi 1.x skips them all when it runs headless.
    */
   trustProject: z.boolean().default(true),
+  /**
+   * How the agent reaches a browser: `skill`, the browser-check skill driving playwright-cli through bash, or
+   * `mcp`, pi's built-in MCP support starting the Playwright MCP server (`playwrightMcp`). The skill costs the
+   * model far less context: MCP declares every Playwright tool on every call.
+   */
+  browser: z.enum(['skill', 'mcp']).default('skill'),
+  /** The Playwright MCP server pi starts when `browser` is `mcp`; Playwright's own Chromium, not the Chrome channel it defaults to. */
+  playwrightMcp: z
+    .object({
+      command: z.string().min(1).default('npx'),
+      args: z.array(z.string()).default(['-y', '@playwright/mcp@0.0.83', '--headless', '--browser', 'chromium', '--output-dir', '.playwright-mcp']),
+    })
+    .prefault({}),
 });
 
 const TimeoutsSchema = z.object({

@@ -5,7 +5,7 @@ import type { HarnessEvent } from '../harness/events.js';
 import { HarnessApiError, type AgentHarness, type CheckResult, type HarnessCapabilities, type PromptOptions } from '../harness/types.js';
 import type { Logger } from '../report/logger.js';
 import { EventBus } from './bus.js';
-import { piArguments } from './args.js';
+import { piArguments, piEnvironment } from './args.js';
 import { gateLoaded, gateMissingMessage } from './gate.js';
 import { piChecks } from './preflight.js';
 import { PiCommandError, PiProcess } from './rpc.js';
@@ -154,7 +154,7 @@ export class PiHarness implements AgentHarness {
     const process = PiProcess.spawn({
       binary: this.config.pi.binary,
       args: piArguments(this.config.pi, this.sessionDir),
-      env: gateEnvironment(this.config),
+      env: piEnvironment(this.config),
       cwd: this.options.cwd,
       shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
       logger: this.options.logger,
@@ -188,21 +188,6 @@ export class PiHarness implements AgentHarness {
   }
 }
 
-
-/** How long the gate waits on Ralph beyond `timeouts.askMs`, which Ralph keeps to itself. */
-const GATE_GRACE_MS = 30_000;
-
-/**
- * pi's environment. The gate waits on Ralph for as long as `timeouts.askMs` lets an ask last, and a little
- * longer, then blocks the call itself; with no limit on asks it waits for good, which the turn's end or
- * its stop ends.
- */
-export function gateEnvironment(config: Config): NodeJS.ProcessEnv {
-  const { askMs } = config.timeouts;
-  // Not one the environment brought along: Ralph alone says how long the gate waits.
-  const { RALPH_GATE_TIMEOUT_MS: _inherited, ...env } = process.env;
-  return { ...env, ...(askMs > 0 ? { RALPH_GATE_TIMEOUT_MS: String(askMs + GATE_GRACE_MS) } : {}) };
-}
 
 /**
  * pi logs an extension that fails to load and carries on without it, which here would be every tool call

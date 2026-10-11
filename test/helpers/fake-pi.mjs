@@ -62,6 +62,8 @@ const SEGMENT_STARTERS = new Set(['prompt', 'steer', 'abort', 'compact', 'follow
 /** The extension that puts every tool call to Ralph, when it is on the command line and exists. */
 const gatePath = extensionArgs(argv).find((path) => path.endsWith('ralph-gate.mjs') && existsSync(path));
 const gateLoaded = gatePath !== undefined && cfg.gate !== 'missing' && !(cfg.gate === 'missing-after-first' && earlierStarts > 0);
+/** Ralph's Playwright extension registers its server, and then its command, only when told which server to start. */
+const playwrightLoaded = extensionArgs(argv).some((path) => path.endsWith('ralph-playwright.mjs') && existsSync(path)) && Boolean(process.env.RALPH_PLAYWRIGHT_MCP);
 const GATE_TITLE = 'ralph:gate';
 
 function read(name) {
@@ -227,6 +229,7 @@ function handle(command) {
         data: {
           commands: [
             ...(gateLoaded ? [{ ...extensionTemplate, sourceInfo: { ...extensionTemplate.sourceInfo, path: gatePath } }] : []),
+            ...(playwrightLoaded ? [{ ...extensionTemplate, name: 'ralph-playwright', description: 'Playwright, through MCP, for the agent (registered by Ralph)' }] : []),
             ...(cfg.skills ?? []).map((name) => ({ ...skillTemplate, name: `skill:${name}` })),
           ],
         },
