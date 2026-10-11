@@ -196,3 +196,17 @@ describe('a long session', () => {
     expect(all.at(-1)).toMatchObject({ text: 'message 4999' });
   });
 });
+
+describe('permission requests in the transcript', () => {
+  const asked = { type: 'permission.asked' as const, session: 's1', id: 'p1', action: 'bash', resources: ['ls'] };
+
+  it('notes one the agent stopped to ask', () => {
+    const builder = new TranscriptBuilder();
+    expect(builder.push({ ...asked, created: 1 }).map((entry) => (entry.kind === 'notice' ? entry.text : ''))).toEqual(['permission asked: bash ls']);
+  });
+
+  it('leaves out a call that was only being judged: the tool entry shows it', () => {
+    const builder = new TranscriptBuilder();
+    expect(builder.push({ ...asked, created: 1, gate: true })).toEqual([]);
+  });
+});

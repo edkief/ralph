@@ -56,6 +56,8 @@ export class TranscriptBuilder {
 
     switch (event.type) {
       case 'permission.asked': {
+        // A call being judged, which the tool's own entry already shows.
+        if (event.gate) return [];
         const what = [event.action, ...event.resources].join(' ');
         return this.add({ ...base, id: this.nextId('permission'), kind: 'notice', level: 'info', text: `permission asked: ${what}` });
       }

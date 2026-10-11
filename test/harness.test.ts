@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ConfigSchema, type Config } from '../src/config/schema.js';
 import { HarnessApiError } from '../src/harness/types.js';
 import { runIteration } from '../src/loop/iteration.js';
+import { restrictWrites } from '../src/loop/permissions.js';
 import { preflight } from '../src/loop/preflight.js';
 import { Logger } from '../src/report/logger.js';
 import { FakeHarness, SESSION, event, type FakeHarnessOptions } from './helpers/fake-harness.js';
@@ -128,6 +129,47 @@ describe('the harness contract the loop relies on', () => {
 
     expect(result.status).toBe('progressed');
     expect(result.error).toBeUndefined();
+  });
+
+  describe('the reason a request is turned down', () => {
+    const asks = () => [event('permission.asked', SESSION, { id: 'req_1', action: 'shell', resources: ['git push origin main'] }), ...say('done')];
+    const rule = (overrides: Record<string, unknown>) => config({ permissions: overrides });
+
+    it('names the deny rule that matched', async () => {
+      const harness = new FakeHarness({ script: asks });
+
+      await iterate(harness, rule({}));
+
+      expect(harness.permissionReplies).toEqual([
+        { sessionId: SESSION, requestId: 'req_1', reply: 'reject', reason: 'it matches the deny rule "git push"' },
+      ]);
+    });
+
+    it('names the write scope that was left', async () => {
+      const harness = new FakeHarness({
+        script: () => [event('permission.asked', SESSION, { id: 'req_1', action: 'edit', resources: ['src/a.ts'] }), ...say('done')],
+      });
+
+      await iterate(harness, config(), { permissions: restrictWrites(config().permissions, process.cwd(), '.ralph') });
+
+      expect(harness.permissionReplies[0]).toMatchObject({ reply: 'reject', reason: expect.stringContaining('"src/a.ts" is outside') });
+    });
+
+    it('says there is nobody to ask when the policy leaves it to a person and none can answer', async () => {
+      const harness = new FakeHarness({ script: () => [event('permission.asked', SESSION, { id: 'req_1', action: 'shell', resources: ['make'] }), ...say('done')] });
+
+      await iterate(harness, rule({ fallback: 'ask' }));
+
+      expect(harness.permissionReplies[0]).toMatchObject({ reply: 'reject', reason: 'there is nobody to ask' });
+    });
+
+    it('gives none with a yes', async () => {
+      const harness = new FakeHarness({ script: () => [event('permission.asked', SESSION, { id: 'req_1', action: 'shell', resources: ['ls'] }), ...say('done')] });
+
+      await iterate(harness, config());
+
+      expect(harness.permissionReplies).toEqual([{ sessionId: SESSION, requestId: 'req_1', reply: 'once' }]);
+    });
   });
 });
 
