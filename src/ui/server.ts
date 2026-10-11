@@ -75,7 +75,11 @@ const ACTION_PATHS = new Set([
 
 const StopSchema = z.object({ mode: z.enum(STOP_MODES) });
 const RunSchema = z.object({ iterations: z.number().int().min(1).max(10_000).optional() });
-const PlanStartSchema = z.object({ mode: z.enum(PLAN_MODES), description: z.string().trim().min(1).max(MAX_PLAN_TEXT) });
+const PlanStartSchema = z.object({
+  mode: z.enum(PLAN_MODES),
+  description: z.string().trim().min(1).max(MAX_PLAN_TEXT),
+  startBatch: z.boolean().optional(),
+});
 const PlanReplySchema = z.union([
   z.object({ id: z.string().min(1), seq: z.number().int().positive(), text: z.string().trim().min(1).max(MAX_PLAN_TEXT) }),
   z.object({ id: z.string().min(1), seq: z.number().int().positive(), done: z.literal(true) }),
@@ -399,11 +403,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     try {
       if (path === '/api/actions/plan/start') {
         const parsed = PlanStartSchema.safeParse(body);
-        if (!parsed.success) throw new RequestError(400, `mode must be "new" or "replan", with a description of up to ${MAX_PLAN_TEXT} characters`);
-        const { mode, description } = parsed.data;
-        const { daemon, id } = requestPlan({ projectRoot: options.projectRoot, ralphDir: options.ralphDir }, mode, description, 'ui');
-        options.logger.info('web UI action', { action: 'plan-start', mode, plan: id, daemon: daemon.pid });
-        return sendJson(res, 200, { id, message: mode === 'new' ? 'Ralph is planning the project.' : 'Ralph is revising the plan.' });
+        if (!parsed.success) throw new RequestError(400, `mode must be "new" or "replan", with a description of up to ${MAX_PLAN_TEXT} characters, and startBatch a boolean if given`);
+        const { mode, description, startBatch } = parsed.data;
+        const { daemon, id } = requestPlan({ projectRoot: options.projectRoot, ralphDir: options.ralphDir }, mode, description, 'ui', startBatch);
+        options.logger.info('web UI action', { action: 'plan-start', mode, plan: id, startBatch: startBatch === true, daemon: daemon.pid });
+        const message = mode === 'new' ? 'Ralph is planning the project.' : 'Ralph is revising the plan.';
+        return sendJson(res, 200, { id, message: startBatch ? `${message} A batch starts once the plan is written.` : message });
       }
       if (path === '/api/actions/plan/reply') {
         const parsed = PlanReplySchema.safeParse(body);

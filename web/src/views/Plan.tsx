@@ -82,6 +82,7 @@ function onSend(send: () => void) {
 /** Start an interview: plan the project, or revise its plan. */
 function Start({ status }: { status: StatusView }) {
   const [description, setDescription] = useState('');
+  const [startBatch, setStartBatch] = useState(false);
   const action = useAction();
   const revise = status.planState === 'written';
   const { daemon, actions } = status;
@@ -102,7 +103,9 @@ function Start({ status }: { status: StatusView }) {
 
   const start = async () => {
     if (!description.trim()) return;
-    if (await action.run('/api/actions/plan/start', { mode: revise ? 'replan' : 'new', description: description.trim() })) setDescription('');
+    if (await action.run('/api/actions/plan/start', { mode: revise ? 'replan' : 'new', description: description.trim(), ...(startBatch ? { startBatch } : {}) })) {
+      setDescription('');
+    }
   };
 
   return (
@@ -136,6 +139,10 @@ function Start({ status }: { status: StatusView }) {
                 onChange={(event) => setDescription(event.target.value)}
                 onKeyDown={onSend(() => void start())}
               />
+            </label>
+            <label className="pending-field inline ask-check">
+              <input type="checkbox" checked={startBatch} onChange={(event) => setStartBatch(event.target.checked)} />
+              Start an iteration when planning completes
             </label>
             <div className="pending-actions">
               <button type="button" className="button primary" disabled={action.busy || !description.trim()} onClick={() => void start()}>
@@ -317,7 +324,7 @@ function Outcome({ status, plan }: { status: StatusView; plan: PlanSummary }) {
           <strong>
             Plan written: {outcome?.tasks?.length ?? 0} task{outcome?.tasks?.length === 1 ? '' : 's'}.
           </strong>{' '}
-          Review {ralphDir} and commit it, then run a batch.
+          {plan.startBatch ? <>A batch was started: follow it on the Overview.</> : <>Review {ralphDir} and commit it, then run a batch.</>}
         </div>
       ) : plan.status === 'invalid' ? (
         <div className="banner bad">

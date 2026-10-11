@@ -256,6 +256,8 @@ export interface PlanSummary {
   /** The agent's latest tool activity, while `working`. */
   activity: string | null;
   turn: number;
+  /** A batch was asked for once the plan is written. */
+  startBatch?: boolean;
   maxTurns: number | null;
   model: string | null;
   startedAt: string;

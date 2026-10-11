@@ -47,6 +47,8 @@ const DaemonRequestSchema = z.discriminatedUnion('kind', [
     mode: z.enum(PLAN_MODES),
     /** The project's description, or what should change in the plan. */
     description: z.string().min(1).max(MAX_PLAN_TEXT),
+    /** Run a batch at once if the interview ends with the plan written. */
+    startBatch: z.boolean().optional(),
   }),
 ]);
 export type DaemonRequest = z.infer<typeof DaemonRequestSchema>;
@@ -118,13 +120,15 @@ export function requestRun(ralphRoot: string, iterations: number | undefined, by
 /**
  * Ask the project's daemon to plan the project with the owner: a new plan
  * where there is none yet, or a revision of the one there is. Refused unless
- * a daemon is up and idle. Returns the session's id.
+ * a daemon is up and idle. With `startBatch`, the daemon runs a batch once the
+ * plan is written. Returns the session's id.
  */
 export function requestPlan(
   project: { projectRoot: string; ralphDir: string },
   mode: PlanMode,
   description: string,
   by: 'ui' | 'cli',
+  startBatch = false,
 ): { daemon: DaemonState; id: string } {
   const ralphRoot = resolve(project.projectRoot, project.ralphDir);
   const state = liveDaemon(ralphRoot);
@@ -135,7 +139,7 @@ export function requestPlan(
   if (mode === 'new' && written) throw new DaemonRequestError('The project has a plan already: revise it instead');
   if (mode === 'replan' && !written) throw new DaemonRequestError('There is no plan to revise yet: plan the project first');
   const id = newPlanId(ralphRoot);
-  writeDaemonRequest(ralphRoot, { kind: 'plan', id, mode, description }, by);
+  writeDaemonRequest(ralphRoot, { kind: 'plan', id, mode, description, ...(startBatch ? { startBatch } : {}) }, by);
   return { daemon: state, id };
 }
 

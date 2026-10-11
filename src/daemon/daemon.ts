@@ -19,6 +19,14 @@ export interface PlanRequest {
   id: string;
   mode: PlanMode;
   description: string;
+  /** Run a batch at once if the plan is written. */
+  startBatch?: boolean;
+}
+
+/** How an interview ended, as far as the daemon needs to know. */
+export interface PlanResult {
+  /** The plan was written and is valid. */
+  planned: boolean;
 }
 
 /** What the daemon does next: a batch, or an interview. */
@@ -37,9 +45,10 @@ export interface DaemonLoopArgs {
   /**
    * Hold a planning interview. `interrupt` aborts when the daemon is shut
    * down meanwhile. The session keeps its own record; whatever it resolves or
-   * throws, the daemon goes idle after. Without it, plan requests are ignored.
+   * throws, the daemon goes idle after, unless the plan was written and the
+   * request asked for a batch. Without it, plan requests are ignored.
    */
-  runPlan?(request: PlanRequest, interrupt: AbortSignal): Promise<void>;
+  runPlan?(request: PlanRequest, interrupt: AbortSignal): Promise<PlanResult | void>;
   defaultIterations: number;
   /** Run a first batch at once, of this many iterations, rather than wait to be asked. */
   start?: number;
@@ -102,7 +111,10 @@ export async function daemonLoop(args: DaemonLoopArgs): Promise<void> {
         logger.warn(`${request.kind} request ignored: ${state.status === 'planning' ? 'an interview is under way' : 'a batch is already running'}`);
       } else if (request.kind === 'plan') {
         if (args.runPlan) {
-          next = { kind: 'plan', request: { id: request.id, mode: request.mode, description: request.description } };
+          next = {
+            kind: 'plan',
+            request: { id: request.id, mode: request.mode, description: request.description, ...(request.startBatch ? { startBatch: true } : {}) },
+          };
           wake?.();
         } else {
           logger.warn('plan request ignored: this daemon does not plan');
@@ -138,13 +150,19 @@ export async function daemonLoop(args: DaemonLoopArgs): Promise<void> {
       if (work.kind === 'plan') {
         save({ status: 'planning', batch: null });
         logger.info('daemon planning the project', { id: work.request.id, mode: work.request.mode });
+        let planned = false;
         try {
-          await args.runPlan!(work.request, stopping);
+          planned = (await args.runPlan!(work.request, stopping))?.planned ?? false;
         } catch (cause) {
           logger.error('planning failed', { error: cause instanceof Error ? cause.message : String(cause) });
         }
         next = undefined;
         if (stopping.aborted) break;
+        if (planned && work.request.startBatch) {
+          logger.info('plan written: starting a batch', { id: work.request.id });
+          next = { kind: 'run', iterations: args.defaultIterations };
+          continue;
+        }
         save({ status: 'idle' });
         logger.info('daemon idle');
         continue;

@@ -20,7 +20,7 @@ import {
   requestShutdown,
   type DaemonState,
 } from './control.js';
-import { daemonLoop, markStopped, type BatchOutcome, type PlanRequest } from './daemon.js';
+import { daemonLoop, markStopped, type BatchOutcome, type PlanRequest, type PlanResult } from './daemon.js';
 import { FileInterviewIO } from '../init/file-io.js';
 import { fileAskRelay } from '../loop/asks.js';
 import { livePlan, PlanRecorder, requestPlanStop } from '../init/record.js';
@@ -114,8 +114,14 @@ export async function runDaemon(args: {
     return { status: result.status, message: result.message };
   };
 
-  const runPlan = async (request: PlanRequest, interrupt: AbortSignal): Promise<void> => {
-    const recorder = new PlanRecorder(ralphRoot, { id: request.id, mode: request.mode, by: 'daemon', harness: harness.name });
+  const runPlan = async (request: PlanRequest, interrupt: AbortSignal): Promise<PlanResult> => {
+    const recorder = new PlanRecorder(ralphRoot, {
+      id: request.id,
+      mode: request.mode,
+      by: 'daemon',
+      harness: harness.name,
+      ...(request.startBatch ? { startBatch: true } : {}),
+    });
     const stop = new AbortController();
     const signal = AbortSignal.any([interrupt, stop.signal]);
     // The description came with the request: it answers the interview's first question.
@@ -129,7 +135,7 @@ export async function runDaemon(args: {
         const reason = cause instanceof Error ? cause.message : String(cause);
         logger.warn('planning refused', { id: request.id, reason });
         recorder.fail(reason);
-        return;
+        return { planned: false };
       }
       const outcome = await planWith({
         harness,
@@ -148,6 +154,7 @@ export async function runDaemon(args: {
         ...(outcome.status === 'planned' ? { tasks: outcome.tasks.length } : {}),
         ...(outcome.status === 'failed' ? { reason: outcome.reason } : {}),
       });
+      return { planned: outcome.status === 'planned' };
     } finally {
       io.close();
       recorder.close();

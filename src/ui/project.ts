@@ -728,6 +728,7 @@ function planSummary(state: PlanState): PlanSummary {
     maxTurns: state.maxTurns,
     model: state.model,
     startedAt: state.startedAt,
+    ...(state.startBatch ? { startBatch: true } : {}),
     // As written: optional fields are left out, never undefined.
     ...(state.outcome ? { outcome: state.outcome as NonNullable<PlanSummary['outcome']> } : {}),
   };
