@@ -19,13 +19,17 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['TASK-1.json', `${RALPH_DIR}/tasks/TASK-1.json`],
   ['LOG.md', `${RALPH_DIR}/logs/LOG.md`],
   ['ralph.config.json', 'ralph.config.json'],
+  // Where pi, which has no MCP, learns to check a screen with playwright-cli. Written for any harness: the
+  // skill says to use it only without a browser tool of one's own, and a project may switch harness later.
+  ['skills/browser-check/SKILL.md', '.agents/skills/browser-check/SKILL.md'],
 ];
 
 /**
  * Ralph's run history (raw event streams and files that steer a live
- * process), and the scratch output of browser tools agents test with.
+ * process), and the scratch output of browser tools agents test with: the Playwright MCP server's, and
+ * playwright-cli's.
  */
-const GITIGNORE_ENTRIES = [`${RALPH_DIR}/history/`, '.playwright-mcp/'];
+const GITIGNORE_ENTRIES = [`${RALPH_DIR}/history/`, '.playwright-mcp/', '.playwright-cli/'];
 /** Two machines appending to the same record merge by keeping both sides' lines. */
 const GITATTRIBUTES_ENTRIES = [`${RALPH_DIR}/**/*.jsonl merge=union`];
 
