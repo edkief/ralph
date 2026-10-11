@@ -42,13 +42,13 @@ const types = (name: string) =>
     .map((record) => record.line.type);
 
 describe('fake pi', () => {
-  it('prints a version for --version, on stderr as pi does', async () => {
-    const fake = fakePi({ version: '0.99.0' });
-    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  it('prints a version for --version, on stdout as pi 1.x does', async () => {
+    const fake = fakePi({ version: '1.4.2' });
+    const child = spawn(fake.binary, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let text = '';
-    child.stderr.on('data', (chunk) => (text += chunk));
+    child.stdout.on('data', (chunk) => (text += chunk));
     await new Promise((done) => child.on('exit', done));
-    expect(text.trim()).toBe('0.99.0');
+    expect(text.trim()).toBe('1.4.2');
   });
 
   it('plays a recorded turn: the recorded events, in order, with the response carrying the command id', async () => {

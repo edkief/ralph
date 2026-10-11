@@ -5,7 +5,7 @@
 //              steer, abort, compact, extension_ui_response) plays the next recorded segment for that command
 //   scale      factor on the recorded delays (default 0.02: a 6 s tool run takes 120 ms)
 //   log        file the fake appends what it was run with and every command it received to
-//   version    what `--version` prints (default 0.73.1)
+//   version    what `--version` prints (default 1.1.0)
 //   models     [{provider, id}] get_available_models lists (default stub/stub-model)
 //   skills     names get_commands lists as skills
 //   stallAfter an event type: once a segment has played an event of it, the rest of that segment is dropped
@@ -40,8 +40,8 @@ const log = (entry) => cfg.log && appendFileSync(cfg.log, `${JSON.stringify(entr
 const extensionArgs = (args) => args.flatMap((arg, at) => ((arg === '-e' || arg === '--extension') && args[at + 1] ? [args[at + 1]] : []));
 
 if (argv.includes('--version')) {
-  // pi writes its version to stderr.
-  console.error(cfg.version ?? '0.73.1');
+  // pi 1.x writes its version to stdout (0.x wrote it to stderr).
+  console.log(cfg.version ?? '1.1.0');
   process.exit(0);
 }
 

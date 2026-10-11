@@ -6,7 +6,7 @@ import { ConfigSchema } from '../src/config/schema.js';
 import { GATE_EXTENSION } from '../src/pi/gate.js';
 import { preflight } from '../src/loop/preflight.js';
 import { PiHarness } from '../src/pi/harness.js';
-import { BROWSER_SKILL, PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
+import { BROWSER_SKILL, PI_PACKAGE, PI_VERSION_RANGE_TEXT, inVersionRange, parseVersion, piChecks, piVersion } from '../src/pi/preflight.js';
 import { fakePi, type FakePiOptions } from './helpers/pi.js';
 import { quietLogger } from './helpers/pi-harness.js';
 
@@ -26,26 +26,25 @@ async function check(fake: FakePiOptions = {}, overrides: Record<string, unknown
 }
 
 describe('piVersion', () => {
-  it('reads the version from stderr, where pi writes it', async () => {
-    expect(await piVersion(fakePi({ version: '0.73.1' }).binary)).toBe('0.73.1');
+  it('reads the version from stdout, where pi 1.x writes it', async () => {
+    expect(await piVersion(fakePi({ version: '1.1.0' }).binary)).toBe('1.1.0');
   });
 });
 
 describe('pi version range', () => {
-  it('takes the tested release and its patch releases, and nothing newer or older', () => {
+  it('takes 1.1.0 and every later 1.x, and nothing older or of the next major', () => {
     const inRange = (text: string) => inVersionRange(parseVersion(text)!);
-    expect(PI_VERSION_RANGE_TEXT).toBe('>=0.73.1 <0.74.0');
-    expect(inRange('0.73.1')).toBe(true);
-    expect(inRange('0.73.9')).toBe(true);
-    expect(inRange('0.73.0')).toBe(false);
-    expect(inRange('0.72.9')).toBe(false);
-    expect(inRange('0.74.0')).toBe(false);
-    expect(inRange('1.0.0')).toBe(false);
+    expect(PI_VERSION_RANGE_TEXT).toBe('>=1.1.0 <2');
+    expect(inRange('1.1.0')).toBe(true);
+    expect(inRange('1.9.3')).toBe(true);
+    expect(inRange('1.0.4')).toBe(false);
+    expect(inRange('0.73.1')).toBe(false);
+    expect(inRange('2.0.0')).toBe(false);
   });
 
   it('finds the version in what `pi --version` prints', () => {
-    expect(parseVersion('0.73.1\n')).toEqual([0, 73, 1]);
-    expect(parseVersion('pi v0.73.1 (abc)')).toEqual([0, 73, 1]);
+    expect(parseVersion('1.1.0\n')).toEqual([1, 1, 0]);
+    expect(parseVersion('pi v1.1.0 (abc)')).toEqual([1, 1, 0]);
     expect(parseVersion('no version')).toBeUndefined();
   });
 });
@@ -53,16 +52,25 @@ describe('pi version range', () => {
 describe('piChecks', () => {
   it('passes a pi in the range that has the model asked for', async () => {
     const checks = await check({ models: [{ provider: 'local', id: 'qwen' }], skills: ['demo'] }, { model: 'local/qwen' });
-    expect(checks['pi']).toMatchObject({ ok: true, fatal: true, detail: expect.stringContaining('0.73.1') });
+    expect(checks['pi']).toMatchObject({ ok: true, fatal: true, detail: expect.stringContaining('1.1.0') });
     expect(checks['model']).toMatchObject({ ok: true, detail: 'local/qwen' });
     expect(checks['skills']).toMatchObject({ ok: true, detail: '1 available (demo)' });
   });
 
-  it.each(['0.72.0', '0.74.0', '1.2.3'])('rejects pi %s, outside the range, as fatal, and probes nothing else', async (version) => {
+  it.each(['1.0.4', '2.0.0'])('rejects pi %s, outside the range, as fatal, and probes nothing else', async (version) => {
     const checks = await check({ version });
     expect(checks['pi']).toMatchObject({ ok: false, fatal: true });
     expect(checks['pi']?.detail).toContain(`${version} is outside`);
     expect(checks['pi']?.detail).toContain(PI_VERSION_RANGE_TEXT);
+    expect(checks['pi']?.detail).toContain(`npm install -g ${PI_PACKAGE}@1.1`);
+    expect(Object.keys(checks)).toEqual(['pi']);
+  });
+
+  it.each(['0.73.1', '0.72.0'])('rejects pi %s as the old, deprecated package, and names the new one', async (version) => {
+    const checks = await check({ version });
+    expect(checks['pi']).toMatchObject({ ok: false, fatal: true });
+    expect(checks['pi']?.detail).toContain('old @mariozechner/pi-coding-agent, which is deprecated');
+    expect(checks['pi']?.detail).toContain(`npm install -g ${PI_PACKAGE}@1.1`);
     expect(Object.keys(checks)).toEqual(['pi']);
   });
 

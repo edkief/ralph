@@ -9,13 +9,18 @@ import { PiProcess } from './rpc.js';
 const run = promisify(execFile);
 
 /**
- * The pi versions whose RPC protocol this adapter was written and tested against: 0.73.1. pi is 0.x, where
- * a minor release can change events and commands, so the range stops short of the next minor. Widening it means
- * recording a session on the new version (test/fixtures/pi/capture/) and checking the fixtures still hold.
+ * The pi versions whose RPC protocol this adapter was written and tested against: 1.1.0 onwards. pi 1.x
+ * keeps its protocol within the major version, so the range stops short of 2.0. Widening it means recording
+ * a session on the new version (test/fixtures/pi/capture/) and checking the fixtures still hold.
  */
-export const PI_VERSION_RANGE = { min: [0, 73, 1], below: [0, 74, 0] } as const;
+export const PI_VERSION_RANGE = { min: [1, 1, 0], below: [2, 0, 0] } as const;
 
-export const PI_VERSION_RANGE_TEXT = '>=0.73.1 <0.74.0';
+export const PI_VERSION_RANGE_TEXT = '>=1.1.0 <2';
+
+/** pi's package. Before 1.0 it was `@mariozechner/pi-coding-agent`, now deprecated and frozen at 0.73.1. */
+export const PI_PACKAGE = '@earendil-works/pi-coding-agent';
+
+const OLD_PI_PACKAGE = '@mariozechner/pi-coding-agent';
 
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -82,18 +87,28 @@ async function versionCheck(binary: string): Promise<CheckResult> {
     return {
       name: 'pi',
       ok: false,
-      detail: missing ? `\`${binary}\` is not installed or not on the PATH (npm install -g @mariozechner/pi-coding-agent)` : `\`${binary} --version\` failed: ${(cause as Error).message}`,
+      detail: missing ? `\`${binary}\` is not installed or not on the PATH (npm install -g ${PI_PACKAGE})` : `\`${binary} --version\` failed: ${(cause as Error).message}`,
       fatal: true,
     };
   }
   const version = parseVersion(output);
   if (!version) return { name: 'pi', ok: false, detail: `\`${binary} --version\` printed "${output}", which is not a version`, fatal: true };
   const text = version.join('.');
+  if (version[0] === 0) {
+    return {
+      name: 'pi',
+      ok: false,
+      detail:
+        `${text} is the old ${OLD_PI_PACKAGE}, which is deprecated; Ralph needs ${PI_VERSION_RANGE_TEXT}: ` +
+        `npm uninstall -g ${OLD_PI_PACKAGE} && npm install -g ${PI_PACKAGE}@${PI_VERSION_RANGE.min.slice(0, 2).join('.')}`,
+      fatal: true,
+    };
+  }
   if (!inVersionRange(version)) {
     return {
       name: 'pi',
       ok: false,
-      detail: `${text} is outside the versions Ralph is tested with (${PI_VERSION_RANGE_TEXT}): npm install -g @mariozechner/pi-coding-agent@${PI_VERSION_RANGE.min.join('.')}`,
+      detail: `${text} is outside the versions Ralph is tested with (${PI_VERSION_RANGE_TEXT}): npm install -g ${PI_PACKAGE}@${PI_VERSION_RANGE.min.slice(0, 2).join('.')}`,
       fatal: true,
     };
   }
