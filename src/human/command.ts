@@ -74,6 +74,7 @@ export async function runRespond(args: {
       },
       by: 'cli',
       records: config.git.records,
+      recordPaths: config.git.recordPaths,
     });
     reporter.summary(result.message, [], 'good');
     return ExitCode.Complete;

@@ -41,6 +41,8 @@ export async function respond(args: {
   by: 'ui' | 'cli';
   /** `git.records`: whether to commit what an answer with no loop waiting recorded. */
   records?: RecordsMode;
+  /** `git.recordPaths`: the project's own paths committed with the records. */
+  recordPaths?: readonly string[];
 }): Promise<RespondResult> {
   const { projectRoot, ralphDir, input, by } = args;
   const ralphRoot = resolve(projectRoot, ralphDir);
@@ -83,6 +85,7 @@ export async function respond(args: {
       ralphDir,
       subject: `chore(ralph): record ${answer.action} on ${pending.kind}`,
       runId: pending.runId,
+      ...(args.recordPaths ? { extraPaths: args.recordPaths } : {}),
     });
     if (committed.error) message += ` Could not commit it (${committed.error}); commit ${ralphDir}/ yourself.`;
   }

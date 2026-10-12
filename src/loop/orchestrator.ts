@@ -712,6 +712,7 @@ async function commitParked(config: Config, logger: Logger, taskId: string | nul
     projectRoot: config.projectRoot,
     ralphDir: config.ralphDir,
     subject: `wip(${taskId ?? 'ralph'}): parked`,
+    extraPaths: config.git.recordPaths,
   });
   if (result.error) logger.warn('could not commit the parked work', { error: result.error });
   else if (result.committed) logger.info('committed the work left uncommitted', { task: taskId ?? 'none' });
@@ -762,7 +763,13 @@ async function commitRunRecords(
     context.iteration !== undefined
       ? `chore(ralph): record run ${runId}, iteration ${context.iteration}`
       : `chore(ralph): record run ${runId}`;
-  const result = await commitRecords({ projectRoot: config.projectRoot, ralphDir: config.ralphDir, subject, runId });
+  const result = await commitRecords({
+    projectRoot: config.projectRoot,
+    ralphDir: config.ralphDir,
+    subject,
+    runId,
+    extraPaths: config.git.recordPaths,
+  });
   if (result.error) {
     logger.warn('could not commit Ralph\'s records', { ...context, error: result.error });
   } else if (result.committed) {
