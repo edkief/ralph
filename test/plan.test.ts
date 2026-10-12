@@ -27,6 +27,28 @@ describe('planState', () => {
     writeFileSync(resolve(root, '.ralph/prd/PRD.md'), '# Something real');
     expect(planState(root, '.ralph')).toBe('written');
   });
+
+  it('still sees the task list an older Ralph scaffolded as the template', () => {
+    const root = scaffolded();
+    writeFileSync(
+      resolve(root, '.ralph/tasks.json'),
+      `${JSON.stringify(
+        [
+          {
+            id: 'TASK-1',
+            title: 'Short description of the first unit of work',
+            category: 'setup',
+            specFilePath: '.ralph/tasks/TASK-1.json',
+            passes: false,
+          },
+        ],
+        null,
+        2,
+      )}\n`,
+    );
+    expect(planState(root, '.ralph')).toBe('template');
+    expect(validatePlan(root, '.ralph')).toContain('.ralph/tasks.json is still the template');
+  });
 });
 
 describe('validatePlan', () => {
@@ -63,7 +85,7 @@ describe('validatePlan', () => {
 
   it('checks every spec exists, matches its task and has acceptance criteria', () => {
     const root = scaffolded();
-    writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-2' }, { id: 'TASK-3' }, { id: 'TASK-4' }, { id: 'TASK-5', specFilePath: undefined }], {
+    writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-2' }, { id: 'TASK-3' }, { id: 'TASK-4' }], {
       'TASK-1': undefined,
       'TASK-2': '{nope',
       'TASK-3': spec('TASK-9'),
@@ -71,12 +93,37 @@ describe('validatePlan', () => {
     });
 
     const problems = validatePlan(root, '.ralph');
-    expect(problems).toHaveLength(5);
+    expect(problems).toHaveLength(4);
     expect(problems[0]).toBe('task TASK-1: spec .ralph/tasks/TASK-1.json does not exist');
     expect(problems[1]).toMatch(/^task TASK-2: spec .* is not valid JSON/);
     expect(problems[2]).toBe('task TASK-3: spec .ralph/tasks/TASK-3.json has id "TASK-9", expected "TASK-3"');
     expect(problems[3]).toMatch(/^task TASK-4: .* non-empty acceptanceCriteria/);
-    expect(problems[4]).toBe('task TASK-5: specFilePath is missing');
+  });
+
+  it('flags a spec the list leaves out, which would otherwise run last', () => {
+    const root = scaffolded();
+    writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-2' }]);
+    for (const id of ['TASK-3', 'TASK-4']) writeFileSync(resolve(root, `.ralph/tasks/${id}.json`), JSON.stringify(spec(id)));
+    expect(validatePlan(root, '.ralph')).toEqual([
+      '.ralph/tasks/TASK-3.json is not in .ralph/tasks.json: list it where it should run, or delete it if the task is dropped',
+      '.ralph/tasks/TASK-4.json is not in .ralph/tasks.json: list it where it should run, or delete it if the task is dropped',
+    ]);
+  });
+
+  it('takes a title from the spec, not the list', () => {
+    const root = scaffolded();
+    writePlan(root, [{ id: 'TASK-1' }]);
+    writeFileSync(resolve(root, '.ralph/tasks.json'), JSON.stringify([{ id: 'TASK-1', title: 'Listed', passes: false }]));
+    writeFileSync(resolve(root, '.ralph/tasks/TASK-1.json'), JSON.stringify(spec('TASK-1', { title: '' })));
+    expect(validatePlan(root, '.ralph')).toEqual(['task TASK-1: title is empty']);
+  });
+
+  it('accepts a plan of one task, though its list reads like the template', () => {
+    const root = scaffolded();
+    writePlan(root, [{ id: 'TASK-1' }]);
+    copyFileSync(resolve(TEMPLATES_DIR, 'tasks.json'), resolve(root, '.ralph/tasks.json'));
+    expect(validatePlan(root, '.ralph')).toEqual([]);
+    expect(planState(root, '.ralph')).toBe('written');
   });
 
   it('flags an example spec left as the template', () => {

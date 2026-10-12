@@ -47,23 +47,7 @@ checks. Replace the template content in these files completely:
   Constraints (stack, versions, conventions, services), Acceptance criteria, and
   Assumptions for anything the owner left open. Keep it short: the loop reads it every
   iteration.
-- `{{RALPH_DIR}}/tasks.json`: a JSON array, in the order the tasks should be done:
-
-  ```json
-  [
-    {
-      "id": "TASK-1",
-      "title": "Short imperative summary",
-      "category": "setup",
-      "specFilePath": "{{RALPH_DIR}}/tasks/TASK-1.json",
-      "passes": false
-    }
-  ]
-  ```
-
-  Ids are `TASK-1`, `TASK-2`, ... in order; the loop only recognises ids of that form.
-  `category` is a free-form label such as `setup`, `functional`, `api`, `ui` or `docs`.
-- `{{RALPH_DIR}}/tasks/TASK-N.json`: one spec per task, matching its entry in `tasks.json`:
+- `{{RALPH_DIR}}/tasks/TASK-N.json`: one spec per task, the only place a task is described:
 
   ```json
   {
@@ -77,7 +61,21 @@ checks. Replace the template content in these files completely:
   }
   ```
 
-  The scaffolded `{{RALPH_DIR}}/tasks/TASK-1.json` is only an example: overwrite it.
+  Ids are `TASK-1`, `TASK-2`, ... and the file is named after the id; the loop only recognises
+  ids of that form. `category` is a free-form label such as `setup`, `functional`, `api`,
+  `ui` or `docs`. The scaffolded `{{RALPH_DIR}}/tasks/TASK-1.json` is only an example:
+  overwrite it.
+- `{{RALPH_DIR}}/tasks.json`: the run order and status, one entry per spec and nothing else:
+
+  ```json
+  [
+    { "id": "TASK-1", "passes": false },
+    { "id": "TASK-2", "passes": false }
+  ]
+  ```
+
+  The loop works through it top to bottom, so list each task after the tasks it builds on.
+  Every spec in `{{RALPH_DIR}}/tasks/` must be listed exactly once.
 - `{{RALPH_DIR}}/STEERING.md`: leave it as it is unless you found something that must be fixed
   before any feature work, such as a broken build or failing tests. Then list it there.
 
@@ -87,4 +85,7 @@ Leave `{{RALPH_DIR}}/PROMPT.md`, `{{RALPH_DIR}}/logs/LOG.md` and `ralph.config.j
 
 When the mode below says you are revising, a plan already exists. Read it first, then ask
 what the owner wants to change. Keep tasks with `"passes": true` and their specs exactly as
-they are, keep existing ids stable, and number new tasks after the highest existing id.
+they are, keep existing ids stable, and number new tasks after the highest existing id. List
+each new task in `{{RALPH_DIR}}/tasks.json` where it should run, which may be ahead of older
+unfinished tasks. To drop a task, delete its spec as well as its entry: a spec left in
+`{{RALPH_DIR}}/tasks/` is still a task.
