@@ -247,7 +247,8 @@ export async function applySplit(args: {
   const proposal = read.proposal;
   if (!proposal.splittable) throw new SplitError(`The proposal in ${dir}/ advises against splitting ${taskId}: ${proposal.reason}`);
 
-  const specDir = parent.specFilePath ? dirname(parent.specFilePath) : `${ralphDir.replace(/\/+$/, '')}/tasks`;
+  // The children's specs carry what they are, where they came from included; the list only orders them.
+  const specDir = `${ralphDir.replace(/\/+$/, '')}/tasks`;
   const children: Task[] = proposal.tasks.map((child) => ({
     ...(child as Record<string, unknown>),
     id: child.id,
@@ -268,11 +269,15 @@ export async function applySplit(args: {
   const raw = JSON.parse(readFileSync(store.path, 'utf8')) as unknown;
   const list = (Array.isArray(raw) ? raw : (raw as { tasks: unknown[] }).tasks) as Array<{ id?: unknown }>;
   const index = list.findIndex((task) => task.id === taskId);
-  list.splice(index, 1, ...children);
+  list.splice(index, 1, ...children.map((child) => ({ id: child.id, passes: false })));
 
   mkdirSync(resolve(projectRoot, specDir), { recursive: true });
   for (const child of children) {
-    renameSync(resolve(projectRoot, dir, `${child.id}.json`), resolve(projectRoot, child.specFilePath!));
+    const proposed = resolve(projectRoot, dir, `${child.id}.json`);
+    const { specFilePath: _path, passes: _passes, ...about } = child;
+    const spec = { ...(JSON.parse(readFileSync(proposed, 'utf8')) as Record<string, unknown>), ...about };
+    writeFileSync(resolve(projectRoot, child.specFilePath!), `${JSON.stringify(spec, null, 2)}\n`);
+    rmSync(proposed);
   }
   writeFileSync(store.path, `${JSON.stringify(raw, null, 2)}\n`);
 

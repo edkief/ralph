@@ -45,11 +45,12 @@ describe('validatePlan', () => {
 
   it('flags ids the loop could not recognise, duplicates and empty titles', () => {
     const root = scaffolded();
+    // Both entries share one spec, the last one written.
     writePlan(root, [{ id: 'setup-1' }, { id: 'TASK-2' }, { id: 'TASK-2', title: ' ' }]);
     expect(validatePlan(root, '.ralph')).toEqual([
       'task setup-1: id must look like TASK-1',
-      'task TASK-2: duplicate id',
       'task TASK-2: title is empty',
+      'task TASK-2: duplicate id',
     ]);
   });
 

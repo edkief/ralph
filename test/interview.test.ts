@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -451,7 +451,11 @@ describe('the plan\'s commit', () => {
 
     const { outcome, recorder } = await plan(
       root,
-      () => writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-3' }, { id: 'TASK-4', title: 'Export' }], { 'TASK-1': spec('TASK-1', { notes: 'Use the new API.' }) }),
+      () => {
+        writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-3' }, { id: 'TASK-4', title: 'Export' }], { 'TASK-1': spec('TASK-1', { notes: 'Use the new API.' }) });
+        // A task is dropped with its spec: a spec left in tasks/ is still a task.
+        rmSync(resolve(root, '.ralph/tasks/TASK-2.json'));
+      },
       { replan: true, answers: ['Drop TASK-2, add an export.'] },
     );
 

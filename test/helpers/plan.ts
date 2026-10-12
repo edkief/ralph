@@ -28,7 +28,7 @@ export function writePlan(
   writeFileSync(resolve(root, '.ralph/tasks.json'), JSON.stringify(full, null, 2));
   for (const task of full) {
     const id = String(task.id);
-    const body = id in specs ? specs[id] : spec(id);
+    const body = id in specs ? specs[id] : spec(id, { title: task.title });
     if (body !== undefined && task.specFilePath) {
       writeFileSync(resolve(root, String(task.specFilePath)), typeof body === 'string' ? body : JSON.stringify(body));
     }

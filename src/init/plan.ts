@@ -1,10 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { TaskStore } from '../tasks/store.js';
-import { TEMPLATES_DIR } from './scaffold.js';
+import { TASK_ID, TaskStore } from '../tasks/store.js';
 
-/** Must match the loop's `<promise>TASK-x:DONE</promise>` tag, or progress is never recognised. */
-export const TASK_ID = /^TASK-[A-Za-z0-9._-]+$/;
+export { TASK_ID } from '../tasks/store.js';
+import { TEMPLATES_DIR } from './scaffold.js';
 
 /**
  * `template` while the PRD and task list are still what `ralph init` laid
@@ -62,7 +61,10 @@ export function validatePlan(
   for (const task of tasks) {
     const label = `task ${task.id}`;
     if (!TASK_ID.test(task.id)) problems.push(`${label}: id must look like TASK-1`);
-    if (seen.has(task.id)) problems.push(`${label}: duplicate id`);
+    if (seen.has(task.id)) {
+      problems.push(`${label}: duplicate id`);
+      continue;
+    }
     seen.add(task.id);
     if (!task.title.trim()) problems.push(`${label}: title is empty`);
     if (task.passes && !options.replan) problems.push(`${label}: a new task must have "passes": false`);

@@ -20,12 +20,12 @@ afterEach(async () => {
   server = undefined;
 });
 
-const spec = (id: string) => JSON.stringify({ id, title: id, acceptanceCriteria: [`${id} works`] });
+const spec = (id: string, title = id) => JSON.stringify({ id, title, acceptanceCriteria: [`${id} works`] });
 
 function project(): string {
   const root = mkdtempSync(resolve(tmpdir(), 'ralph-split-cmd-'));
   mkdirSync(resolve(root, '.ralph', 'tasks'), { recursive: true });
-  writeFileSync(resolve(root, '.ralph', 'tasks', 'TASK-1.json'), spec('TASK-1'));
+  writeFileSync(resolve(root, '.ralph', 'tasks', 'TASK-1.json'), spec('TASK-1', 'Big'));
   writeFileSync(
     resolve(root, '.ralph', 'tasks.json'),
     JSON.stringify([
