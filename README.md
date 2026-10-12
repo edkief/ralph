@@ -58,7 +58,13 @@ The agent may write only inside `.ralph/`. Ralph rejects any write it is asked t
 elsewhere, but the harness asks only about what its own permission config marks `ask` (opencode does), so Ralph
 also compares `git status` before and after and lists any file changed outside `.ralph/`.
 
-Review the plan, commit `.ralph/`, then run `ralph doctor` and `ralph`.
+Once the plan passes those checks, Ralph commits it as `chore(ralph): plan <id>` (or
+`replan <id>`): the PRD, `tasks.json`, the specs, the files the scaffold laid out, and the
+interview's [journal](#carrying-on-from-another-machine) in `.ralph/journal/plans/<id>/`.
+The commit message quotes what you asked for and lists the tasks the plan added, removed and
+changed, so `git log` keeps an audit of every plan and why it changed. Nothing else is taken,
+staged or not. A plan that is stopped, fails or still has problems is not committed, and
+`git.records: "never"` turns the commit off. Review it, then run `ralph doctor` and `ralph`.
 
 Without a terminal, plan from the [web UI](#web-ui) instead: start [`ralph daemon`](#daemon-mode)
 in the project, even an empty one, and open the **Plan** tab. The daemon scaffolds the
@@ -440,7 +446,8 @@ ralph daemon shutdown        # stop any batch now, and exit
   away, ends as stopped: **Revise the plan** carries on from the files. If the interview was
   started with **Start an iteration when planning completes** ticked, the daemon goes straight
   from a written plan into a batch of its default iterations; a batch that fails its preflight
-  shows as the last batch, as any other, and the daemon stays idle.
+  shows as the last batch, as any other, and the daemon stays idle. Either way, the written
+  plan is committed first, as in a terminal.
 - `--detach` sends the daemon's output to `.ralph/history/daemon.log`.
 - One daemon per project: a second one refuses to start, and so does `ralph` itself while a
   daemon is up. Steer the daemon instead.
@@ -468,7 +475,7 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
   assess/          # the estimate of each task assessed before its first attempt
   decisions.jsonl  # what a person (or the escalation agent) answered or noted; shown to the agent in later prompts
   artifacts/       # evidence the agent keeps, by task: screenshots, short reports
-  journal/         # what each run did, committed by ralph
+  journal/         # what each run did, committed by ralph; plans/ has each planning interview
   history/         # written by ralph for this machine; ignore it in git
 ralph.config.json  # optional
 ```
@@ -778,6 +785,7 @@ See `templates/ralph.config.json` for a complete file.
     "push": "never",               // never | iteration (after each commit) | end (once, when the run finishes)
     "forcePush": false,            // overwrite a diverged remote branch, keeping a backup; false = stop the run
     "records": "end",              // when Ralph commits its records: end (of a run) | iteration | never
+    "recordPaths": ["prd", "tasks.json", "tasks", "screenshots"], // the project's own paths in .ralph/ committed with them
     "remote": "origin"
   },
   "server": { "url": "http://opencode:4096" }, // opencode: attach instead of spawning
@@ -1165,7 +1173,12 @@ Everything a run resumes from is in git, so work stopped on one machine carries 
 another after a `git pull`. The agent commits its work as it goes; Ralph commits the rest.
 
 **Ralph's records** are `decisions.jsonl`, `handoff/`, `assess/`, `split/`, `journal/` and
-`artifacts/` in the Ralph folder. Ralph commits them, and nothing else, as
+`artifacts/` in the Ralph folder, plus the paths in it listed in `git.recordPaths`: by default
+`prd`, `tasks.json`, `tasks` and `screenshots`, so a PRD or task spec edited between runs, or
+screenshots a project keeps re-taking in `.ralph/screenshots/`, never sit uncommitted. Listing
+`recordPaths` replaces the defaults; a path must be inside the Ralph folder and not in
+`history/`. Agent scratch output elsewhere in the folder (logs of a test run, say) is left
+alone: list it, or ignore it in git. Ralph commits the records, and nothing else, as
 `chore(ralph): record run <runId>`:
 
 - once a run ends, however it ends, before the push at its end (`git.records: "end"`, the
@@ -1187,6 +1200,11 @@ machine. The journal mirrors a run without them: `run.json`, `iterations.jsonl`,
 and a condensed transcript per iteration, split turn and escalation turn, with long text and tool output cut and each file kept
 under 256 KB. The UI lists runs from both places, prefers the history where it has one, and
 never shows a journal-only run as live.
+
+A planning interview has a journal too, `.ralph/journal/plans/<id>/`, committed with the plan
+it wrote (see [getting started](#getting-started)): the conversation, `state.json` without pid
+and host, and a condensed transcript per turn. Like a run's, it is built from the recorded
+events, without asking a model to summarise anything.
 
 **Artifacts.** The prompt template asks the agent to keep evidence worth keeping (a screenshot
 of the finished screen, a short report) in `.ralph/artifacts/<task>/` and commit it with the
