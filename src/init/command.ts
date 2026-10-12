@@ -5,11 +5,11 @@ import { ConsoleReporter } from '../report/console.js';
 import { ExitCode } from '../exit.js';
 import { scaffold, type ScaffoldResult } from './scaffold.js';
 import { planState } from './plan.js';
-import { DONE_COMMAND, type InterviewOutcome } from './interview.js';
+import { DONE_COMMAND } from './interview.js';
 import { TerminalIO } from './terminal.js';
 import { terminalAskRelay } from './terminal-asks.js';
 import { PlanRecorder, RecordingIO } from './record.js';
-import { planningProblem, planWith } from './session.js';
+import { planningProblem, planWith, type PlanOutcome } from './session.js';
 import { ownerOf, runInProgress } from '../daemon/command.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
@@ -85,6 +85,7 @@ export async function runInit(args: {
       signal: controller.signal,
       replan: existing,
       asks: terminalAskRelay(io),
+      scaffolded: [...result.created, ...result.updated],
     });
     // Leave raw mode before printing the summary.
     terminal.close();
@@ -106,7 +107,7 @@ function describeScaffold(result: Extract<ScaffoldResult, { status: 'scaffolded'
   ].join('\n');
 }
 
-function report(outcome: InterviewOutcome, reporter: ConsoleReporter): number {
+function report(outcome: PlanOutcome, reporter: ConsoleReporter): number {
   if (outcome.outsideChanges === null) {
     reporter.summary('Not a git repository', [`Could not check for changes outside ${RALPH_DIR}/.`], 'warn');
   } else if (outcome.outsideChanges.length > 0) {
@@ -124,7 +125,12 @@ function report(outcome: InterviewOutcome, reporter: ConsoleReporter): number {
         [
           ...outcome.tasks.map((task) => `${task.id}  ${task.title}`),
           '',
-          `Review ${RALPH_DIR}/ and commit it, then run \`ralph doctor\` and \`ralph\`.`,
+          ...(outcome.commit?.committed
+            ? [`Committed as \`${outcome.commit.subject}\`, with the conversation in its journal.`, 'Run `ralph doctor`, then `ralph`.']
+            : [
+                ...(outcome.commit?.error ? [`Could not commit the plan: ${outcome.commit.error}`] : []),
+                `Review ${RALPH_DIR}/ and commit it, then run \`ralph doctor\` and \`ralph\`.`,
+              ]),
         ],
         'good',
       );

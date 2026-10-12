@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commitRecords, recordPaths } from '../src/loop/records.js';
+import { commitParkedWork, commitRecords, recordPaths } from '../src/loop/records.js';
 import { respond } from '../src/human/respond.js';
 import { writePending } from '../src/human/request.js';
 import { artifactsCheck, uncommittedCheck, upstreamCheck } from '../src/loop/preflight.js';
@@ -35,6 +35,59 @@ describe('commitRecords', () => {
       '.ralph/journal',
       '.ralph/artifacts',
     ]);
+  });
+
+  it('adds the project\'s own paths, once each', () => {
+    expect(recordPaths('.ralph', ['prd', './screenshots/', 'artifacts'])).toEqual([
+      '.ralph/decisions.jsonl',
+      '.ralph/handoff',
+      '.ralph/assess',
+      '.ralph/split',
+      '.ralph/journal',
+      '.ralph/artifacts',
+      '.ralph/prd',
+      '.ralph/screenshots',
+    ]);
+  });
+
+  it('commits the project\'s own paths with the records, and nothing else of the folder', async () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph', 'screenshots'));
+    writeFileSync(resolve(root, '.ralph', 'screenshots', 'TASK-1-1.png'), 'png');
+    mkdirSync(resolve(root, '.ralph', 'tasks'));
+    writeFileSync(resolve(root, '.ralph', 'tasks', 'TASK-2.json'), '{}');
+    writeFileSync(resolve(root, '.ralph', 'tasks.json'), JSON.stringify([{ id: 'TASK-1', passes: true }]));
+    mkdirSync(resolve(root, '.ralph', 'logs', 'scratch'), { recursive: true });
+    writeFileSync(resolve(root, '.ralph', 'logs', 'scratch', 'run.log'), 'noise');
+
+    const result = await commitRecords({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      subject: 'chore(ralph): record',
+      // prd is listed but has nothing in it yet.
+      extraPaths: ['prd', 'tasks.json', 'tasks', 'screenshots'],
+    });
+
+    expect(result).toMatchObject({ committed: true });
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      '.ralph/screenshots/TASK-1-1.png',
+      '.ralph/tasks.json',
+      '.ralph/tasks/TASK-2.json',
+    ]);
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ralph/logs/scratch/run.log');
+  });
+
+  it('leaves the project\'s own paths out of a parked commit, for the records commit', async () => {
+    const root = project();
+    mkdirSync(resolve(root, '.ralph', 'screenshots'));
+    writeFileSync(resolve(root, '.ralph', 'screenshots', 'TASK-1-1.png'), 'png');
+    writeFileSync(resolve(root, '.ralph', 'STEERING.md'), '# Steering');
+
+    const parked = await commitParkedWork({ projectRoot: root, ralphDir: '.ralph', subject: 'wip(TASK-1): parked', extraPaths: ['screenshots'] });
+
+    expect(parked).toMatchObject({ committed: true });
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD')).toBe('.ralph/STEERING.md');
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ralph/screenshots/TASK-1-1.png');
   });
 
   it('commits the records alone, leaving other changes and history out', async () => {
@@ -142,6 +195,22 @@ describe('answering with no loop waiting', () => {
 
     expect(git(root, 'log', '-1', '--format=%s')).toBe('chore(ralph): record answer on decide');
     expect(git(root, 'show', '--name-only', '--format=', 'HEAD')).toBe('.ralph/decisions.jsonl');
+  });
+
+  it('commits the project\'s own paths with it', async () => {
+    const root = project();
+    ask(root);
+    mkdirSync(resolve(root, '.ralph', 'prd'));
+    writeFileSync(resolve(root, '.ralph', 'prd', 'PRD.md'), '# PRD');
+    await respond({
+      projectRoot: root,
+      ralphDir: '.ralph',
+      input: { id: 'run-1', action: 'answer', text: 'REST' },
+      by: 'cli',
+      recordPaths: ['prd'],
+    });
+
+    expect(git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['.ralph/decisions.jsonl', '.ralph/prd/PRD.md']);
   });
 
   it('commits nothing with git.records "never"', async () => {

@@ -56,7 +56,12 @@ export interface InterviewIO {
   turn?(n: number): void;
 }
 
-export type InterviewOutcome = { turns: number; outsideChanges: string[] | null } & (
+export type InterviewOutcome = {
+  turns: number;
+  outsideChanges: string[] | null;
+  /** What the owner asked for: their description, or what should change. */
+  request?: string;
+} & (
   | { status: 'planned'; tasks: Task[] }
   | { status: 'invalid'; problems: string[] }
   | { status: 'aborted' }
@@ -97,10 +102,12 @@ export async function runInterview(args: {
   const before = await snapshotChanges(config.projectRoot);
 
   let turns = 0;
-  const finish = async (outcome: DistributiveOmit<InterviewOutcome, 'turns' | 'outsideChanges'>) =>
+  let request: string | undefined;
+  const finish = async (outcome: DistributiveOmit<InterviewOutcome, 'turns' | 'outsideChanges' | 'request'>) =>
     ({
       ...outcome,
       turns,
+      ...(request !== undefined ? { request } : {}),
       outsideChanges: await outsideChanges(config.projectRoot, config.ralphDir, before),
     }) as InterviewOutcome;
 
@@ -109,6 +116,7 @@ export async function runInterview(args: {
     replan ? 'What should change in the plan?' : 'Describe the project: what it is, who it is for, what done looks like.',
   );
   if (description === null) return finish({ status: 'aborted' });
+  request = description.trim();
 
   let message = openingPrompt(config, templatesDir, replan, description);
   let sessionId: string | undefined;

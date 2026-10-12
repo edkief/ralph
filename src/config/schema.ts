@@ -146,12 +146,29 @@ const EscalationSchema = z.object({
  * `records` is when Ralph commits its own records (decisions, handoffs,
  * assessments, split proposals, the run journal, kept artifacts), so a run can
  * resume from the repository on another machine: after each iteration, once
- * when the run ends, or never.
+ * when the run ends, or never. `recordPaths` are the project's own paths in the
+ * Ralph folder that go in the same commit, so the PRD, the task specs and
+ * screenshots the project keeps there never sit uncommitted. Listing them
+ * replaces the defaults.
  */
 const GitSchema = z.object({
   push: z.enum(['never', 'iteration', 'end']).default('never'),
   forcePush: z.boolean().default(false),
   records: z.enum(['iteration', 'end', 'never']).default('end'),
+  recordPaths: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .refine(
+          (path) => {
+            const parts = path.replace(/^\.\//, '').split(/[/\\]/);
+            return !path.startsWith('/') && !parts.includes('..') && parts[0] !== 'history';
+          },
+          'must be a path inside the Ralph folder, and not in history/',
+        ),
+    )
+    .default(['prd', 'tasks.json', 'tasks', 'screenshots']),
   remote: z.string().default('origin'),
   pushTimeoutMs: z.number().int().positive().default(120_000),
 });

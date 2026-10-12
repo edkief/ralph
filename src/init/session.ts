@@ -3,6 +3,7 @@ import { RALPH_DIR } from '../config/load.js';
 import { scaffold } from './scaffold.js';
 import { planState } from './plan.js';
 import { runInterview, type InterviewOutcome } from './interview.js';
+import { commitPlan, snapshotTasks, type PlanCommit, type TaskSnapshot } from './commit.js';
 import type { PlanMode, RecordingIO } from './record.js';
 import type { AskRelay } from '../loop/asks.js';
 import type { AgentHarness } from '../harness/types.js';
@@ -23,22 +24,30 @@ export function planningProblem(config: Config): string | undefined {
 /**
  * Get a project ready for an interview asked for from afar: scaffold it as
  * `ralph init` does, never overwriting, then read the configuration as it is
- * now (the scaffold may have just written it). Throws with what to tell the
- * owner when the interview cannot go ahead in `mode`.
+ * now (the scaffold may have just written it). Returns it with the files the
+ * scaffold created or updated, which the plan's commit takes. Throws with
+ * what to tell the owner when the interview cannot go ahead in `mode`.
  */
-export function preparePlan(projectRoot: string, reload: () => Config, mode: PlanMode): Config {
-  const scaffolded = scaffold(projectRoot);
-  if (scaffolded.status === 'legacy') throw new Error(scaffolded.message);
+export function preparePlan(projectRoot: string, reload: () => Config, mode: PlanMode): { config: Config; scaffolded: string[] } {
+  const result = scaffold(projectRoot);
+  if (result.status === 'legacy') throw new Error(result.message);
   const config = reload();
   const problem = planningProblem(config);
   if (problem) throw new Error(problem);
   const written = planState(config.projectRoot, config.ralphDir) === 'written';
   if (mode === 'new' && written) throw new Error(`A plan already exists in ${RALPH_DIR}/: revise it instead`);
   if (mode === 'replan' && !written) throw new Error('There is no plan to revise yet: plan the project first');
-  return config;
+  return { config, scaffolded: [...result.created, ...result.updated] };
 }
 
-/** Hold the interview through `io`, keeping each turn's events and the outcome with its record. */
+/** How a session ended, and the plan's commit when there was one to make. */
+export type PlanOutcome = InterviewOutcome & { commit?: PlanCommit };
+
+/**
+ * Hold the interview through `io`, keeping each turn's events and the outcome
+ * with its record. A plan that passes validation is committed with the
+ * session's journal, unless `git.records` is `never`.
+ */
 export async function planWith(args: {
   harness: AgentHarness;
   config: Config;
@@ -49,12 +58,17 @@ export async function planWith(args: {
   templatesDir?: string;
   /** How the agent's forms and asked permissions reach the owner. */
   asks?: AskRelay;
-}): Promise<InterviewOutcome> {
+  /** Files the scaffold created or updated for this session, committed with the plan. */
+  scaffolded?: readonly string[];
+}): Promise<PlanOutcome> {
   const { config, io } = args;
   const { recorder } = io;
   recorder.update({ model: config.plan.model ?? config.model ?? null, maxTurns: config.plan.maxTurns });
+  // A new plan replaces the template's example task, which is no task of the plan's.
+  const before: TaskSnapshot = args.replan ? snapshotTasks(config.projectRoot, config.ralphDir) : new Map();
+  let outcome: InterviewOutcome;
   try {
-    const outcome = await runInterview({
+    outcome = await runInterview({
       harness: args.harness,
       config,
       logger: args.logger,
@@ -66,9 +80,23 @@ export async function planWith(args: {
       ...(args.asks ? { asks: args.asks } : {}),
     });
     recorder.finish(outcome);
-    return outcome;
   } catch (cause) {
     recorder.fail(cause instanceof Error ? cause.message : String(cause));
     throw cause;
   }
+  if (outcome.status !== 'planned' || config.git.records === 'never') return outcome;
+
+  const commit = await commitPlan({
+    projectRoot: config.projectRoot,
+    ralphDir: config.ralphDir,
+    planId: recorder.id,
+    mode: args.replan ? 'replan' : 'new',
+    ...(outcome.request !== undefined ? { request: outcome.request } : {}),
+    before,
+    ...(args.scaffolded ? { scaffolded: args.scaffolded } : {}),
+  });
+  if (!commit) return outcome;
+  if (commit.error) args.logger.warn('could not commit the plan', { plan: recorder.id, error: commit.error });
+  else if (commit.committed) args.logger.info('committed the plan', { plan: recorder.id, subject: commit.subject });
+  return { ...outcome, commit };
 }

@@ -128,9 +128,10 @@ export async function runDaemon(args: {
     const io = new FileInterviewIO(recorder, { signal, onStop: () => stop.abort(), seed: request.description });
     try {
       let planConfig: Config;
+      let scaffolded: string[];
       try {
         // Scaffolded here, by the process that owns the project, then read as the scaffold left it.
-        planConfig = preparePlan(config.projectRoot, args.reload, request.mode);
+        ({ config: planConfig, scaffolded } = preparePlan(config.projectRoot, args.reload, request.mode));
       } catch (cause) {
         const reason = cause instanceof Error ? cause.message : String(cause);
         logger.warn('planning refused', { id: request.id, reason });
@@ -144,6 +145,7 @@ export async function runDaemon(args: {
         io,
         signal,
         replan: request.mode === 'replan',
+        scaffolded,
         // Its forms go to the owner in the web UI, beside the interview.
         asks: fileAskRelay({ ralphRoot, origin: { plan: request.id }, askMs: planConfig.timeouts.askMs }),
       });

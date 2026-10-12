@@ -40,8 +40,8 @@ spec of **one** task, implements it, runs the tests, marks the task passing and 
 ## Files to write
 
 Write only inside `{{RALPH_DIR}}/`. Do not change source code, install anything, run
-builds or commit: this session only plans. Replace the template content in these files
-completely:
+builds or commit: this session only plans, and Ralph commits the plan once it passes its
+checks. Replace the template content in these files completely:
 
 - `{{RALPH_DIR}}/prd/PRD.md`: the product requirements, with sections Goals, Scope, Non-goals,
   Constraints (stack, versions, conventions, services), Acceptance criteria, and

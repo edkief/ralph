@@ -139,6 +139,17 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ projectRoot: project(), env: { RALPH_UI_ACTIONS: 'yes' } })).toThrow(/actions/);
   });
 
+  it('commits the PRD, the tasks and screenshots with the records unless listed otherwise', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).git.recordPaths).toEqual(['prd', 'tasks.json', 'tasks', 'screenshots']);
+    const root = project();
+    writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ git: { recordPaths: ['prd', 'shots/'] } }));
+    expect(loadConfig({ projectRoot: root, env: {} }).git.recordPaths).toEqual(['prd', 'shots/']);
+    for (const path of ['/etc', '../src', 'shots/../../src', 'history', './history/plans']) {
+      writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ git: { recordPaths: [path] } }));
+      expect(() => loadConfig({ projectRoot: root, env: {} }), path).toThrow(/inside the Ralph folder/);
+    }
+  });
+
   it('rejects invalid values with a readable message', () => {
     const root = project();
     writeFileSync(resolve(root, 'ralph.config.json'), JSON.stringify({ maxIterations: -1 }));

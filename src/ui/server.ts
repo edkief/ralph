@@ -119,6 +119,8 @@ export interface UiServerOptions {
   logger: Logger;
   /** `git.records`: whether answers given with no loop waiting are committed. */
   records?: RecordsMode;
+  /** `git.recordPaths`: the project's own paths committed with the records. */
+  recordPaths?: readonly string[];
   /** Where a park with nothing running pushes; without it, Park needs a run in progress. */
   git?: { remote: string; pushTimeoutMs: number; forcePush?: boolean };
   /** `metrics.cost`: how the Metrics tab estimates what the work cost. */
@@ -336,6 +338,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           projectRoot: options.projectRoot,
           ralphDir: options.ralphDir,
           records: options.records ?? 'end',
+          ...(options.recordPaths ? { recordPaths: options.recordPaths } : {}),
           remote: options.git.remote,
           pushTimeoutMs: options.git.pushTimeoutMs,
           forcePush: options.git.forcePush ?? false,
@@ -362,6 +365,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         input: parsed.data,
         by: 'ui',
         ...(options.records ? { records: options.records } : {}),
+        ...(options.recordPaths ? { recordPaths: options.recordPaths } : {}),
       });
       options.logger.info('web UI action', { action: parsed.data.action, request: parsed.data.id, delivered: result.delivered });
       return sendJson(res, 200, result);

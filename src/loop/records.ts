@@ -12,12 +12,14 @@ export type RecordsMode = 'iteration' | 'end' | 'never';
 /**
  * What Ralph writes in its folder that the next run, on this machine or
  * another, depends on: what people answered, handoffs, assessments, split
- * proposals, run journals and the evidence the agent kept. Never `history/`,
+ * proposals, run journals and the evidence the agent kept, plus the
+ * project's own paths in the folder (`git.recordPaths`). Never `history/`,
  * which holds raw event streams and files that steer a live process.
  */
-export function recordPaths(ralphDir: string): string[] {
+export function recordPaths(ralphDir: string, extra: readonly string[] = []): string[] {
   const dir = ralphDir.replace(/\/+$/, '');
-  return ['decisions.jsonl', 'handoff', 'assess', 'split', 'journal', 'artifacts'].map((path) => `${dir}/${path}`);
+  const own = ['decisions.jsonl', 'handoff', 'assess', 'split', 'journal', 'artifacts'];
+  return [...new Set([...own, ...extra.map((path) => path.replace(/^\.\/|\/+$/g, ''))])].map((path) => `${dir}/${path}`);
 }
 
 /** Where run journals are kept: what each run did, in a form fit for git. */
@@ -46,11 +48,13 @@ export async function commitRecords(args: {
   subject: string;
   /** A run whose journal to bring up to date first. */
   runId?: string;
+  /** `git.recordPaths`: the project's own paths in the Ralph folder, committed with the records. */
+  extraPaths?: readonly string[];
 }): Promise<RecordsCommit> {
   const { projectRoot } = args;
   if (!(await isRepository(projectRoot))) return { committed: false, files: [] };
   if (args.runId) writeJournal(resolve(projectRoot, args.ralphDir), args.runId);
-  const paths = recordPaths(args.ralphDir);
+  const paths = recordPaths(args.ralphDir, args.extraPaths);
   const files = await changedFiles(projectRoot, paths);
   if (files.length === 0) return { committed: false, files };
   const error = await commitPaths(projectRoot, paths, args.subject);
@@ -74,11 +78,13 @@ export async function commitParkedWork(args: {
   projectRoot: string;
   ralphDir: string;
   subject: string;
+  /** `git.recordPaths`, left to the records commit like the records. */
+  extraPaths?: readonly string[];
 }): Promise<ParkedWork> {
   const cwd = args.projectRoot;
   if (!(await isRepository(cwd))) return { committed: false, untracked: [] };
   const dir = args.ralphDir.replace(/\/+$/, '');
-  const records = recordPaths(dir).map((path) => `:(exclude)${path}`);
+  const records = recordPaths(dir, args.extraPaths).map((path) => `:(exclude)${path}`);
   let committed = false;
   let error: string | undefined;
   try {

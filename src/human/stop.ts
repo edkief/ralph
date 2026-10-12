@@ -37,6 +37,7 @@ export async function runStop(args: {
     projectRoot: config.projectRoot,
     ralphDir: config.ralphDir,
     records: config.git.records,
+    recordPaths: config.git.recordPaths,
     remote: config.git.remote,
     pushTimeoutMs: config.git.pushTimeoutMs,
     forcePush: config.git.forcePush,
@@ -55,6 +56,8 @@ export async function parkIdle(args: {
   projectRoot: string;
   ralphDir: string;
   records: RecordsMode;
+  /** `git.recordPaths`: the project's own paths committed with the records. */
+  recordPaths?: readonly string[];
   remote: string;
   pushTimeoutMs: number;
   /** Overwrite a remote branch that has diverged, keeping a backup of it. */
@@ -68,6 +71,7 @@ export async function parkIdle(args: {
       projectRoot: args.projectRoot,
       ralphDir: args.ralphDir,
       subject: 'chore(ralph): record, parked',
+      ...(args.recordPaths ? { extraPaths: args.recordPaths } : {}),
       ...(args.runId ? { runId: args.runId } : {}),
     });
     if (records.error) lines.push(`Could not commit Ralph's records: ${records.error}`);
