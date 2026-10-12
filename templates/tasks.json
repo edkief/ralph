@@ -1,9 +1,3 @@
 [
-  {
-    "id": "TASK-1",
-    "title": "Short description of the first unit of work",
-    "category": "setup",
-    "specFilePath": ".ralph/tasks/TASK-1.json",
-    "passes": false
-  }
+  { "id": "TASK-1", "passes": false }
 ]

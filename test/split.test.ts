@@ -161,6 +161,20 @@ describe('applySplit', () => {
     expect(tasksOf(root)[2]).toMatchObject({ category: 'output' });
     // Fields Ralph does not know about survive.
     expect(tasksOf(root)[3]).toMatchObject({ priority: 'low' });
+    // The list only orders the new tasks; their specs say what they are and where they came from.
+    const list = JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks.json'), 'utf8')) as Array<Record<string, unknown>>;
+    expect(list.slice(1, 3)).toEqual([
+      { id: 'TASK-2.1', passes: false },
+      { id: 'TASK-2.2', passes: false },
+    ]);
+    expect(JSON.parse(readFileSync(resolve(root, '.ralph', 'tasks', 'TASK-2.1.json'), 'utf8'))).toMatchObject({
+      id: 'TASK-2.1',
+      title: 'Parse',
+      category: 'core',
+      splitFrom: 'TASK-2',
+      splitDepth: 1,
+      acceptanceCriteria: ['TASK-2.1 works'],
+    });
 
     const dir = resolve(root, '.ralph', 'split', 'TASK-2');
     expect(existsSync(resolve(root, '.ralph', 'tasks', 'TASK-2.1.json'))).toBe(true);

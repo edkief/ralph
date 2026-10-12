@@ -1,10 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { TaskStore } from '../tasks/store.js';
+import { TASK_ID, TaskStore, type TaskInspection } from '../tasks/store.js';
 import { TEMPLATES_DIR } from './scaffold.js';
 
-/** Must match the loop's `<promise>TASK-x:DONE</promise>` tag, or progress is never recognised. */
-export const TASK_ID = /^TASK-[A-Za-z0-9._-]+$/;
+export { TASK_ID } from '../tasks/store.js';
+
+/** The task list `ralph init` laid down before tasks.json held only ids and status; still a template where found. */
+const FORMER_TASKS_TEMPLATE = `[
+  {
+    "id": "TASK-1",
+    "title": "Short description of the first unit of work",
+    "category": "setup",
+    "specFilePath": ".ralph/tasks/TASK-1.json",
+    "passes": false
+  }
+]`;
 
 /**
  * `template` while the PRD and task list are still what `ralph init` laid
@@ -15,17 +25,31 @@ export function planState(
   ralphDir: string,
   templatesDir = TEMPLATES_DIR,
 ): 'template' | 'written' {
-  const untouched = (file: string, template: string) => {
-    const path = resolve(projectRoot, ralphDir, file);
-    return !existsSync(path) || sameText(readFileSync(path, 'utf8'), readTemplate(templatesDir, template));
-  };
-  return untouched('prd/PRD.md', 'PRD.md') && untouched('tasks.json', 'tasks.json') ? 'template' : 'written';
+  const prd = resolve(projectRoot, ralphDir, 'prd', 'PRD.md');
+  const prdUntouched = !existsSync(prd) || sameText(readFileSync(prd, 'utf8'), readTemplate(templatesDir, 'PRD.md'));
+  return prdUntouched && taskListUntouched(projectRoot, ralphDir, templatesDir, true) ? 'template' : 'written';
+}
+
+/**
+ * Whether the task list is still the scaffold's: the list as laid down and
+ * the example spec beside it. The list alone cannot tell, since a plan of
+ * one task lists just what the template does. `missing` says whether
+ * absent files count as untouched.
+ */
+function taskListUntouched(projectRoot: string, ralphDir: string, templatesDir: string, missing: boolean): boolean {
+  const unchanged = (path: string, ...templates: string[]) =>
+    existsSync(path) ? templates.some((template) => sameText(readFileSync(path, 'utf8'), template)) : missing;
+  return (
+    unchanged(resolve(projectRoot, ralphDir, 'tasks.json'), readTemplate(templatesDir, 'tasks.json'), FORMER_TASKS_TEMPLATE) &&
+    unchanged(resolve(projectRoot, ralphDir, 'tasks', 'TASK-1.json'), readTemplate(templatesDir, 'TASK-1.json'))
+  );
 }
 
 /**
  * Check a plan the agent wrote, returning problems it can fix. An empty list
- * means the loop can run it: a real PRD, and a task list whose every task has
- * a loop-compatible id and a spec with acceptance criteria.
+ * means the loop can run it: a real PRD, and a task list that lists every
+ * spec in the tasks folder, once, each with a loop-compatible id, a title
+ * and acceptance criteria.
  */
 export function validatePlan(
   projectRoot: string,
@@ -35,44 +59,51 @@ export function validatePlan(
   const templatesDir = options.templatesDir ?? TEMPLATES_DIR;
   const problems: string[] = [];
   const dir = (...parts: string[]) => resolve(projectRoot, ralphDir, ...parts);
+  const shownDir = ralphDir.replace(/\/+$/, '');
 
   const prd = dir('prd', 'PRD.md');
   if (!existsSync(prd)) {
-    problems.push(`${ralphDir}/prd/PRD.md is missing`);
+    problems.push(`${shownDir}/prd/PRD.md is missing`);
   } else if (sameText(readFileSync(prd, 'utf8'), readTemplate(templatesDir, 'PRD.md'))) {
-    problems.push(`${ralphDir}/prd/PRD.md is still the template`);
+    problems.push(`${shownDir}/prd/PRD.md is still the template`);
   }
 
-  const tasksFile = dir('tasks.json');
-  if (existsSync(tasksFile) && sameText(readFileSync(tasksFile, 'utf8'), readTemplate(templatesDir, 'tasks.json'))) {
-    problems.push(`${ralphDir}/tasks.json is still the template`);
+  if (existsSync(dir('tasks.json')) && taskListUntouched(projectRoot, ralphDir, templatesDir, false)) {
+    problems.push(`${shownDir}/tasks.json is still the template`);
     return problems;
   }
 
-  let tasks;
+  let inspection: TaskInspection;
   try {
-    tasks = new TaskStore(tasksFile).readTasks();
+    inspection = TaskStore.forProject(projectRoot, ralphDir).inspect();
   } catch (cause) {
     problems.push((cause as Error).message);
     return problems;
   }
-  if (tasks.length === 0) problems.push(`${ralphDir}/tasks.json has no tasks`);
+  const unlisted = new Set(inspection.unlisted);
+  const tasks = inspection.tasks.filter((task) => !unlisted.has(task.id));
+  if (tasks.length === 0) problems.push(`${shownDir}/tasks.json has no tasks`);
 
   const seen = new Set<string>();
   for (const task of tasks) {
     const label = `task ${task.id}`;
     if (!TASK_ID.test(task.id)) problems.push(`${label}: id must look like TASK-1`);
-    if (seen.has(task.id)) problems.push(`${label}: duplicate id`);
-    seen.add(task.id);
-    if (!task.title.trim()) problems.push(`${label}: title is empty`);
-    if (task.passes && !options.replan) problems.push(`${label}: a new task must have "passes": false`);
-
-    if (!task.specFilePath) {
-      problems.push(`${label}: specFilePath is missing`);
+    if (seen.has(task.id)) {
+      problems.push(`${label}: duplicate id`);
       continue;
     }
+    seen.add(task.id);
+    const spec = task.specFilePath ?? `${shownDir}/tasks/${task.id}.json`;
+    const specProblems = checkSpec(resolve(projectRoot, spec), spec, task.id, readTemplate(templatesDir, 'TASK-1.json'));
+    // The title is the spec's: only worth checking once the spec reads.
+    if (specProblems.length === 0 && !task.title.trim()) problems.push(`${label}: title is empty`);
+    if (task.passes && !options.replan) problems.push(`${label}: a new task must have "passes": false`);
+    problems.push(...specProblems);
+  }
+
+  for (const id of inspection.unlisted) {
     problems.push(
-      ...checkSpec(resolve(projectRoot, task.specFilePath), task.specFilePath, task.id, readTemplate(templatesDir, 'TASK-1.json')),
+      `${shownDir}/tasks/${id}.json is not in ${shownDir}/tasks.json: list it where it should run, or delete it if the task is dropped`,
     );
   }
 

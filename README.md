@@ -45,11 +45,11 @@ Then, in a terminal, it starts an interview with the configured agent:
    stack, what done looks like. It asks a few questions at a time and suggests defaults.
    It asks in its message, or with a tool that asks you directly (opencode's `question` tool),
    whose form Ralph asks you field by field (type `/skip` to decline it).
-3. It writes `prd/PRD.md`, `tasks.json` and one spec per task in `tasks/`, sized so each
-   task fits one loop iteration.
-4. Ralph checks the result: task ids the loop can recognise, a spec with acceptance criteria
-   for every task, no template content left. If something is wrong, the agent is sent back
-   to fix it.
+3. It writes `prd/PRD.md`, one spec per task in `tasks/`, sized so each task fits one loop
+   iteration, and `tasks.json`, the order to run them in.
+4. Ralph checks the result: task ids the loop can recognise, a spec with a title and
+   acceptance criteria for every task, every spec listed in `tasks.json` once, no template
+   content left. If something is wrong, the agent is sent back to fix it.
 
 End each message with an empty line, so pasted text arrives whole. Type `/done` to have the
 agent stop asking and write the plan with its assumptions noted in the PRD. Ctrl-C stops.
@@ -464,8 +464,8 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
 ```
 .ralph/
   PROMPT.md        # required — the instructions sent each iteration
-  tasks.json       # required — the backlog; a bare array of tasks
-  tasks/           # optional — per-task specs referenced by specFilePath
+  tasks.json       # required — the backlog's order and status: a bare array of { id, passes }
+  tasks/           # the tasks: one spec per task, tasks/<id>.json
   prd/PRD.md       # optional — what the project is for
   STEERING.md      # optional — work to do before feature tasks
   ESCALATION.md    # optional — guidance for the escalation agent
@@ -480,9 +480,6 @@ Ralph expects this layout in the project it runs against. `ralph init` creates i
 ralph.config.json  # optional
 ```
 
-A task needs only an `id` and a `passes` flag; `title` and `specFilePath` are used when
-present. Ralph adds `splitFrom` and `splitDepth` to tasks it creates by splitting another. A `{ "tasks": [...] }` wrapper is accepted in place of a bare array.
-
 `PROMPT.md` can write `{{RALPH_DIR}}` wherever it refers to the folder; Ralph replaces it with
 the resolved folder, relative to the project root, so the prompt follows `ralphDir`.
 
@@ -492,6 +489,32 @@ The folder is resolved in this order:
 2. `.ralph/`, if it exists
 3. `.agent/`, if it exists, with a deprecation warning
 4. `.ralph/`
+
+### Tasks and their order
+
+A task is its spec, `tasks/<id>.json`: its `title`, `category`, what it asks for and its
+acceptance criteria. `tasks.json` says only which tasks pass and in what order they run:
+
+```json
+[
+  { "id": "TASK-1", "passes": true },
+  { "id": "TASK-3", "passes": false },
+  { "id": "TASK-2", "passes": false }
+]
+```
+
+The loop works on the first task in that list that does not pass, so the order is yours:
+to prioritise a task, move its line up. A spec the list leaves out is still a task: it runs
+after the listed ones, in id order. Planning reports it so the agent lists it where it
+belongs, and `ralph doctor` warns about it. To drop a task, delete its spec as well as its
+entry. A task that has not passed and is listed with no spec cannot run, and `ralph doctor`
+stops there. Ralph adds `splitFrom` and `splitDepth` to the specs of tasks it creates by
+splitting another.
+
+A `tasks.json` written before the spec held everything, with each task's `title`,
+`category` and `specFilePath` in it too, still reads: the spec wins wherever it says
+something, and `specFilePath` is still followed for a spec kept elsewhere. A
+`{ "tasks": [...] }` wrapper is accepted in place of a bare array.
 
 ### Migrating from `.agent/`
 
@@ -905,7 +928,8 @@ With the opencode harness, Ralph spawns `opencode serve` (or attaches to one wit
 then per iteration (with pi, a `pi --mode rpc` process per session takes the place of the server, and
 the same steps run over it):
 
-1. Reads `.ralph/tasks.json` and picks the first task with `passes: false`.
+1. Reads `.ralph/tasks.json` and picks the first task with `passes: false` (then any spec the
+   list leaves out, in id order).
 2. Builds the prompt from `.ralph/PROMPT.md`, naming that task.
 3. Opens a session, subscribes to `/api/event`, and sends the prompt.
 4. Consumes the SSE stream, answering permission requests from policy, and putting forms (and
@@ -1075,13 +1099,15 @@ like an iteration: followed live in the Transcript view, and listed on the Overv
 outcome. A turn started with `ralph split` runs outside any run and is not recorded.
 
 Applying a split replaces the task in `tasks.json` with the new ones, in its place so they come
-next, and moves their specs next to the old spec. The old spec and its handoff move into
+next, and moves their specs into `tasks/`, each noting the task it was split from. The old
+spec and its handoff move into
 `.ralph/split/TASK-8/`, which stays as the record of the split: `proposal.json` gains a
 `parent` with the old task's title and where its spec and handoff went. The change is
 committed as `chore(plan): split TASK-8 into TASK-8.1 and TASK-8.2`. Proposed specs are plain
 files: edit them before applying if they need it.
 
-The old task is gone from `tasks.json`, but not from view. Each iteration on a task it was split
+The old task is gone from `tasks.json` and `tasks/`, but not from view. (A spec of a split
+task still found in `tasks/` never runs; `ralph doctor` says to delete it.) Each iteration on a task it was split
 into gets a "Split from TASK-8" section in its prompt. The section names the old task, gives
 its spec (the whole of what it asked for) and the handoff its last attempt left, and lists the
 tasks it was split into, with which ones pass. So the agent knows the full scope and what
