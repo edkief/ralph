@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeServer, type FakeServer, type ScriptedEvent } from './helpers/fake-server.js';
-import { writePlan } from './helpers/plan.js';
+import { spec, writePlan } from './helpers/plan.js';
 import { opencodeHarness } from './helpers/opencode.js';
 import { PLAN_FORM_MESSAGE, runInterview, type InterviewIO } from '../src/init/interview.js';
 import { scaffold } from '../src/init/scaffold.js';
@@ -383,6 +383,99 @@ describe('a recorded interview', () => {
     const events = readFileSync(resolve(recorder.dir, 'turn-001.events.jsonl'), 'utf8');
     expect(events).toContain('"type":"text.ended"');
     expect(existsSync(resolve(recorder.dir, 'turn-002.events.jsonl'))).toBe(true);
+  });
+});
+
+describe('the plan\'s commit', () => {
+  const git = (root: string, ...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+
+  async function plan(
+    root: string,
+    write: () => void,
+    options: { replan?: boolean; answers?: string[]; overrides?: Record<string, unknown>; scaffolded?: string[] } = {},
+  ) {
+    const recorder = new PlanRecorder(resolve(root, '.ralph'), { mode: options.replan ? 'replan' : 'new', by: 'daemon', harness: 'opencode' });
+    const io = new RecordingIO(new ScriptedUser(options.answers ?? ['A todo app.\nFor one person.']), recorder);
+    server = await startFakeServer({ onPrompt: (count) => (count === 1 ? write() : undefined), script: () => say(DONE) });
+    const harness = await opencodeHarness(server.url);
+    const outcome = await planWith({
+      harness,
+      config: config(root, options.overrides),
+      logger,
+      io,
+      signal: new AbortController().signal,
+      replan: options.replan ?? false,
+      ...(options.scaffolded ? { scaffolded: options.scaffolded } : {}),
+    });
+    recorder.close();
+    return { outcome, recorder };
+  }
+
+  it('commits a new plan with its journal and what was asked, and nothing else', async () => {
+    const root = project();
+    writeFileSync(resolve(root, 'notes.md'), 'the owner\'s own work');
+    writeFileSync(resolve(root, 'staged.ts'), 'staged by someone');
+    git(root, 'add', 'staged.ts');
+    writeFileSync(resolve(root, '.gitignore'), `${readFileSync(resolve(root, '.gitignore'), 'utf8')}dist/\n`);
+
+    const { outcome, recorder } = await plan(root, () => writePlan(root), { scaffolded: ['.gitignore'] });
+
+    expect(outcome).toMatchObject({ status: 'planned', commit: { committed: true, subject: `chore(ralph): plan ${recorder.id}` } });
+    const message = git(root, 'log', '-1', '--format=%B');
+    expect(message).toContain('The owner asked:\n\n> A todo app.\n> For one person.');
+    expect(message).toContain('Added:\n- TASK-1 Do TASK-1\n- TASK-2 Do TASK-2');
+    expect(message).not.toContain('Removed:');
+    expect(message).toContain(`The conversation is in .ralph/journal/plans/${recorder.id}/`);
+    const files = git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n');
+    expect(files).toEqual(
+      expect.arrayContaining([
+        '.gitignore',
+        '.ralph/prd/PRD.md',
+        '.ralph/tasks.json',
+        '.ralph/tasks/TASK-2.json',
+        `.ralph/journal/plans/${recorder.id}/conversation.jsonl`,
+        `.ralph/journal/plans/${recorder.id}/state.json`,
+        `.ralph/journal/plans/${recorder.id}/turn-001.transcript.jsonl`,
+      ]),
+    );
+    expect(files.filter((file) => !file.startsWith('.ralph/') && file !== '.gitignore')).toEqual([]);
+    expect(git(root, 'diff', '--cached', '--name-only')).toBe('staged.ts');
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('A  staged.ts\n?? notes.md');
+  });
+
+  it('says which tasks a replan added, removed and changed', async () => {
+    const root = project();
+    writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-2' }, { id: 'TASK-3' }]);
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'plan');
+
+    const { outcome, recorder } = await plan(
+      root,
+      () => writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-3' }, { id: 'TASK-4', title: 'Export' }], { 'TASK-1': spec('TASK-1', { notes: 'Use the new API.' }) }),
+      { replan: true, answers: ['Drop TASK-2, add an export.'] },
+    );
+
+    expect(outcome).toMatchObject({ status: 'planned', commit: { committed: true } });
+    const message = git(root, 'log', '-1', '--format=%B');
+    expect(message.split('\n')[0]).toBe(`chore(ralph): replan ${recorder.id}`);
+    expect(message).toContain('Added:\n- TASK-4 Export');
+    expect(message).toContain('Removed:\n- TASK-2 Do TASK-2');
+    expect(message).toContain('Changed:\n- TASK-1 Do TASK-1');
+    expect(message).not.toContain('TASK-3');
+  });
+
+  it('commits nothing when the plan is not written, or git.records is "never"', async () => {
+    const root = project();
+    const head = git(root, 'rev-parse', 'HEAD');
+    const invalid = await plan(root, () => undefined, { overrides: { plan: { maxFixAttempts: 0 } } });
+    expect(invalid.outcome.status).toBe('invalid');
+    expect(invalid.outcome).not.toHaveProperty('commit');
+    await server?.close();
+
+    const never = await plan(root, () => writePlan(root), { overrides: { git: { records: 'never' } } });
+    expect(never.outcome.status).toBe('planned');
+    expect(never.outcome).not.toHaveProperty('commit');
+    expect(git(root, 'rev-parse', 'HEAD')).toBe(head);
   });
 });
 
