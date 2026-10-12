@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compareIds, TaskStore, TaskStoreError } from '../src/tasks/store.js';
+import { taskListCheck } from '../src/loop/preflight.js';
+import { ConfigSchema } from '../src/config/schema.js';
 
 function storeWith(content: string, specs: Record<string, unknown> = {}): TaskStore {
   const root = mkdtempSync(resolve(tmpdir(), 'ralph-tasks-'));
@@ -169,5 +171,55 @@ describe('TaskStore', () => {
       'TASK-7.10',
       'TASK-10',
     ]);
+  });
+});
+
+describe('taskListCheck', () => {
+  const config = (store: TaskStore) => ConfigSchema.parse({ projectRoot: dirname(dirname(store.path)) });
+
+  it('says nothing when the list and the specs agree', () => {
+    const store = storeWith(JSON.stringify([{ id: 'TASK-1' }]), { '.ralph/tasks/TASK-1.json': specOf('TASK-1') });
+    expect(taskListCheck(config(store))).toBeUndefined();
+  });
+
+  it('stops the run for a task it cannot run, and warns about the rest', () => {
+    const store = storeWith(
+      JSON.stringify([{ id: 'TASK-1', passes: true }, { id: 'TASK-2', passes: true }, { id: 'TASK-3' }]),
+      {
+        '.ralph/tasks/TASK-2.json': specOf('TASK-2'),
+        '.ralph/tasks/TASK-4.json': specOf('TASK-4'),
+      },
+    );
+    expect(taskListCheck(config(store))).toEqual({
+      name: 'task list',
+      ok: false,
+      detail:
+        'listed with no spec in .ralph/tasks/, so they cannot run: TASK-3; ' +
+        'specs not in .ralph/tasks.json, so they run after the listed tasks: TASK-4; ' +
+        'passing tasks listed with no spec: TASK-1',
+      fatal: true,
+    });
+  });
+
+  it('only warns when every task it cannot describe has passed', () => {
+    const store = storeWith(JSON.stringify([{ id: 'TASK-1', passes: true }, { id: 'TASK-2.1' }]), {
+      '.ralph/tasks/TASK-2.json': specOf('TASK-2'),
+      '.ralph/tasks/TASK-2.1.json': specOf('TASK-7'),
+      '.ralph/split/TASK-2/proposal.json': {
+        task: 'TASK-2',
+        splittable: true,
+        tasks: [{ id: 'TASK-2.1', title: 'a' }],
+        appliedAt: '2026-10-01T00:00:00.000Z',
+      },
+    });
+    expect(taskListCheck(config(store))).toEqual({
+      name: 'task list',
+      ok: false,
+      detail:
+        'specs whose id is not their file\'s: TASK-2.1 (says "TASK-7"); ' +
+        'specs of tasks that were split, never run, delete them: TASK-2; ' +
+        'passing tasks listed with no spec: TASK-1',
+      fatal: false,
+    });
   });
 });

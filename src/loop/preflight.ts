@@ -7,7 +7,7 @@ import { readProposal, splitDir } from './split.js';
 import { changedFiles, isRepository } from './records.js';
 import type { Config } from '../config/schema.js';
 import type { AgentHarness, CheckResult } from '../harness/types.js';
-import { TaskStore } from '../tasks/store.js';
+import { TaskStore, type TaskInspection } from '../tasks/store.js';
 
 const run = promisify(execFile);
 
@@ -36,6 +36,8 @@ export async function preflight(config: Config, harness: AgentHarness): Promise<
     results.push({ name: 'tasks', ok: false, detail: (cause as Error).message, fatal: true });
   }
 
+  const taskList = taskListCheck(config);
+  if (taskList) results.push(taskList);
   const handoffs = handoffCheck(config);
   if (handoffs) results.push(handoffs);
   const splits = splitCheck(config);
@@ -50,6 +52,46 @@ export async function preflight(config: Config, harness: AgentHarness): Promise<
   results.push(...(await harness.preflight(config)));
 
   return results;
+}
+
+/**
+ * Where tasks.json and the specs in the tasks folder disagree. A listed task
+ * that has not passed and has no spec cannot be run, which stops the run; the
+ * rest are warnings. Returns nothing when they agree, or when the list does not
+ * read, which the `tasks` check reports.
+ */
+export function taskListCheck(config: Config): CheckResult | undefined {
+  let inspection: TaskInspection;
+  try {
+    inspection = TaskStore.forProject(config.projectRoot, config.ralphDir).inspect();
+  } catch {
+    return undefined;
+  }
+  const dir = config.ralphDir.replace(/\/+$/, '');
+  const pending = inspection.missingSpec.filter((task) => !task.passes).map((task) => task.id);
+  const passed = inspection.missingSpec.filter((task) => task.passes).map((task) => task.id);
+
+  const details: string[] = [];
+  if (pending.length > 0) details.push(`listed with no spec in ${dir}/tasks/, so they cannot run: ${some(pending)}`);
+  if (inspection.unlisted.length > 0) {
+    details.push(`specs not in ${dir}/tasks.json, so they run after the listed tasks: ${some(inspection.unlisted)}`);
+  }
+  if (inspection.idMismatch.length > 0) {
+    details.push(
+      `specs whose id is not their file's: ${some(inspection.idMismatch.map(({ id, specId }) => `${id} (says ${JSON.stringify(specId)})`))}`,
+    );
+  }
+  if (inspection.leftBehind.length > 0) {
+    details.push(`specs of tasks that were split, never run, delete them: ${some(inspection.leftBehind)}`);
+  }
+  if (passed.length > 0) details.push(`passing tasks listed with no spec: ${some(passed)}`);
+  if (details.length === 0) return undefined;
+  return { name: 'task list', ok: false, detail: details.join('; '), fatal: pending.length > 0 };
+}
+
+/** The first few of `ids`, and how many more. */
+function some(ids: string[]): string {
+  return ids.slice(0, 5).join(', ') + (ids.length > 5 ? ` and ${ids.length - 5} more` : '');
 }
 
 /**
