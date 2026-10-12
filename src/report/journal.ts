@@ -37,11 +37,7 @@ export function writeJournal(ralphRoot: string, runId: string): string | undefin
     }
   }
 
-  const state = readJson<Record<string, unknown>>(resolve(from, 'state.json'));
-  if (state) {
-    const { pid: _pid, hostname: _hostname, ...portable } = state;
-    writeIfChanged(resolve(to, 'state.json'), `${JSON.stringify(portable, null, 2)}\n`);
-  }
+  writePortableState(from, to);
 
   if (existsSync(resolve(from, 'log.jsonl')) && stale(resolve(from, 'log.jsonl'), resolve(to, 'log.jsonl'))) {
     const kept = parseJsonLines<LogEntry>(readFileSync(resolve(from, 'log.jsonl'), 'utf8').split('\n')).filter((entry) =>
@@ -50,13 +46,47 @@ export function writeJournal(ralphRoot: string, runId: string): string | undefin
     writeFileSync(resolve(to, 'log.jsonl'), kept.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
   }
 
+  writeTranscripts(from, to);
+  return to;
+}
+
+/**
+ * Write the journal of planning session `planId`, under `journal/plans/`: what
+ * the owner and the agent said, how it ended, and a condensed transcript of
+ * each turn, built from the recorded events as a run's are. It is the record
+ * of why the plan is what it is. Mirrors `history/plans/<planId>/` without its
+ * control files (`reply.json`, `stop.json`) or its machine.
+ */
+export function writePlanJournal(ralphRoot: string, planId: string): string | undefined {
+  const from = resolve(ralphRoot, 'history', 'plans', planId);
+  if (!existsSync(from)) return undefined;
+  const to = resolve(ralphRoot, 'journal', 'plans', planId);
+  mkdirSync(to, { recursive: true });
+  const conversation = resolve(from, 'conversation.jsonl');
+  if (existsSync(conversation) && stale(conversation, resolve(to, 'conversation.jsonl'))) {
+    copyFileSync(conversation, resolve(to, 'conversation.jsonl'));
+  }
+  writePortableState(from, to);
+  writeTranscripts(from, to);
+  return to;
+}
+
+/** `state.json` without the pid and host, which mean nothing on another machine. */
+function writePortableState(from: string, to: string): void {
+  const state = readJson<Record<string, unknown>>(resolve(from, 'state.json'));
+  if (!state) return;
+  const { pid: _pid, hostname: _hostname, ...portable } = state;
+  writeIfChanged(resolve(to, 'state.json'), `${JSON.stringify(portable, null, 2)}\n`);
+}
+
+/** A condensed transcript beside each event file that changed since the last call. */
+function writeTranscripts(from: string, to: string): void {
   for (const name of readdirSync(from)) {
     const match = EVENTS_FILE.exec(name);
     if (!match) continue;
     const target = resolve(to, `${match[1]}.transcript.jsonl`);
     if (stale(resolve(from, name), target)) writeFileSync(target, condensedTranscript(resolve(from, name)));
   }
-  return to;
 }
 
 /** The transcript of an event file, one entry per line, each clipped and the whole bounded. */

@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { condensedTranscript, writeJournal } from '../src/report/journal.js';
+import { condensedTranscript, writeJournal, writePlanJournal } from '../src/report/journal.js';
 import { RalphProject } from '../src/ui/project.js';
 
 const fixture = resolve(__dirname, 'fixtures/session-events.jsonl');
@@ -93,6 +93,59 @@ describe('writeJournal', () => {
     // Newer than the event file: not rebuilt.
     writeJournal(ralphRoot, RUN);
     expect(readFileSync(transcript, 'utf8')).toBe('kept');
+  });
+});
+
+describe('writePlanJournal', () => {
+  const PLAN = '20261012-031500-beef';
+
+  /** A planning session's history, as the recorder leaves it. */
+  function planHistory(): { root: string; ralphRoot: string } {
+    const { root, ralphRoot } = history();
+    const dir = resolve(ralphRoot, 'history', 'plans', PLAN);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      resolve(dir, 'state.json'),
+      JSON.stringify({ id: PLAN, mode: 'replan', by: 'daemon', status: 'planned', pid: 4242, hostname: 'pod', turn: 1 }),
+    );
+    const said = [
+      { role: 'owner', text: 'Add an export screen', at: 't' },
+      { role: 'agent', text: 'Planned TASK-2', at: 't' },
+    ];
+    writeFileSync(resolve(dir, 'conversation.jsonl'), said.map((line) => `${JSON.stringify(line)}\n`).join(''));
+    copyFileSync(fixture, resolve(dir, 'turn-001.events.jsonl'));
+    writeFileSync(resolve(dir, 'reply.json'), '{}');
+    writeFileSync(resolve(dir, 'stop.json'), '{}');
+    return { root, ralphRoot };
+  }
+
+  it('keeps what was said and done, condensed from the recorded turns, without the control files or the machine', () => {
+    const { ralphRoot } = planHistory();
+    const to = writePlanJournal(ralphRoot, PLAN)!;
+
+    expect(to).toBe(resolve(ralphRoot, 'journal', 'plans', PLAN));
+    expect(readdirSync(to).sort()).toEqual(['conversation.jsonl', 'state.json', 'turn-001.transcript.jsonl']);
+    expect(readFileSync(resolve(to, 'conversation.jsonl'), 'utf8')).toContain('Add an export screen');
+    const state = JSON.parse(readFileSync(resolve(to, 'state.json'), 'utf8'));
+    expect(state).toMatchObject({ id: PLAN, mode: 'replan', status: 'planned' });
+    expect(state).not.toHaveProperty('pid');
+    expect(state).not.toHaveProperty('hostname');
+    const transcript = readFileSync(resolve(to, 'turn-001.transcript.jsonl'), 'utf8').trim().split('\n');
+    expect(transcript.map((line) => JSON.parse(line).kind)).toContain('text');
+  });
+
+  it('writes nothing for a session with no history', () => {
+    const { ralphRoot } = history();
+    expect(writePlanJournal(ralphRoot, 'missing')).toBeUndefined();
+  });
+
+  it('is not taken for a run by the web UI', () => {
+    const { root, ralphRoot } = planHistory();
+    writeJournal(ralphRoot, RUN);
+    writePlanJournal(ralphRoot, PLAN);
+    const project = new RalphProject(root, '.ralph');
+    expect(project.listRuns().map((run) => run.runId)).toEqual([RUN]);
+    expect(() => project.runDir('plans')).toThrow(/No run plans/);
   });
 });
 

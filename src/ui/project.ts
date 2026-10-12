@@ -67,7 +67,7 @@ const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
 const RUN_ID = /^[\w.-]+$/;
 /**
- * Folders beside the runs in the history: planning sessions (`plans/<id>/`), what agents ask (`asks/`), and
+ * Folders beside the runs in the history: planning sessions (`plans/<id>/`, journalled too), what agents ask (`asks/`), and
  * the session files of the pi harness (`pi/`), which it keeps there to continue a session from.
  */
 const NOT_RUNS = new Set(['plans', 'asks', 'pi']);
@@ -290,8 +290,8 @@ export class RalphProject {
     for (const root of [this.historyRoot, this.journalRoot]) {
       if (!existsSync(root)) continue;
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        // Planning sessions and asks keep folders of their own beside the runs.
-        if (entry.isDirectory() && RUN_ID.test(entry.name) && !(root === this.historyRoot && NOT_RUNS.has(entry.name))) ids.add(entry.name);
+        // Planning sessions and asks keep folders of their own beside the runs, in both.
+        if (entry.isDirectory() && RUN_ID.test(entry.name) && !NOT_RUNS.has(entry.name)) ids.add(entry.name);
       }
     }
     // By when they started, not by id: an id is in the local time of the
@@ -591,7 +591,7 @@ export class RalphProject {
 
   /** The run's folder in the history, or else in the journal. */
   runDir(runId: string): string {
-    if (!RUN_ID.test(runId)) throw new NotFoundError(`No run ${runId}`);
+    if (!RUN_ID.test(runId) || NOT_RUNS.has(runId)) throw new NotFoundError(`No run ${runId}`);
     for (const root of [this.historyRoot, this.journalRoot]) {
       const dir = resolve(root, runId);
       if (existsSync(dir)) return dir;
