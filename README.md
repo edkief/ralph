@@ -176,7 +176,11 @@ A web UI shows what the loop is doing, and lets you answer it when it needs a pe
   whole
 - **Logs**: Ralph's own log for each run, filterable by level
 - **Files**: everything in `.ralph/` (PRD, tasks, specs, steering, the agent's log, handoffs)
-  and `ralph.config.json`, with Markdown rendered and images shown as pictures
+  and `ralph.config.json`, with Markdown rendered and images shown as pictures. Ralph's own
+  records are laid out to read: a task's spec (in `tasks/`, or under `split/` while proposed or
+  once its task was split) with its steps and acceptance criteria, a split proposal, a task's
+  assessment, and `decisions.jsonl`, newest first. **Raw** shows the file as it is, and the
+  choice is remembered in the browser; a record that does not read as one is shown as it is
 - **Git**: the project's repository as it stands. The branch and how far it is ahead of or
   behind its upstream (as last fetched), the uncommitted and untracked files, and the 50 latest
   commits; pick one for its message and the files it changed, with lines added and removed.
