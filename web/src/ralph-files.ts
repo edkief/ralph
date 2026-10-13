@@ -10,10 +10,26 @@ const TASK_ID = /^TASK-[A-Za-z0-9._-]+$/;
 
 export type RalphFileKind = 'spec' | 'proposal' | 'assessment' | 'decisions';
 
+/** `ralphDir` as the start of the listed paths in it: `.ralph/`. */
+function prefixOf(ralphDir: string): string {
+  const root = ralphDir.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  return root && root !== '.' ? `${root}/` : '';
+}
+
+/** Where a task's spec may be, most likely first: in the backlog, or archived once the task was split. */
+export function specPaths(ralphDir: string, taskId: string): string[] {
+  const prefix = prefixOf(ralphDir);
+  return [`${prefix}tasks/${taskId}.json`, `${prefix}split/${taskId}/${taskId}.json`];
+}
+
+/** Where the split of `taskId` proposes the spec of `childId`, until it is applied. */
+export function proposedSpecPath(ralphDir: string, taskId: string, childId: string): string {
+  return `${prefixOf(ralphDir)}split/${taskId}/${childId}.json`;
+}
+
 /** What kind of Ralph record `path` (relative to the project root) is, if any. */
 export function recognise(path: string, ralphDir: string): RalphFileKind | null {
-  const root = ralphDir.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-  const prefix = root && root !== '.' ? `${root}/` : '';
+  const prefix = prefixOf(ralphDir);
   if (!path.startsWith(prefix)) return null;
   const parts = path.slice(prefix.length).split('/');
   const name = parts[parts.length - 1] ?? '';

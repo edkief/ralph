@@ -1,7 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readAssessment, readDecisions, readProposal, readSpec, recognise } from '../web/src/ralph-files.js';
+import {
+  proposedSpecPath,
+  readAssessment,
+  readDecisions,
+  readProposal,
+  readSpec,
+  recognise,
+  specPaths,
+} from '../web/src/ralph-files.js';
 
 const TEMPLATE_SPEC = readFileSync(resolve(import.meta.dirname, '..', 'templates', 'TASK-1.json'), 'utf8');
 
@@ -32,6 +40,13 @@ describe('recognise', () => {
     expect(recognise('.ralph/split/notes/proposal.json', '.ralph')).toBeNull();
     expect(recognise('.ralph/logs/decisions.jsonl', '.ralph')).toBeNull();
     expect(recognise('.ralph-old/tasks/TASK-1.json', '.ralph')).toBeNull();
+  });
+});
+
+describe('specPaths', () => {
+  it('looks for a spec in the backlog, then archived by its split', () => {
+    expect(specPaths('.ralph/', 'TASK-8')).toEqual(['.ralph/tasks/TASK-8.json', '.ralph/split/TASK-8/TASK-8.json']);
+    expect(proposedSpecPath('./.ralph', 'TASK-8', 'TASK-8.1')).toBe('.ralph/split/TASK-8/TASK-8.1.json');
   });
 });
 

@@ -1,12 +1,34 @@
-import { useMemo } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiUrl, useJson, useNow, type FileContent, type FileEntry, type StatusView } from '../api';
 import { formatBytes, formatDateTime } from '../format';
+import { recognise } from '../ralph-files';
 import { href } from '../route';
+import { kindLabel, ralphFileView } from './RalphFile';
 
 /** Files worth opening first, in this order, when none is picked. */
 const PREFERRED = ['prd/PRD.md', 'tasks.json', 'PROMPT.md'];
+
+/** Whether Ralph's records open readable or as they are, remembered in this browser. */
+type ViewMode = 'formatted' | 'raw';
+const VIEW_KEY = 'ralph-files-view';
+
+function savedMode(): ViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_KEY) === 'raw' ? 'raw' : 'formatted';
+  } catch {
+    return 'formatted';
+  }
+}
+
+function saveMode(mode: ViewMode): void {
+  try {
+    window.localStorage.setItem(VIEW_KEY, mode);
+  } catch {
+    // Remembered for this page only.
+  }
+}
 
 interface Group {
   dir: string;
@@ -24,6 +46,19 @@ export function Files({ status, selected }: { status: StatusView; selected: stri
   const path = selected || fallback || files[0]?.path || null;
   const entry = files.find((file) => file.path === path);
   const content = useJson<FileContent>(path ? `/api/file?path=${encodeURIComponent(path)}` : null, entry?.modifiedAt ?? null);
+  const [mode, setMode] = useState<ViewMode>(savedMode);
+
+  // Ralph's own records read better laid out; one cut short cannot be read whole.
+  const file = content.data;
+  const kind = file && !file.mediaType && !file.truncated ? recognise(file.path, status.ralphDir) : null;
+  const formatted = useMemo(
+    () => (file && kind ? ralphFileView(kind, file.content, { ralphDir: status.ralphDir, listed: new Set(files.map((listed) => listed.path)) }) : null),
+    [file, kind, status.ralphDir, files],
+  );
+  const pick = (next: ViewMode) => {
+    setMode(next);
+    saveMode(next);
+  };
 
   const groups = useMemo(() => {
     const byDir = new Map<string, FileEntry[]>();
@@ -65,14 +100,31 @@ export function Files({ status, selected }: { status: StatusView; selected: stri
           <>
             <div className="file-header">
               <code className="file-path">{path}</code>
-              {content.data ? (
+              {file ? (
                 <span className="muted small">
-                  {formatBytes(content.data.size)} · modified {formatDateTime(content.data.modifiedAt)}
+                  {formatBytes(file.size)} · modified {formatDateTime(file.modifiedAt)}
                 </span>
+              ) : null}
+              {formatted ? (
+                <nav className="subtabs file-modes" aria-label="Show the file">
+                  {(['formatted', 'raw'] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={mode === option ? 'subtab active' : 'subtab'}
+                      aria-pressed={mode === option}
+                      onClick={() => pick(option)}
+                    >
+                      {option === 'formatted' ? 'Formatted' : 'Raw'}
+                    </button>
+                  ))}
+                </nav>
+              ) : kind ? (
+                <span className="muted small">Shown as it is: it does not read as {kindLabel(kind)}</span>
               ) : null}
             </div>
             {content.error ? <div className="banner bad">{content.error}</div> : null}
-            {content.data ? <FileBody file={content.data} /> : null}
+            {file ? <FileBody file={file} formatted={mode === 'formatted' ? formatted : null} /> : null}
           </>
         )}
       </section>
@@ -80,7 +132,9 @@ export function Files({ status, selected }: { status: StatusView; selected: stri
   );
 }
 
-function FileBody({ file }: { file: FileContent }) {
+/** `formatted` is the readable view of a Ralph record, shown in place of the file as it is. */
+function FileBody({ file, formatted }: { file: FileContent; formatted: ReactNode | null }) {
+  if (formatted) return formatted;
   if (file.mediaType) {
     // The modification time in the URL makes the browser fetch a changed image again.
     const src = apiUrl(`/api/file/raw?path=${encodeURIComponent(file.path)}&v=${encodeURIComponent(file.modifiedAt)}`);
