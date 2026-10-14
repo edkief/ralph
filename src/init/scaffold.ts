@@ -26,6 +26,9 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   ['skills/ralph-plan/SKILL.md', '.agents/skills/ralph-plan/SKILL.md'],
   ['skills/ralph-grill/SKILL.md', '.agents/skills/ralph-grill/SKILL.md'],
   ['skills/ralph-review-plan/SKILL.md', '.agents/skills/ralph-review-plan/SKILL.md'],
+  // For the loop agent, whatever the stack.
+  ['skills/task-self-review/SKILL.md', '.agents/skills/task-self-review/SKILL.md'],
+  ['skills/e2e-test/SKILL.md', '.agents/skills/e2e-test/SKILL.md'],
 ];
 
 /**

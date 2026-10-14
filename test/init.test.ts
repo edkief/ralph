@@ -24,6 +24,8 @@ const EXPECTED = [
   '.agents/skills/ralph-plan/SKILL.md',
   '.agents/skills/ralph-grill/SKILL.md',
   '.agents/skills/ralph-review-plan/SKILL.md',
+  '.agents/skills/task-self-review/SKILL.md',
+  '.agents/skills/e2e-test/SKILL.md',
 ];
 
 function project(): string {
