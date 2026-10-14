@@ -8,6 +8,7 @@ import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
 import { runSplit } from './split/command.js';
+import { runSkills } from './skills/command.js';
 import { runRespond } from './human/command.js';
 import { runStop } from './human/stop.js';
 import { controlDaemon, detachDaemon, ownerOf, runDaemon } from './daemon/command.js';
@@ -38,6 +39,8 @@ Usage:
                             Steer the project's daemon
   ralph stop [--now | --park]
                             Stop the project's run from another terminal, or park it
+  ralph skills [add <pack...>]
+                            List curated upstream skill packs, or install them
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
@@ -152,7 +155,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon', 'stop'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon', 'stop', 'skills'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
@@ -209,6 +212,11 @@ async function main(argv: string[]): Promise<number> {
       replan: values.replan === true,
       load,
     });
+  }
+
+  // Installing skills needs only the project folder.
+  if (command === 'skills') {
+    return runSkills({ projectRoot: values.cwd ?? process.cwd(), positionals: positionals.slice(1) });
   }
 
   const { config, logger } = load();
