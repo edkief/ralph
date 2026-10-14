@@ -34,9 +34,12 @@ ralph init -m anthropic/claude-x  # plan with a different model than the loop us
 First it scaffolds: it creates `.ralph/` from `templates/`, writes `ralph.config.json` at the
 project root, adds `.ralph/history/`, `.playwright-mcp/` and `.playwright-cli/` to `.gitignore`, and has
 `.gitattributes` merge `.ralph/**/*.jsonl` as a union, so two machines appending to the same
-record keep both sides' lines. It also writes a `browser-check` skill to
-`.agents/skills/browser-check/` (see "Browser checks under pi" in [pi](#pi)). Scaffolding never
-overwrites a file or removes a line, so running it again is harmless, and is how a project set up earlier gets the skill.
+record keep both sides' lines. It also writes Ralph's [skills](#skills) to `.agents/skills/`:
+`browser-check` (see "Browser checks under pi" in [pi](#pi)), skills for the loop agent, and
+skills for planning with an agent of your choice. Scaffolding never overwrites a file or removes
+a line, so running it again is harmless, and is how a project set up earlier gets new skills.
+`ralph init --skills react,postgres` also installs [skill packs](#skill-packs) for the project's
+stack; without it, `ralph init` names the packs the project's `package.json` suggests.
 
 Then, in a terminal, it starts an interview with the configured agent:
 
@@ -81,7 +84,8 @@ as does any run outside a terminal. Then write the PRD, tasks and specs by hand.
 
 Planning is a one-off that rewards a stronger model than the loop may need. Set
 `plan.model` (or `RALPH_PLAN_MODEL`, or `-m` on `init`) to use one; it defaults to `model`,
-then the harness's default model.
+then the harness's default model. To plan in another agent altogether, such as a frontier model
+in Claude Code or Codex, use the [planning skills](#planning-from-another-agent).
 
 ## Usage
 
@@ -104,6 +108,8 @@ ralph daemon --detach      # stay up in the background, running batches on reque
 ralph daemon run -n 5       # have it run 5 iterations
 ralph daemon pause          # stop its batch after the current iteration
 ralph stop --park           # hand the project over: hand off, commit and push
+ralph skills                # list skill packs, and those the project suggests
+ralph skills add react postgres  # install skill packs from their upstream sources
 
 ralph -C /path/to/project -n 20 -m ollama/qwen3-coder
 ```
@@ -113,7 +119,10 @@ Without `npm link`, substitute `node ~/Dev/ralph/dist/cli.js`.
 Start with `ralph doctor`. It reports every check it makes and runs no model, so it costs
 nothing to get wrong. It also warns about anything another machine would not get from the
 repository: uncommitted files in `.ralph/` (bar its history), commits not pushed to the
-upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB.
+upstream, a branch with no upstream, and `.ralph/artifacts/` past 25 MB. And it checks the plan
+the way the planning interview does, whoever wrote it: a `plan` warning names a PRD or task list
+still holding the templates, and unfinished tasks whose spec is the template or lacks a title or
+acceptance criteria.
 
 ### Exit codes
 
@@ -459,6 +468,71 @@ ralph daemon shutdown        # stop any batch now, and exit
   `.ralph/history/` (`daemon.json`, `daemon-request.json`), so they, and the web UI, also work
   from another terminal or container that shares the folder.
 - SIGTERM, SIGINT or SIGHUP to the daemon shuts it down like `ralph daemon shutdown`; it exits 0.
+
+## Skills
+
+`ralph init` writes these skills to `.agents/skills/`, the folder opencode, pi, Codex, Cursor and
+most other agents read skills from. Each is a plain `SKILL.md` you can edit; scaffolding never
+overwrites one.
+
+| Skill | For | What it does |
+| --- | --- | --- |
+| `ralph-plan` | Planning | Writes or revises the PRD, task specs and `tasks.json`, by the same rules as the `ralph init` interview, then checks them with `ralph doctor` and commits them |
+| `ralph-grill` | Planning | Interviews the owner one decision at a time, each with a recommended answer, until nothing the loop would have to guess is left open, then folds the answers into the plan |
+| `ralph-review-plan` | Planning | Audits a plan against the code: tasks too big for an iteration, wrong order, specs that are stale or not self-contained, criteria nobody can check, missing prerequisites |
+| `task-self-review` | The loop | Reviews the agent's own change against the spec's acceptance criteria before it marks the task passing; `PROMPT.md` points the agent at it |
+| `e2e-test` | The loop | When an end-to-end test earns its place, and how to write one that does not flake |
+| `browser-check` | The loop | Checks a screen in a real browser with `playwright-cli`, for agents without a browser tool of their own |
+
+### Planning from another agent
+
+The planning skills tell their agent they are not for use in a loop iteration, so the loop
+agent leaves them alone. They let you plan with whatever agent and model you choose, often a
+stronger and costlier one than the loop runs on, where the extra judgement pays most:
+
+1. `ralph init --no-interview` to scaffold, if the project has no `.ralph/` yet.
+2. In your agent: "use ralph-grill on <the idea>", then "use ralph-plan to write the plan".
+   For an existing plan: "use ralph-plan to add <feature>", or "use ralph-review-plan before
+   tonight's run".
+3. `ralph doctor` checks the result (the agent runs it too), and `ralph` runs it.
+
+Claude Code reads skills only from `.claude/skills/`. Link the ones you want there:
+
+```bash
+mkdir -p .claude/skills
+for skill in ralph-plan ralph-grill ralph-review-plan; do ln -s ../../.agents/skills/$skill .claude/skills/$skill; done
+```
+
+### Skill packs
+
+Skills for a stack (React, a database, a test runner) are best kept by the people who make it.
+Ralph does not copy them: it names a few first-party ones per stack, as packs, and installs them
+with the [`skills`](https://github.com/vercel-labs/skills) CLI (`npx skills`, version pinned by
+Ralph). That fetches them from upstream into `.agents/skills/`, links them for agents on the
+machine that read skills from elsewhere, such as Claude Code, and records them in
+`skills-lock.json`.
+
+| Pack | Skills | Source | Suggested by |
+| --- | --- | --- | --- |
+| `react` | `vercel-react-best-practices`, `vercel-composition-patterns`, `web-design-guidelines` | `vercel-labs/agent-skills` | `react`, `next` |
+| `shadcn` | `shadcn` | `shadcn/ui` | `components.json` |
+| `vitest` | `vitest` | `antfu/skills` | `vitest` |
+| `postgres` | `postgres` | `planetscale/database-skills` | `pg`, `postgres`, `@neondatabase/serverless`, `@vercel/postgres` |
+| `mysql` | `mysql` | `planetscale/database-skills` | `mysql2` |
+| `prisma` | `prisma-cli`, `prisma-client-api` | `prisma/skills` | `prisma`, `@prisma/client` |
+
+```bash
+ralph skills                     # the packs, those this project suggests, and the commands that install them
+ralph skills add react postgres  # install them
+ralph init --skills react,postgres
+```
+
+"Suggested by" is what `ralph skills` and `ralph init` look for in `package.json` dependencies,
+or at the project root. Commit `.agents/skills/` and `skills-lock.json` so other machines and the
+loop get the same skills; `npx skills experimental_install` restores them from the lock file.
+Ralph adds only the curation: for any other skill, and to update or remove one, use `npx skills`
+directly. Drizzle has no first-party skill yet, so no pack; `npx skills find drizzle` lists
+community ones.
 
 ## What a project must provide
 
