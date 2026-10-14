@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { REQUEST_KINDS } from '../human/request.js';
-import { HARNESS_NAMES } from './harness.js';
+import { DEFAULT_HARNESS, HARNESS_NAMES } from './harness.js';
 
 /** The opencode harness: where Ralph finds the server, attaching to a URL or spawning its own. */
 const ServerSchema = z.object({
@@ -297,7 +297,7 @@ export const ConfigSchema = z.object({
   agentDir: z.string().optional(),
   maxIterations: z.number().int().positive().default(10),
   /** The agent backend that runs the turns. */
-  harness: z.enum(HARNESS_NAMES).default('opencode'),
+  harness: z.enum(HARNESS_NAMES).default(DEFAULT_HARNESS),
   /** `provider/model`, which every harness accepts; omitted means the harness's default. */
   model: z.string().optional(),
   /** opencode agent (subagent profile) to run as. opencode only. */

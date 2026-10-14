@@ -396,7 +396,12 @@ describe('a daemon planning the project', () => {
       script: (count) => (count === 1 ? say('Which stack?') : say('Done. <promise>PLAN:DONE</promise>')),
     });
     const load = () =>
-      ConfigSchema.parse({ projectRoot: root, server: { url: server.url }, retries: { backoffMs: 0, iterationRetries: 0 } });
+      ConfigSchema.parse({
+        projectRoot: root,
+        harness: 'opencode',
+        server: { url: server.url },
+        retries: { backoffMs: 0, iterationRetries: 0 },
+      });
     const ralphRoot = resolve(root, '.ralph');
     const daemon = runDaemon({ config: load(), logger, reload: load, start: false, ui: false });
     try {

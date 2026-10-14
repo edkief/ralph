@@ -262,7 +262,7 @@ describe('harness selection', () => {
     return root;
   }
 
-  it('resolves a file that predates the setting to opencode, unchanged and without warnings', () => {
+  it('runs pi for a file that names no harness, and says how to keep opencode', () => {
     const root = withFile({
       model: 'ollama/qwen3-coder',
       agent: 'build',
@@ -272,16 +272,23 @@ describe('harness selection', () => {
 
     const { config, warnings } = load(root);
 
-    expect(config.harness).toBe('opencode');
+    expect(config.harness).toBe('pi');
     expect(config.agent).toBe('build');
     expect(config.server).toMatchObject({ url: 'http://opencode:4096', password: 'secret', port: 4096 });
     expect(config.pi).toEqual({ binary: 'pi', args: [], ...PI_DEFAULTS });
-    expect(warnings).toEqual([]);
+    const hint = 'pi is the default harness, set "harness": "opencode" to use opencode';
+    expect(warnings).toEqual([
+      `"agent" only applies to the opencode harness; it is ignored with pi; ${hint}`,
+      `"server" only applies to the opencode harness; it is ignored with pi; ${hint}`,
+    ]);
+    // Naming opencode keeps the file running as it did before pi became the default.
+    const pinned = withFile({ harness: 'opencode', agent: 'build', server: { url: 'http://opencode:4096' } });
+    expect(load(pinned)).toMatchObject({ config: { harness: 'opencode', agent: 'build' }, warnings: [] });
   });
 
-  it('defaults to opencode with no file and an empty RALPH_HARNESS', () => {
-    expect(load(project()).config.harness).toBe('opencode');
-    expect(load(project(), { env: { RALPH_HARNESS: '' } }).config.harness).toBe('opencode');
+  it('defaults to pi with no file and an empty RALPH_HARNESS', () => {
+    expect(load(project()).config.harness).toBe('pi');
+    expect(load(project(), { env: { RALPH_HARNESS: '' } }).config.harness).toBe('pi');
   });
 
   it('layers the harness file < env < flag', () => {
@@ -338,13 +345,13 @@ describe('harness selection', () => {
   });
 
   it('warns, without failing, about pi settings under opencode', () => {
-    const root = withFile({ pi: { binary: '/opt/pi' } });
+    const root = withFile({ harness: 'opencode', pi: { binary: '/opt/pi' } });
 
     const { config, warnings } = load(root);
 
     expect(config.harness).toBe('opencode');
     expect(warnings).toEqual(['"pi" only applies to the pi harness; it is ignored with opencode']);
-    expect(load(project(), { env: { RALPH_PI_THINKING: 'low' } }).warnings).toHaveLength(1);
+    expect(load(withFile({ harness: 'opencode' }), { env: { RALPH_PI_THINKING: 'low' } }).warnings).toHaveLength(1);
   });
 
   it('does not warn about settings every harness shares, or about nothing set', () => {

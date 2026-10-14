@@ -50,7 +50,7 @@ function writeProposal(root: string, proposal: Record<string, unknown>, ids: str
 const split = { splittable: true, reason: 'Two halves.', tasks: [{ id: 'TASK-1.1', title: 'First half' }, { id: 'TASK-1.2', title: 'Second half' }] };
 
 function config(root: string, url = 'http://127.0.0.1:9'): Config {
-  return ConfigSchema.parse({ projectRoot: root, server: { url } });
+  return ConfigSchema.parse({ projectRoot: root, harness: 'opencode', server: { url } });
 }
 
 /** Run the command, capturing what it prints. */

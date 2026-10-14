@@ -1,8 +1,7 @@
 # ralph
 
-A long-running agent loop that drives a coding agent through a harness: [opencode](https://opencode.ai)
-through its HTTP API, or, experimentally, [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
-over its RPC mode (see [Harnesses](#harnesses)).
+A long-running agent loop that drives a coding agent through a harness: [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
+over its RPC mode, or [opencode](https://opencode.ai) through its HTTP API (see [Harnesses](#harnesses)).
 
 Ralph picks the next unfinished task from a project's `.ralph/tasks.json`, runs one agent turn
 against it, verifies what actually changed in the repository, and repeats until the backlog is
@@ -20,6 +19,9 @@ npm install
 npm run build
 npm link          # optional, puts `ralph` on your PATH
 ```
+
+Ralph also needs its agent: [pi](#pi) by default (`npm install -g @earendil-works/pi-coding-agent@1.1`,
+then tell it about your model), or [opencode](https://opencode.ai) with `"harness": "opencode"`.
 
 ## Getting started
 
@@ -631,16 +633,20 @@ talk to one harness interface, so they behave the same whichever you pick.
 
 | Harness | Status | How Ralph drives it |
 | --- | --- | --- |
-| `opencode` | Default | Spawns `opencode serve` (or attaches to one with `server.url`) and speaks its HTTP API |
-| `pi` | Experimental | Spawns one `pi --mode rpc` process per session and speaks its JSON protocol over stdin/stdout (see [pi](#pi)) |
+| `pi` | Default | Spawns one `pi --mode rpc` process per session and speaks its JSON protocol over stdin/stdout (see [pi](#pi)) |
+| `opencode` | Supported | Spawns `opencode serve` (or attaches to one with `server.url`) and speaks its HTTP API |
 
 Choose one with `harness` in `ralph.config.json`, `RALPH_HARNESS`, or `--harness` on the command
-line (flags beat the environment, which beats the file). Leave it out and you get `opencode`: a
-`ralph.config.json` written before the setting existed loads unchanged and runs opencode.
+line (flags beat the environment, which beats the file). Leave it out and you get `pi`.
+
+**Upgrading.** opencode was the default until pi took over. `ralph init` has always written
+`harness` into `ralph.config.json`, so a project it set up keeps opencode. A file that names no
+harness, or no file at all, now runs pi; add `"harness": "opencode"` to keep opencode. Ralph
+warns when such a file sets opencode's settings (`agent`, `server`) and says so.
 
 ```jsonc
 {
-  "harness": "opencode",
+  "harness": "pi",
   "model": "ollama/qwen3-coder",    // provider/model; both harnesses accept it
   "agent": "build",                 // opencode only
   "server": { "url": "http://opencode:4096" },  // opencode only
@@ -686,8 +692,14 @@ provider failing, which the message names.
 
 pi is minimal: four tools (read, write, edit, bash), a system prompt of under a thousand tokens,
 no subagents and no plan mode. That leaves more of a small context window to the task, which
-suits self-hosted models. The adapter is **experimental** until it has been measured against
-opencode on the same models.
+suits self-hosted models.
+
+That is why it is the default. On one project, run with the same self-hosted model on the same
+llama.cpp server, both harnesses finished tasks at about the same rate. pi's first model call in a fresh
+session carried about half the prompt that opencode's did (8.8k tokens against 16k), its calls
+stayed smaller from there on, and none of its tool calls failed (opencode's: 1.2%). pi ran 7
+iterations to opencode's 137, so take this as an indication, not a benchmark
+([#75](https://github.com/edkief/ralph/issues/75) has the numbers).
 
 **Setup.**
 
@@ -713,7 +725,9 @@ opencode on the same models.
    }
    ```
 
-   See pi's `docs/models.md` for the rest.
+   Set `contextWindow` to the context the server actually serves: pi compacts the conversation
+   when it nears that size, so a smaller value compacts early and a larger one overflows. See
+   pi's `docs/models.md` for the rest.
 3. Choose it, and name the model as `provider/id`, which is what `model`, `plan.model` and
    `escalation.model` take: `"harness": "pi", "model": "local/qwen3-coder-30b"`. Set `model`: without it
    pi starts on whatever default its own settings and credentials give, and `ralph doctor` says which.
@@ -842,7 +856,7 @@ See `templates/ralph.config.json` for a complete file.
 
 ```jsonc
 {
-  "harness": "opencode",           // opencode | pi (experimental); see Harnesses
+  "harness": "pi",                 // pi (default) | opencode; see Harnesses
   "model": "ollama/qwen3-coder",   // provider/model, as the harness names it
   "ralphDir": ".ralph",            // project folder; omit to detect .ralph/ (or a legacy .agent/)
   "maxIterations": 20,
