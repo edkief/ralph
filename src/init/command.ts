@@ -11,6 +11,8 @@ import { terminalAskRelay } from './terminal-asks.js';
 import { PlanRecorder, RecordingIO } from './record.js';
 import { planningProblem, planWith, type PlanOutcome } from './session.js';
 import { ownerOf, runInProgress } from '../daemon/command.js';
+import { detectPacks, isInstalled, resolvePacks, UnknownPackError, type Pack } from '../skills/packs.js';
+import { installPacks, type CommandRunner } from '../skills/command.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../report/logger.js';
 
@@ -26,15 +28,28 @@ export async function runInit(args: {
   projectRoot: string;
   interview: boolean;
   replan: boolean;
+  /** Skill packs to install after scaffolding (`--skills`). */
+  skills?: string[];
+  /** Runs the `skills` CLI; tests pass a fake. */
+  runCommand?: CommandRunner;
   load: () => { config: Config; logger: Logger };
 }): Promise<number> {
   const out = process.stdout;
+  let packs: Pack[] = [];
+  try {
+    packs = resolvePacks(args.skills ?? []);
+  } catch (cause) {
+    if (!(cause instanceof UnknownPackError)) throw cause;
+    process.stderr.write(`${cause.message}\n`);
+    return ExitCode.ConfigError;
+  }
   const result = scaffold(args.projectRoot);
   if (result.status === 'legacy') {
     process.stderr.write(`${result.message}\n`);
     return ExitCode.ConfigError;
   }
   out.write(`${describeScaffold(result)}\n`);
+  await addSkills(args.projectRoot, packs, args.runCommand);
 
   if (!args.interview) {
     out.write(`\n${BY_HAND}\n`);
@@ -94,6 +109,29 @@ export async function runInit(args: {
     terminal.close();
     io.recorder.close();
     await harness.stop();
+  }
+}
+
+/**
+ * Install the packs asked for, or mention the ones the project suggests and
+ * lacks. A failed install is reported and planning goes on: the scaffold
+ * stands, and `ralph skills add` can try again.
+ */
+async function addSkills(projectRoot: string, packs: Pack[], run?: CommandRunner): Promise<void> {
+  if (packs.length === 0) {
+    const missing = detectPacks(projectRoot).filter((pack) => !isInstalled(projectRoot, pack)).map((pack) => pack.name);
+    if (missing.length > 0) {
+      process.stdout.write(
+        `\nSkill packs this project suggests: ${missing.join(', ')}. Install with \`ralph skills add ${missing.join(' ')}\` (\`ralph skills\` lists them).\n`,
+      );
+    }
+    return;
+  }
+  process.stdout.write(`\nInstalling skill packs: ${packs.map((pack) => pack.name).join(', ')}\n`);
+  const installed = await installPacks(projectRoot, packs, run);
+  process.stdout.write(`${installed.report.join('\n')}\n`);
+  if (!installed.ok) {
+    process.stdout.write('Some skill packs did not install; carrying on. Retry with `ralph skills add`.\n');
   }
 }
 

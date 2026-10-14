@@ -8,6 +8,7 @@ import { runLoop } from './loop/orchestrator.js';
 import { runInit } from './init/command.js';
 import { runUi, startUiBesideLoop } from './ui/command.js';
 import { runSplit } from './split/command.js';
+import { runSkills } from './skills/command.js';
 import { runRespond } from './human/command.js';
 import { runStop } from './human/stop.js';
 import { controlDaemon, detachDaemon, ownerOf, runDaemon } from './daemon/command.js';
@@ -38,10 +39,14 @@ Usage:
                             Steer the project's daemon
   ralph stop [--now | --park]
                             Stop the project's run from another terminal, or park it
+  ralph skills [add <pack...>]
+                            List curated upstream skill packs, or install them
 
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
       --replan              Revise an existing plan with the agent
+      --skills <packs>      Install skill packs after scaffolding, e.g. react,postgres
+                            (see \`ralph skills\`)
   -m, --model <id>          Model for the planning interview (default: plan.model, then model)
 
 Split options:
@@ -130,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
       wait: { type: 'boolean' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
+      skills: { type: 'string' },
       apply: { type: 'boolean', default: false },
       iterations: { type: 'string' },
       detach: { type: 'boolean', default: false },
@@ -152,7 +158,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = positionals[0] ?? 'run';
-  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon', 'stop'].includes(command)) {
+  if (!['run', 'once', 'doctor', 'config', 'init', 'ui', 'split', 'respond', 'daemon', 'stop', 'skills'].includes(command)) {
     process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
     return ExitCode.ConfigError;
   }
@@ -207,8 +213,14 @@ async function main(argv: string[]): Promise<number> {
       projectRoot: values.cwd ?? process.cwd(),
       interview: values.interview !== false,
       replan: values.replan === true,
+      ...(values.skills ? { skills: values.skills.split(',') } : {}),
       load,
     });
+  }
+
+  // Installing skills needs only the project folder.
+  if (command === 'skills') {
+    return runSkills({ projectRoot: values.cwd ?? process.cwd(), positionals: positionals.slice(1) });
   }
 
   const { config, logger } = load();

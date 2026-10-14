@@ -110,8 +110,53 @@ export function validatePlan(
   return problems;
 }
 
+/**
+ * What `validatePlan` would find wrong with a plan that may have been written
+ * anywhere (by hand, or by an agent outside `ralph init`), limited to what the
+ * loop still has to run: a template PRD or task list, and unfinished tasks
+ * whose spec is the template or lacks a title or acceptance criteria. Passed
+ * tasks are history and not checked. Specs that are missing, unlisted or carry
+ * another id are left to the task list check, which reports them already.
+ */
+export function pendingPlanProblems(projectRoot: string, ralphDir: string, templatesDir = TEMPLATES_DIR): string[] {
+  const problems: string[] = [];
+  const shownDir = ralphDir.replace(/\/+$/, '');
+  const prd = resolve(projectRoot, ralphDir, 'prd', 'PRD.md');
+  if (existsSync(prd) && sameText(readFileSync(prd, 'utf8'), readTemplate(templatesDir, 'PRD.md'))) {
+    problems.push(`${shownDir}/prd/PRD.md is still the template`);
+  }
+  if (taskListUntouched(projectRoot, ralphDir, templatesDir, false)) {
+    problems.push(`${shownDir}/tasks.json and its first spec are still the template`);
+    return problems;
+  }
+
+  let inspection: TaskInspection;
+  try {
+    inspection = TaskStore.forProject(projectRoot, ralphDir).inspect();
+  } catch {
+    return problems;
+  }
+  const template = readTemplate(templatesDir, 'TASK-1.json');
+  const unlisted = new Set(inspection.unlisted);
+  for (const task of inspection.tasks) {
+    if (task.passes || unlisted.has(task.id) || !task.specFilePath) continue;
+    const path = resolve(projectRoot, task.specFilePath);
+    if (!existsSync(path)) continue;
+    const specProblems = checkSpec(path, task.specFilePath, task.id, template, { id: false });
+    if (specProblems.length === 0 && !task.title.trim()) problems.push(`task ${task.id}: title is empty`);
+    problems.push(...specProblems);
+  }
+  return problems;
+}
+
 /** Problems with one task's spec file, labelled with the task id. */
-export function checkSpec(path: string, shown: string, taskId: string, template: string): string[] {
+export function checkSpec(
+  path: string,
+  shown: string,
+  taskId: string,
+  template: string,
+  options: { id?: boolean } = {},
+): string[] {
   const label = `task ${taskId}`;
   if (!existsSync(path)) return [`${label}: spec ${shown} does not exist`];
 
@@ -130,7 +175,7 @@ export function checkSpec(path: string, shown: string, taskId: string, template:
 
   const problems: string[] = [];
   const { id, acceptanceCriteria } = spec as Record<string, unknown>;
-  if (id !== taskId) problems.push(`${label}: spec ${shown} has id ${JSON.stringify(id)}, expected "${taskId}"`);
+  if (options.id !== false && id !== taskId) problems.push(`${label}: spec ${shown} has id ${JSON.stringify(id)}, expected "${taskId}"`);
   if (
     !Array.isArray(acceptanceCriteria) ||
     acceptanceCriteria.length === 0 ||

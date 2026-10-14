@@ -1,9 +1,11 @@
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { scaffold, TEMPLATES_DIR } from '../src/init/scaffold.js';
-import { planState, validatePlan } from '../src/init/plan.js';
+import { pendingPlanProblems, planState, validatePlan } from '../src/init/plan.js';
+import { planCheck } from '../src/loop/preflight.js';
+import { ConfigSchema } from '../src/config/schema.js';
 import { spec, writePlan } from './helpers/plan.js';
 
 function scaffolded(): string {
@@ -138,5 +140,50 @@ describe('validatePlan', () => {
     writePlan(root);
     writeFileSync(resolve(root, '.ralph/tasks.json'), '[{"title": "no id"}]');
     expect(validatePlan(root, '.ralph')[0]).toMatch(/does not match the expected task shape/);
+  });
+});
+
+describe('pendingPlanProblems and the doctor plan check', () => {
+  const check = (root: string) => planCheck(ConfigSchema.parse({ projectRoot: root }));
+
+  it('says nothing about a sound plan', () => {
+    const root = scaffolded();
+    writePlan(root);
+    expect(pendingPlanProblems(root, '.ralph')).toEqual([]);
+    expect(check(root)).toBeUndefined();
+  });
+
+  it('warns, without stopping the run, about a plan still holding the templates', () => {
+    expect(check(scaffolded())).toEqual({
+      name: 'plan',
+      ok: false,
+      detail: '.ralph/prd/PRD.md is still the template; .ralph/tasks.json and its first spec are still the template',
+      fatal: false,
+    });
+  });
+
+  it('flags unfinished tasks whose spec lacks a title or acceptance criteria, or is the template', () => {
+    const root = scaffolded();
+    const template = readFileSync(resolve(TEMPLATES_DIR, 'TASK-1.json'), 'utf8');
+    writePlan(root, [{ id: 'TASK-1' }, { id: 'TASK-2' }, { id: 'TASK-3', title: '' }], {
+      'TASK-1': template,
+      'TASK-2': spec('TASK-2', { acceptanceCriteria: [] }),
+    });
+    expect(pendingPlanProblems(root, '.ralph')).toEqual([
+      'task TASK-1: spec .ralph/tasks/TASK-1.json is still the template',
+      'task TASK-2: spec .ralph/tasks/TASK-2.json needs a non-empty acceptanceCriteria list of strings',
+      'task TASK-3: title is empty',
+    ]);
+  });
+
+  it('leaves passed tasks alone, and what the task list check already reports', () => {
+    const root = scaffolded();
+    writePlan(root, [{ id: 'TASK-1', passes: true }, { id: 'TASK-2' }, { id: 'TASK-3' }], {
+      'TASK-1': { id: 'TASK-1', title: 'Old' },
+      'TASK-2': spec('TASK-9'),
+      'TASK-3': undefined,
+    });
+    writeFileSync(resolve(root, '.ralph/tasks/TASK-4.json'), JSON.stringify({ id: 'TASK-4' }));
+    expect(pendingPlanProblems(root, '.ralph')).toEqual([]);
   });
 });
