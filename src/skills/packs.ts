@@ -116,6 +116,13 @@ export function detectPacks(projectRoot: string): Pack[] {
   );
 }
 
+/** Whether every skill of the pack is already in the project's `.agents/skills/`. */
+export function isInstalled(projectRoot: string, pack: Pack): boolean {
+  return pack.sources.every((source) =>
+    source.skills.every((skill) => existsSync(resolve(projectRoot, '.agents', 'skills', skill, 'SKILL.md'))),
+  );
+}
+
 /**
  * One `npx skills add` per repository the packs draw on, with every skill
  * wanted from it. No `--agent`: the CLI installs to `.agents/skills/`, which

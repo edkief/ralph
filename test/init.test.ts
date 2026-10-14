@@ -250,4 +250,64 @@ describe('ralph init beside a daemon', () => {
     expect(errors.join('')).toMatch(/^Not planning: a daemon \(pid \d+\) runs this project/);
     expect(existsSync(resolve(ralphRoot, 'history', 'plans'))).toBe(false);
   });
+
+  describe('skill packs', () => {
+    const quietLoad = (root: string) => () => ({
+      config: loadConfig({ projectRoot: root, env: {} }),
+      logger: new Logger({ level: 'error', stream: { write: () => true } as NodeJS.WritableStream }),
+    });
+    const capture = () => {
+      const out: string[] = [];
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => (out.push(String(chunk)), true));
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => (err.push(String(chunk)), true));
+      return { out: () => out.join(''), err: () => err.join('') };
+    };
+
+    it('installs the packs asked for after scaffolding, and carries on when one fails', async () => {
+      const root = project();
+      const io = capture();
+      const calls: string[][] = [];
+      const code = await runInit({
+        projectRoot: root,
+        interview: false,
+        replan: false,
+        skills: ['react', 'postgres'],
+        runCommand: async (argv) => {
+          calls.push(argv);
+          // The scaffold is laid out before any install runs.
+          expect(existsSync(resolve(root, '.ralph/PROMPT.md'))).toBe(true);
+          if (argv[4] === 'planetscale/database-skills') throw Object.assign(new Error('failed'), { stderr: 'offline' });
+          return { stdout: '', stderr: '' };
+        },
+        load: quietLoad(root),
+      });
+      expect(code).toBe(0);
+      expect(calls.map((argv) => argv[4])).toEqual(['vercel-labs/agent-skills', 'planetscale/database-skills']);
+      expect(io.out()).toContain('Some skill packs did not install; carrying on.');
+      expect(io.out()).toContain('offline');
+      for (const path of EXPECTED) expect(existsSync(resolve(root, path))).toBe(true);
+    });
+
+    it('refuses an unknown pack before scaffolding anything', async () => {
+      const root = project();
+      const io = capture();
+      const code = await runInit({ projectRoot: root, interview: false, replan: false, skills: ['drizzle'], load: quietLoad(root) });
+      expect(code).toBe(ExitCode.ConfigError);
+      expect(io.err()).toContain('Unknown pack: drizzle');
+      expect(readdirSync(root)).toEqual([]);
+    });
+
+    it('suggests the packs the project lacks, without installing them', async () => {
+      const root = project();
+      writeFileSync(resolve(root, 'package.json'), JSON.stringify({ dependencies: { react: '19', pg: '8' } }));
+      mkdirSync(resolve(root, '.agents/skills/postgres'), { recursive: true });
+      writeFileSync(resolve(root, '.agents/skills/postgres/SKILL.md'), '---\nname: postgres\n---\n');
+      const io = capture();
+      const run = vi.fn();
+      await runInit({ projectRoot: root, interview: false, replan: false, runCommand: run, load: quietLoad(root) });
+      expect(run).not.toHaveBeenCalled();
+      expect(io.out()).toContain('Skill packs this project suggests: react. Install with `ralph skills add react`');
+    });
+  });
 });

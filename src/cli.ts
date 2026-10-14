@@ -45,6 +45,8 @@ Usage:
 Init options:
       --no-interview        Only scaffold; also the default outside a terminal
       --replan              Revise an existing plan with the agent
+      --skills <packs>      Install skill packs after scaffolding, e.g. react,postgres
+                            (see \`ralph skills\`)
   -m, --model <id>          Model for the planning interview (default: plan.model, then model)
 
 Split options:
@@ -133,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
       wait: { type: 'boolean' },
       interview: { type: 'boolean', default: true },
       replan: { type: 'boolean', default: false },
+      skills: { type: 'string' },
       apply: { type: 'boolean', default: false },
       iterations: { type: 'string' },
       detach: { type: 'boolean', default: false },
@@ -210,6 +213,7 @@ async function main(argv: string[]): Promise<number> {
       projectRoot: values.cwd ?? process.cwd(),
       interview: values.interview !== false,
       replan: values.replan === true,
+      ...(values.skills ? { skills: values.skills.split(',') } : {}),
       load,
     });
   }
