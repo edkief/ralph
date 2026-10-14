@@ -19,12 +19,19 @@ afterEach(async () => {
 });
 
 describe('startHarness', () => {
-  it('starts opencode, the default, against the server the config names', async () => {
+  it('starts opencode when the config picks it, against the server the config names', async () => {
     server = await startFakeServer({ script: [] });
 
-    const harness = await startHarness(config({ server: { url: server.url } }), { cwd: process.cwd(), logger });
+    const harness = await startHarness(config({ harness: 'opencode', server: { url: server.url } }), { cwd: process.cwd(), logger });
 
     expect(harness.name).toBe('opencode');
+    await harness.stop();
+  });
+
+  it('starts pi, the default, when the config names no harness', async () => {
+    const harness = await startHarness(config({ pi: { binary: fakePi().binary } }), { cwd: process.cwd(), logger });
+
+    expect(harness.name).toBe('pi');
     await harness.stop();
   });
 
@@ -43,7 +50,7 @@ describe('startHarness', () => {
   });
 
   it('names the harness in the error when it does not come up', async () => {
-    const started = startHarness(config({ server: { url: 'http://127.0.0.1:1', startupTimeoutMs: 300 } }), {
+    const started = startHarness(config({ harness: 'opencode', server: { url: 'http://127.0.0.1:1', startupTimeoutMs: 300 } }), {
       cwd: process.cwd(),
       logger,
     });

@@ -3,7 +3,7 @@
   "version": "0.28.0",
   "private": false,
   "type": "module",
-  "description": "Long-running agent loop that drives a coding agent: opencode through its HTTP API, or pi over RPC",
+  "description": "Long-running agent loop that drives a coding agent: pi over RPC, or opencode through its HTTP API",
   "license": "MIT",
   "bin": {
     "ralph": "./dist/cli.js"

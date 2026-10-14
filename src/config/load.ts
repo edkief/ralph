@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { z } from 'zod';
-import { HARNESS_NAMES, HARNESS_SETTINGS, type HarnessName } from './harness.js';
+import { DEFAULT_HARNESS, HARNESS_NAMES, HARNESS_SETTINGS, type HarnessName } from './harness.js';
 import { ConfigSchema, type Config } from './schema.js';
 
 export class ConfigError extends Error {}
@@ -154,14 +154,17 @@ function isSet(value: unknown): boolean {
  * and switch between them with `harness`.
  */
 function warnInapplicable(merged: Record<string, unknown>, warn: (message: string) => void): void {
-  const chosen = merged['harness'] ?? 'opencode';
+  const chosen = merged['harness'] ?? DEFAULT_HARNESS;
   // An unknown name is the schema's to reject.
   if (!HARNESS_NAMES.includes(chosen as HarnessName)) return;
+  // A file written before pi became the default may set opencode's settings and name no harness.
+  const hint = (owner: HarnessName) =>
+    merged['harness'] === undefined ? `; ${DEFAULT_HARNESS} is the default harness, set "harness": "${owner}" to use ${owner}` : '';
   for (const owner of HARNESS_NAMES) {
     if (owner === chosen) continue;
     for (const key of HARNESS_SETTINGS[owner]) {
       if (HARNESS_SETTINGS[chosen as HarnessName].includes(key)) continue;
-      if (isSet(merged[key])) warn(`"${key}" only applies to the ${owner} harness; it is ignored with ${String(chosen)}`);
+      if (isSet(merged[key])) warn(`"${key}" only applies to the ${owner} harness; it is ignored with ${String(chosen)}${hint(owner)}`);
     }
   }
 }
