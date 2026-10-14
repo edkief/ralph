@@ -21,6 +21,9 @@ const EXPECTED = [
   '.ralph/logs/LOG.md',
   'ralph.config.json',
   '.agents/skills/browser-check/SKILL.md',
+  '.agents/skills/ralph-plan/SKILL.md',
+  '.agents/skills/ralph-grill/SKILL.md',
+  '.agents/skills/ralph-review-plan/SKILL.md',
 ];
 
 function project(): string {
@@ -59,6 +62,17 @@ describe('scaffold', () => {
     }
     expect(readFileSync(resolve(root, '.gitignore'), 'utf8')).toBe('.ralph/history/\n.playwright-mcp/\n.playwright-cli/\n');
     expect(readFileSync(resolve(root, '.gitattributes'), 'utf8')).toBe('.ralph/**/*.jsonl merge=union\n');
+  });
+
+  it('gives the ralph-plan skill the same task formats as the planning interview', () => {
+    // The fenced JSON examples (a spec, then tasks.json) must not drift apart between the two.
+    const examples = (name: string) =>
+      [...readFileSync(resolve(TEMPLATES_DIR, name), 'utf8').matchAll(/```json\n([\s\S]*?)```/g)].map((match) =>
+        JSON.parse(match[1]!.replaceAll('{{RALPH_DIR}}', '.ralph')),
+      );
+    const skill = examples('skills/ralph-plan/SKILL.md');
+    expect(skill).toHaveLength(2);
+    expect(skill).toEqual(examples('PLAN.md'));
   });
 
   it('produces a project Ralph can load', () => {

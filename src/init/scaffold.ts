@@ -22,6 +22,10 @@ const FILES: ReadonlyArray<readonly [template: string, destination: string]> = [
   // Where a pi agent learns to check a screen with playwright-cli (pi.browser "skill"). Written for any harness: the
   // skill says to use it only without a browser tool of one's own, and a project may switch harness later.
   ['skills/browser-check/SKILL.md', '.agents/skills/browser-check/SKILL.md'],
+  // For planning outside `ralph init`, with whatever agent and model the owner picks.
+  ['skills/ralph-plan/SKILL.md', '.agents/skills/ralph-plan/SKILL.md'],
+  ['skills/ralph-grill/SKILL.md', '.agents/skills/ralph-grill/SKILL.md'],
+  ['skills/ralph-review-plan/SKILL.md', '.agents/skills/ralph-review-plan/SKILL.md'],
 ];
 
 /**
