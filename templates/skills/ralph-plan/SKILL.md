@@ -50,8 +50,9 @@ below use `.ralph/`.
    assumption in the PRD.
 4. **Write the files** below.
 5. **Check them.** Run `ralph doctor` if `ralph` is installed, and fix every problem it reports
-   under `plan` and `task list`. Its other checks are about the loop's environment, not the plan.
-   Without `ralph`, check by hand: every id in `tasks.json` has a spec named after it, every spec
+   under `plan` and `task list`. Its other checks are about the loop's environment, not the plan,
+   and it stops before them if the loop's agent harness is not installed on this machine. Without
+   those two lines, check by hand: every id in `tasks.json` has a spec named after it, every spec
    is listed once, every spec has a title and a non-empty `acceptanceCriteria` list.
 6. **Summarise** the plan for the owner: one line per task, in run order, and the assumptions.
 7. **Commit** the plan files and nothing else, once the owner is happy with it:

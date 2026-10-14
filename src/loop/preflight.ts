@@ -8,6 +8,7 @@ import { changedFiles, isRepository } from './records.js';
 import type { Config } from '../config/schema.js';
 import type { AgentHarness, CheckResult } from '../harness/types.js';
 import { TaskStore, type TaskInspection } from '../tasks/store.js';
+import { pendingPlanProblems } from '../init/plan.js';
 
 const run = promisify(execFile);
 
@@ -38,6 +39,8 @@ export async function preflight(config: Config, harness: AgentHarness): Promise<
 
   const taskList = taskListCheck(config);
   if (taskList) results.push(taskList);
+  const plan = planCheck(config);
+  if (plan) results.push(plan);
   const handoffs = handoffCheck(config);
   if (handoffs) results.push(handoffs);
   const splits = splitCheck(config);
@@ -87,6 +90,19 @@ export function taskListCheck(config: Config): CheckResult | undefined {
   if (passed.length > 0) details.push(`passing tasks listed with no spec: ${some(passed)}`);
   if (details.length === 0) return undefined;
   return { name: 'task list', ok: false, detail: details.join('; '), fatal: pending.length > 0 };
+}
+
+/**
+ * The checks the planning interview makes, for a plan written anywhere else:
+ * a template PRD or task list, and unfinished tasks whose spec is the template
+ * or lacks a title or acceptance criteria. A warning only: the loop can still
+ * run such a plan, just with less to go on. Returns nothing when it is sound.
+ */
+export function planCheck(config: Config): CheckResult | undefined {
+  const problems = pendingPlanProblems(config.projectRoot, config.ralphDir);
+  if (problems.length === 0) return undefined;
+  const shown = problems.slice(0, 5).join('; ') + (problems.length > 5 ? `; and ${problems.length - 5} more` : '');
+  return { name: 'plan', ok: false, detail: shown, fatal: false };
 }
 
 /** The first few of `ids`, and how many more. */
