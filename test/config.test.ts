@@ -54,6 +54,10 @@ describe('loadConfig', () => {
     expect(loadConfig({ projectRoot: project(), env: {} }).retries.earlyStopResumes).toBe(2);
   });
 
+  it('waits out a rate limit 20 times, 15 minutes apart, unless set otherwise', () => {
+    expect(loadConfig({ projectRoot: project(), env: {} }).retries.rateLimit).toEqual({ waitMs: 900_000, maxWaits: 20 });
+  });
+
   it('gives the agent a wrap-up budget unless it is turned off', () => {
     expect(loadConfig({ projectRoot: project(), env: {} }).timeouts.wrapUpMs).toBe(600_000);
     const off = loadConfig({ projectRoot: project(), env: { RALPH_WRAP_UP_TIMEOUT_MS: '0' } });

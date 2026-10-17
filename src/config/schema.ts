@@ -76,6 +76,18 @@ const RetriesSchema = z.object({
    */
   earlyStopResumes: z.number().int().min(0).default(2),
   backoffMs: z.number().int().min(0).default(10_000),
+  /**
+   * A turn the provider turned away with a rate limit or an exhausted plan
+   * waits `waitMs`, then carries on in the same session, up to `maxWaits`
+   * times in a row before the run ends as a provider error. 0 treats a rate
+   * limit like any other provider error.
+   */
+  rateLimit: z
+    .object({
+      waitMs: z.number().int().min(0).default(15 * 60_000),
+      maxWaits: z.number().int().min(0).default(20),
+    })
+    .prefault({}),
 });
 
 const StallSchema = z.object({
