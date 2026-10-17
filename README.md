@@ -844,7 +844,8 @@ browser has to be closed (`playwright-cli close`), since it runs on after the co
   none counts as zero tokens, so check that yours does if the token figures read zero.
 - **Retries.** pi retries a failing provider call three times on its own, waiting 2, 4 and 8 seconds.
   A turn that fails with the error those retries were for is a provider error, like a retry storm: the
-  loop backs off before the next iteration.
+  loop backs off before the next iteration. A rate limit or an exhausted plan is
+  [waited out](#rate-limits-and-exhausted-plans) instead.
 - **Wrap-up.** A steered wrap-up prompt reaches the model after the tool that is running ends, so a
   command stuck for good is not steered out of: that is the inactivity wrap-up, which interrupts first.
 - **Subagents** do not exist in pi.
@@ -872,7 +873,11 @@ See `templates/ralph.config.json` for a complete file.
     "providerRetriesPerIteration": 3,
     "iterationRetries": 1,         // retries of a turn the provider failed or that outgrew the context window
     "earlyStopResumes": 2,         // times an agent that ends its turn early is told to carry on; 0 = never
-    "backoffMs": 15000
+    "backoffMs": 15000,
+    "rateLimit": {
+      "waitMs": 900000,            // wait this long for a rate limit or an exhausted plan to lift
+      "maxWaits": 20               // times in a row, then the run ends as provider-error; 0 = retry like other errors
+    }
   },
   "stall": {
     "maxUnproductiveIterations": 3,
@@ -1055,6 +1060,21 @@ A retry storm interrupts the session server-side rather than killing a process, 
 can clean up, and retries the whole turn in a fresh session within the same iteration
 (`retries.iterationRetries`): it says nothing about the task itself. A turn that runs out of
 time is not retried this way; the next iteration resumes from its handoff instead (see below).
+
+### Rate limits and exhausted plans
+
+A provider that turns the agent away with a rate limit or an exhausted plan or quota (an HTTP
+429, or an error that says *rate limit*, *too many requests*, *usage limit* or *quota*) will not
+let it back in for minutes or hours, so retrying within seconds only adds to the failures. The
+harness's own quick retries still come first, so a short per-minute limit clears as before. When
+the turn still ends on a rate limit, Ralph waits `retries.rateLimit.waitMs` (15 minutes) and then
+carries the turn on in the same session, telling the agent that the limit cut it off. The time
+spent waiting is not taken from the agent's working time, nor counted as an unproductive
+iteration or an iteration retry.
+
+If the limit is still there after `retries.rateLimit.maxWaits` (20) waits in a row, the run ends
+as `provider-error` with the last error, rather than using up its iterations. A stop or a park
+cuts a wait short. Set `maxWaits` to 0 to treat a rate limit like any other provider error.
 
 ### Running out of time
 
