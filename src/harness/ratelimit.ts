@@ -11,6 +11,8 @@ const PATTERNS = [
   /insufficient_quota/i,
   /quota (?:has been )?exceeded|exceeded (?:your |the )?(?:current )?quota/i,
   /resource_exhausted/i,
+  // pi, when the provider asks for a longer wait than it will make itself.
+  /server requested [\d.]+s retry delay/i,
 ];
 
 export function isRateLimit(message: string, status?: number): boolean {
