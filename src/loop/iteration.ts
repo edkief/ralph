@@ -3,6 +3,7 @@ import { isActivityEvent, type EventOf, type HarnessEvent, type PermissionReques
 import { decidePermission, type PermissionDecision, type PermissionReply } from './permissions.js';
 import type { AskRelay, FormRequest } from './asks.js';
 import { isContextOverflow } from '../harness/overflow.js';
+import { isRateLimit } from '../harness/ratelimit.js';
 import { Watchdog, describeTrip, type WatchdogTrip } from './watchdog.js';
 import { parsePromiseTags, type IterationStatus, type PromiseTags } from './outcome.js';
 import { sleep } from '../util/sleep.js';
@@ -29,6 +30,10 @@ export interface IterationResult {
   filesTouched: string[];
   providerRetries: number;
   lastProviderError?: string;
+  /** A provider error that was a rate limit or an exhausted plan: one to wait out rather than retry. */
+  rateLimited?: true;
+  /** Times the turn waited out a rate limit before carrying on. */
+  rateLimitWaits?: number;
   /** Times the harness summarised the conversation to fit the context window. */
   compactions: number;
   /** Forms and permissions put to a person during the turn. */
@@ -145,6 +150,7 @@ export async function runIteration(args: {
   // own end event does not always repeat it.
   let stepFailure: string | undefined;
   let lastProviderError: string | undefined;
+  let rateLimited = false;
   // A permission request the server never got an answer to: the agent would
   // wait on it for good, so the turn ends here.
   let permissionFailure: string | undefined;
@@ -443,6 +449,7 @@ export async function runIteration(args: {
         case 'retry': {
           watchdog.recordProviderRetry();
           lastProviderError = event.error ?? 'unknown provider error';
+          rateLimited = isRateLimit(lastProviderError, event.status);
           hooks.onRetry?.(event.attempt ?? watchdog.providerRetries, lastProviderError);
           logger.warn('provider retry scheduled', {
             attempt: event.attempt ?? watchdog.providerRetries,
@@ -513,9 +520,10 @@ export async function runIteration(args: {
     reason === 'park' ? ['Parked on request'] : reason ? [describeTrip(reason, watchdogOptions)] : [],
   );
 
+  const status = classify({ trip, signal, executionError, permissionFailure, tags, wrapUp: wrapped, lastProviderError });
   return {
     sessionId,
-    status: classify({ trip, signal, executionError, permissionFailure, tags, wrapUp: wrapped, lastProviderError }),
+    status,
     text,
     tags,
     usage,
@@ -523,6 +531,9 @@ export async function runIteration(args: {
     filesTouched: [...filesTouched],
     providerRetries: watchdog.providerRetries,
     ...(lastProviderError ? { lastProviderError } : {}),
+    ...(status === 'provider-error' && (rateLimited || isRateLimit(executionError ?? ''))
+      ? { rateLimited: true as const }
+      : {}),
     compactions,
     ...(asksPut > 0 ? { asks: asksPut } : {}),
     ...(trip ? { trip } : {}),
@@ -621,6 +632,8 @@ function classify(args: {
     if (isContextOverflow(args.executionError)) return 'context-overflow';
     // The harness gave up retrying the provider: the same failure as a retry storm, and it wants the same backoff.
     if (args.lastProviderError && args.executionError.includes(args.lastProviderError)) return 'provider-error';
+    // Turned away without a retry: a rate limit says nothing about the task either.
+    if (isRateLimit(args.executionError)) return 'provider-error';
     return 'failed';
   }
   return 'progressed';

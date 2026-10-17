@@ -571,6 +571,84 @@ describe('runLoop', () => {
     });
   });
 
+  describe('a provider rate limit', () => {
+    const message = '429 {"type":"error","error":{"type":"rate_limit_error","message":"The Token Plan usage limit has been reached."}}';
+    const limited: ScriptedEvent[] = [
+      { type: 'session.text.ended', data: { text: 'Editing the parser.' } },
+      { type: 'session.retry.scheduled', data: { attempt: 1, error: { type: 'rate_limit_error', message, status: 429 } } },
+      { type: 'session.execution.failed', data: { error: { message } } },
+    ];
+    const records = (historyDir: string) =>
+      readFileSync(resolve(historyDir, 'iterations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+    it('is waited out, then the turn carries on in the same session', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, { maxIterations: 3, retries: { rateLimit: { waitMs: 0, maxWaits: 3 } } }),
+        {
+          onPrompt: (count) => {
+            if (count === 3) markPassing(root, 'TASK-1');
+          },
+          script: (count) => (count < 3 ? limited : say('<promise>TASK-1:DONE</promise>')),
+        },
+      );
+
+      expect(result.status).toBe('complete');
+      expect(result.iterations).toBe(1);
+      expect(server?.sessionsCreated).toBe(1);
+      const resume = String(server?.prompts[1]?.['text']);
+      expect(resume).toContain('## Carry on with TASK-1');
+      expect(resume).toContain("rate limit cut your turn off");
+      const [record] = records(result.historyDir);
+      expect(record).toMatchObject({ result: { status: 'progressed', rateLimitWaits: 2 } });
+      expect(record.result.rateLimited).toBeUndefined();
+    });
+
+    it('ends the run as a provider error once its waits are spent, without counting as a stall', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          retries: { iterationRetries: 2, rateLimit: { waitMs: 0, maxWaits: 2 } },
+          stall: { maxUnproductiveIterations: 1 },
+        }),
+        { script: limited },
+      );
+
+      expect(result.status).toBe('provider-error');
+      expect(result.iterations).toBe(1);
+      expect(result.message).toContain('Still rate limited after 2 waits of 0s');
+      expect(result.message).toContain('usage limit has been reached');
+      // The first turn and one carried on after each wait; no iteration retries on top.
+      expect(server?.prompts).toHaveLength(3);
+      expect(server?.sessionsCreated).toBe(1);
+      expect(records(result.historyDir)[0]).toMatchObject({ result: { status: 'provider-error', rateLimited: true, rateLimitWaits: 2 } });
+    });
+
+    it('is treated like any other provider error with no waits configured', async () => {
+      const root = project([{ id: 'TASK-1', passes: false }]);
+
+      const result = await loop(
+        root,
+        config(root, {
+          maxIterations: 5,
+          retries: { iterationRetries: 1, rateLimit: { waitMs: 0, maxWaits: 0 } },
+          stall: { maxUnproductiveIterations: 2 },
+        }),
+        { script: limited },
+      );
+
+      expect(result.status).toBe('stalled');
+      expect(result.iterations).toBe(2);
+      // Each iteration retried once, in a fresh session.
+      expect(server?.sessionsCreated).toBe(4);
+    });
+  });
+
   describe('running out of context', () => {
     const handoff = (root: string) => resolve(root, '.ralph', 'handoff', 'TASK-1.md');
     const overflow: ScriptedEvent[] = [

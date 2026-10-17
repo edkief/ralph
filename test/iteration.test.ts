@@ -138,6 +138,52 @@ describe('runIteration', () => {
     expect(result.error).toBe('503 upstream unavailable');
   });
 
+  it('marks a retry storm of rate limits as rate limited, to be waited out', async () => {
+    const retry = (attempt: number) => ({
+      type: 'session.retry.scheduled',
+      data: {
+        attempt,
+        error: { type: 'rate_limit_error', message: 'The Token Plan usage limit has been reached.', status: 429 },
+      },
+      after: 10,
+    });
+
+    const result = await iterate(
+      { script: [retry(1), retry(2), retry(3), { after: 5_000, type: 'session.execution.succeeded' }] },
+      config({ retries: { providerRetriesPerIteration: 2 }, timeouts: { inactivityMs: 60_000 } }),
+    );
+
+    expect(result.status).toBe('provider-error');
+    expect(result.rateLimited).toBe(true);
+    expect(result.lastProviderError).toContain('usage limit');
+  });
+
+  it('marks a turn the provider turned away with a rate limit, unretried, as rate limited', async () => {
+    const result = await iterate(
+      { script: [{ type: 'session.execution.failed', data: { error: { message: '429 Too Many Requests' } } }] },
+      config(),
+    );
+
+    expect(result.status).toBe('provider-error');
+    expect(result.rateLimited).toBe(true);
+  });
+
+  it('does not mark a retry storm of other provider errors as rate limited', async () => {
+    const retry = (attempt: number) => ({
+      type: 'session.retry.scheduled',
+      data: { attempt, error: { type: 'provider.connection', message: 'ECONNREFUSED', status: 502 } },
+      after: 10,
+    });
+
+    const result = await iterate(
+      { script: [retry(1), retry(2), retry(3), { after: 5_000, type: 'session.execution.succeeded' }] },
+      config({ retries: { providerRetriesPerIteration: 2 }, timeouts: { inactivityMs: 60_000 } }),
+    );
+
+    expect(result.status).toBe('provider-error');
+    expect(result.rateLimited).toBeUndefined();
+  });
+
   it('keeps an execution failure that has nothing to do with the provider retries a failure', async () => {
     const result = await iterate(
       {
