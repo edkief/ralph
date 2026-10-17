@@ -124,7 +124,11 @@ export function readAskAnswer(ralphRoot: string, id: string): AskAnswer | undefi
   return readAs(answerPath(ralphRoot, id), AskAnswerSchema);
 }
 
-/** Whether the process that left `ask` is still there, as far as this machine can tell. */
+/**
+ * Whether the process that left `ask` is still there, as far as this machine can tell.
+ * Only `false` is to be relied on: another process may have its pid by now, so the
+ * run or interview that asked has to be live too.
+ */
 export function askProcessAlive(ask: Ask): boolean | undefined {
   if (ask.hostname !== hostname()) return undefined;
   try {

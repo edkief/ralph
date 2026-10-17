@@ -136,6 +136,8 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     }
     stopLater.abort();
   }, args.pollMs ?? POLL_MS);
+  // A reader on this host or another tells a run that goes on from one that died by this.
+  const heartbeat = setInterval(() => saveState({}), HEARTBEAT_MS);
   const watched: LoopArgs = {
     ...args,
     signal: AbortSignal.any([args.signal, stopNow.signal]),
@@ -158,12 +160,16 @@ export async function runLoop(args: LoopArgs): Promise<RunResult> {
     throw cause;
   } finally {
     clearInterval(stopWatch);
+    clearInterval(heartbeat);
     detach();
   }
 }
 
 /** How often the loop looks for an answer or a stop request in the Ralph folder. */
 const POLL_MS = 500;
+
+/** How often a run rewrites its state, so a reader can tell it still goes on. */
+const HEARTBEAT_MS = 5_000;
 
 interface LoopArgs {
   config: Config;

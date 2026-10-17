@@ -57,11 +57,15 @@ export const MAX_LOG_LINES = 5000;
 /** How much of the end of a log file is read to find them. */
 export const LOG_TAIL_BYTES = 4 * 1024 * 1024;
 /**
- * A running run on another host (a sidecar, another pod) whose files have not
- * changed for this long is taken to have died. Iterations are quiet between
+ * A running run that records no heartbeat (from before it did), whose files have
+ * not changed for this long is taken to have died. Iterations are quiet between
  * events for at most the inactivity timeout, which defaults to 3 minutes.
  */
 const STALE_MS = 15 * 60_000;
+
+/** A run whose state is older than this is taken to have died; it rewrites it every few seconds. */
+const RUN_STALE_MS = 60_000;
+
 /** How long a finished planning session stays on the status, for its outcome to be seen. */
 const PLAN_SHOWN_MS = 24 * 60 * 60_000;
 
@@ -217,10 +221,9 @@ export class RalphProject {
     });
   }
 
-  /** An ask still waits on someone: its process is there, or, on another machine, its run or interview is live. */
+  /** An ask still waits on someone: its process is there, and its run or interview is live. */
   askLive(ask: Ask): boolean {
-    const alive = askProcessAlive(ask);
-    if (alive !== undefined) return alive;
+    if (askProcessAlive(ask) === false) return false;
     try {
       if (ask.origin === 'run' && ask.runId) return this.run(ask.runId).live;
       const state = ask.planId ? readPlanState(this.ralphRoot, ask.planId) : undefined;
@@ -690,18 +693,22 @@ export class RalphProject {
   }
 
   /**
-   * Whether a run that says it is running still is. On this host its pid
-   * answers that; elsewhere, whether its files are still changing.
+   * Whether a run that says it is running still is. On this host its pid must
+   * answer, though that alone is not enough: after a crash or a container
+   * restart the pid may belong to something else. A run rewrites its state every
+   * few seconds, so that must be recent, wherever it runs. One that never did
+   * has only its files to go by: whether they are still changing.
    */
   private isAlive(state: RunState, dir: string): boolean {
     if (state.hostname === hostname()) {
       try {
         process.kill(state.pid, 0);
-        return true;
       } catch (cause) {
-        return (cause as NodeJS.ErrnoException).code === 'EPERM';
+        if ((cause as NodeJS.ErrnoException).code !== 'EPERM') return false;
       }
     }
+    const beat = Date.parse(state.updatedAt ?? '');
+    if (!Number.isNaN(beat)) return Date.now() - beat < RUN_STALE_MS;
     const touched = safeReaddir(dir).map((name) => statSync(resolve(dir, name), { throwIfNoEntry: false })?.mtimeMs ?? 0);
     return Date.now() - Math.max(0, ...touched) < STALE_MS;
   }

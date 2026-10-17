@@ -77,7 +77,7 @@ function project(): string {
       pid: process.pid,
       hostname: hostname(),
       startedAt: '2026-09-30T12:00:00.000Z',
-      updatedAt: '2026-09-30T12:10:00.000Z',
+      updatedAt: new Date().toISOString(),
       maxIterations: 10,
       iteration: 2,
       taskId: 'TASK-2',
@@ -188,6 +188,16 @@ describe('web UI server', () => {
     const { body } = await get<StatusView>('/api/status');
     // Recorded before the iteration's time limit was kept.
     expect(body.run).toMatchObject({ status: 'running', live: false, iterationMs: null });
+  });
+
+  it('takes a run whose pid answers but whose state has not been rewritten for minutes as ended', async () => {
+    const root = project();
+    const state = resolve(root, '.ralph', 'history', LIVE_RUN, 'state.json');
+    const run = JSON.parse(readFileSync(state, 'utf8'));
+    writeFileSync(state, JSON.stringify({ ...run, updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() }));
+    await start(root);
+    const { body } = await get<StatusView>('/api/status');
+    expect(body.run).toMatchObject({ runId: LIVE_RUN, status: 'running', live: false });
   });
 
   it('lists runs newest first, older ones from their summary', async () => {
@@ -906,6 +916,19 @@ describe('web UI actions', () => {
     const { body } = await get<Array<{ runId: string }>>('/api/runs');
     expect(body.map((run) => run.runId)).not.toContain('pi');
     expect(body.length).toBeGreaterThan(0);
+  });
+
+  it('does not show an ask whose pid answers but whose run has died', async () => {
+    const root = project();
+    const ralphRoot = resolve(root, '.ralph');
+    const state = resolve(ralphRoot, 'history', LIVE_RUN, 'state.json');
+    const run = JSON.parse(readFileSync(state, 'utf8'));
+    writeFileSync(state, JSON.stringify({ ...run, updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() }));
+    writeAsk(ralphRoot, { id: 'per_1', kind: 'permission', origin: 'run', runId: LIVE_RUN, taskId: null, sessionID: 's', permission: { action: 'shell', resources: ['make deploy'] }, createdAt: '2026-10-10T00:00:00.000Z' });
+    await start(root);
+
+    expect((await get<StatusView>('/api/status')).body.asks).toEqual([]);
+    expect((await post('/api/actions/ask', { id: 'per_1', decision: 'once' })).status).toBe(409);
   });
 
   it('takes a decision on an asked permission', async () => {

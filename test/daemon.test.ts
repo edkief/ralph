@@ -111,10 +111,18 @@ describe('daemon control files', () => {
     expect(readDaemonRequest(root)).toEqual({ kind: 'run', iterations: 3 });
   });
 
-  it('takes a daemon on this host as up while its process is', () => {
-    expect(daemonLive(state({ hostname: hostname() }))).toBe(true);
-    expect(daemonLive(state({ hostname: hostname(), pid: 2 ** 22 + 12345 }))).toBe(false);
-    expect(daemonLive(state({ hostname: hostname(), status: 'stopped' }))).toBe(false);
+  it('takes a daemon on this host as up while its process is, and its heartbeat fresh', () => {
+    const now = Date.parse('2026-10-01T00:00:30.000Z');
+    const here = { hostname: hostname(), updatedAt: '2026-10-01T00:00:00.000Z' };
+    expect(daemonLive(state(here), now)).toBe(true);
+    expect(daemonLive(state({ ...here, pid: 2 ** 22 + 12345 }), now)).toBe(false);
+    expect(daemonLive(state({ ...here, status: 'stopped' }), now)).toBe(false);
+  });
+
+  it('does not take a daemon for up on the strength of a pid alone', () => {
+    const now = Date.parse('2026-10-01T00:05:00.000Z');
+    // This process exists, but it is not a daemon that has beaten its heart lately.
+    expect(daemonLive(state({ hostname: hostname(), updatedAt: '2026-10-01T00:00:00.000Z' }), now)).toBe(false);
   });
 
   it('takes a daemon on another host as up while its heartbeat is fresh', () => {

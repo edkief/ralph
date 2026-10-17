@@ -151,15 +151,18 @@ export function planEnded(status: PlanStatus): boolean {
   return ENDED.includes(status);
 }
 
-/** Whether the process holding the interview is still at it. */
+/**
+ * Whether the process holding the interview is still at it. A process of that
+ * pid is not enough, even on this host: after a crash or a container restart
+ * the pid may belong to something else by now. The heartbeat must be fresh too.
+ */
 export function planLive(state: PlanState, now: number = Date.now()): boolean {
   if (planEnded(state.status)) return false;
   if (state.hostname === hostname()) {
     try {
       process.kill(state.pid, 0);
-      return true;
     } catch (cause) {
-      return (cause as NodeJS.ErrnoException).code === 'EPERM';
+      if ((cause as NodeJS.ErrnoException).code !== 'EPERM') return false;
     }
   }
   return now - Date.parse(state.updatedAt) < STALE_MS;

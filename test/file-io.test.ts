@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FileInterviewIO } from '../src/init/file-io.js';
 import {
   livePlan,
+  planLive,
   PlanRecorder,
   PlanRequestError,
   readConversation,
@@ -117,6 +118,17 @@ describe('the file-backed interview IO', () => {
     working.io.turn(1);
     requestPlanStop(working.ralphRoot, working.recorder.id, 'ui');
     await until(() => working.controller.signal.aborted);
+  });
+
+  it('takes an interview as live only while its process is and its heartbeat is fresh', async () => {
+    const { io, state } = session();
+    void io.ask('Describe the project');
+    await until(() => state().status === 'asking');
+    const now = Date.parse(state().updatedAt);
+    expect(planLive(state(), now + 30_000)).toBe(true);
+    // The pid is this process, but nothing has beaten its heart for minutes.
+    expect(planLive(state(), now + 5 * 60_000)).toBe(false);
+    expect(planLive({ ...state(), pid: 2 ** 22 + 12345 }, now)).toBe(false);
   });
 
   it('takes no reply or stop once the session has ended', () => {
