@@ -10,6 +10,7 @@ describe('isRateLimit', () => {
     'insufficient_quota',
     'RESOURCE_EXHAUSTED: Quota exceeded for metric',
     "You've hit your usage limit",
+    'Server requested 3600s retry delay (max: 60s). Provider request failed',
   ])('recognises %j', (message) => {
     expect(isRateLimit(message)).toBe(true);
   });
