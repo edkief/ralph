@@ -57,10 +57,7 @@ export const daemonPath = (ralphRoot: string) => resolve(ralphRoot, 'history', '
 export const daemonRequestPath = (ralphRoot: string) => resolve(ralphRoot, 'history', 'daemon-request.json');
 export const daemonLogPath = (ralphRoot: string) => resolve(ralphRoot, 'history', 'daemon.log');
 
-/**
- * A daemon on another host whose heartbeat is older than this is taken to
- * have died. It writes one every few seconds, whatever it is doing.
- */
+/** A daemon whose heartbeat is older than this is taken to have died. It writes one every few seconds, whatever it is doing. */
 export const DAEMON_STALE_MS = 60_000;
 
 export function writeDaemonState(ralphRoot: string, state: DaemonState): void {
@@ -71,15 +68,19 @@ export function readDaemonState(ralphRoot: string): DaemonState | undefined {
   return readAs(daemonPath(ralphRoot), DaemonStateSchema);
 }
 
-/** Whether the daemon that wrote `state` is still up. */
+/**
+ * Whether the daemon that wrote `state` is still up. A process of that pid
+ * is not enough, even on this host: after a crash or a container restart the
+ * pid may be a zombie, or belong to some other process or thread by now
+ * (`kill(pid, 0)` succeeds for a thread id). The heartbeat must be fresh too.
+ */
 export function daemonLive(state: DaemonState, now: number = Date.now()): boolean {
   if (state.status === 'stopped') return false;
   if (state.hostname === hostname()) {
     try {
       process.kill(state.pid, 0);
-      return true;
     } catch (cause) {
-      return (cause as NodeJS.ErrnoException).code === 'EPERM';
+      if ((cause as NodeJS.ErrnoException).code !== 'EPERM') return false;
     }
   }
   return now - Date.parse(state.updatedAt) < DAEMON_STALE_MS;
