@@ -14,7 +14,7 @@ import { TaskStore, type Task } from '../tasks/store.js';
 import { readSplitRecords, splitLineage } from '../tasks/splits.js';
 import { buildPrompt } from '../prompt/build.js';
 import { buildWrapUpPrompt } from '../prompt/wrapup.js';
-import { buildResumePrompt } from '../prompt/resume.js';
+import { buildRateLimitResumePrompt, buildResumePrompt } from '../prompt/resume.js';
 import { recentDecisions } from '../human/decisions.js';
 import { recordAnswer } from '../human/respond.js';
 import {
@@ -589,6 +589,17 @@ async function loop(
       unpushed = pushed.outcome !== 'ok';
     }
 
+    // Waited out as long as configured, and still limited: nothing more to do in this run.
+    if (result.rateLimited && config.retries.rateLimit.maxWaits > 0 && !pause.aborted) {
+      const { waitMs, maxWaits } = config.retries.rateLimit;
+      finalStatus = 'provider-error';
+      message = `Still rate limited after ${maxWaits} waits of ${describeWait(waitMs)}: ${truncate(
+        result.lastProviderError ?? result.error ?? 'unknown provider error',
+        200,
+      )}`;
+      break;
+    }
+
     if (TERMINAL_STATUSES.has(status)) {
       const terminal = terminalMessage(status, result);
       if (status === 'blocked' || status === 'decide') {
@@ -860,16 +871,58 @@ async function attemptIteration(context: {
       },
     });
 
+  const { waitMs, maxWaits } = config.retries.rateLimit;
+  // Rate limits waited out in a row, in all, and the time spent waiting, which is not working time.
+  let rateLimitWaits = 0;
+  let totalWaits = 0;
+  let waitedMs = 0;
+
+  // A turn, carried on in its session each time a rate limit is waited out.
+  const patientTurn = async (prompt: string, resume?: { sessionId: string; iterationMs: number }) => {
+    let budgetMs = resume?.iterationMs ?? config.timeouts.iterationMs;
+    let current = await turn(prompt, resume);
+    while (current.rateLimited && rateLimitWaits < maxWaits && !signal.aborted && !stop.aborted) {
+      rateLimitWaits += 1;
+      totalWaits += 1;
+      logger.warn('rate limited; waiting for the limit to lift', {
+        task: context.taskId,
+        wait: `${rateLimitWaits}/${maxWaits}`,
+        waitMs,
+        error: current.lastProviderError ?? current.error ?? 'unknown',
+      });
+      reporter.status(`rate limited: waiting ${describeWait(waitMs)} (${rateLimitWaits}/${maxWaits})`);
+      const waitStart = Date.now();
+      await sleep(waitMs, AbortSignal.any([signal, stop]));
+      waitedMs += Date.now() - waitStart;
+      if (signal.aborted || stop.aborted) break;
+      const leftMs = budgetMs - current.durationMs;
+      if (current.sessionId && leftMs >= MIN_RESUME_MS) {
+        const next = await turn(
+          buildRateLimitResumePrompt({ taskId: context.taskId, handoffPath: handoffShown, waitedMs: waitMs, leftMs }),
+          { sessionId: current.sessionId, iterationMs: leftMs },
+        );
+        current = joinTurns(current, next);
+      } else {
+        // No session to carry on, or no time left in it: start the turn over.
+        budgetMs = config.timeouts.iterationMs;
+        current = await turn(context.prompt());
+      }
+    }
+    if (!current.rateLimited) rateLimitWaits = 0;
+    return current;
+  };
+
   for (;;) {
     const since = Date.now();
-    result = await turn(context.prompt());
+    waitedMs = 0;
+    result = await patientTurn(context.prompt());
 
     // An agent that ends its turn with the task unfinished, often to wait for a
     // background job it expects to be woken by, is told nothing will wake it and
     // asked to carry on, in the same session and within the time left.
     let resumes = 0;
     for (;;) {
-      const leftMs = config.timeouts.iterationMs - (Date.now() - since);
+      const leftMs = config.timeouts.iterationMs - (Date.now() - since - waitedMs);
       if (
         !endedEarly(result) ||
         context.taskPasses() ||
@@ -887,7 +940,7 @@ async function attemptIteration(context: {
         minutesLeft: Math.round(leftMs / 60_000),
       });
       reporter.status(`resuming ${context.taskId} (${resumes}/${config.retries.earlyStopResumes})`);
-      const next = await turn(buildResumePrompt({ taskId: context.taskId, handoffPath: handoffShown, leftMs }), {
+      const next = await patientTurn(buildResumePrompt({ taskId: context.taskId, handoffPath: handoffShown, leftMs }), {
         sessionId: result.sessionId,
         iterationMs: leftMs,
       });
@@ -918,11 +971,14 @@ async function attemptIteration(context: {
       });
     }
 
+    if (totalWaits > 0) result = { ...result, rateLimitWaits: totalWaits };
     const done = { result, cutShort, ...(handoff ? { handoff } : {}) };
     const retryable = result.status === 'provider-error' || result.status === 'context-overflow';
-    // A retry is a fresh turn, which a stop request rules out.
+    // A retry is a fresh turn, which a stop request rules out. A rate limit
+    // still there after its waits will not lift for a retry either.
     if (
       !retryable ||
+      (result.rateLimited && maxWaits > 0) ||
       attempt >= config.retries.iterationRetries ||
       cutShort.length >= context.cutShortLeft ||
       signal.aborted ||
@@ -941,6 +997,11 @@ async function attemptIteration(context: {
     await sleep(config.retries.backoffMs, AbortSignal.any([signal, stop]));
     if (stop.aborted) return done;
   }
+}
+
+/** A wait as a person reads it: `15m`, `90s`. */
+function describeWait(ms: number): string {
+  return ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1_000)}s`;
 }
 
 /** Working time below which an agent that ended its turn early is not resumed. */

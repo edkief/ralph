@@ -32,3 +32,36 @@ export function buildResumePrompt(args: {
     `\`wip(${args.taskId}): <state of the work>\`, and end without a promise tag.`,
   ].join('\n');
 }
+
+/**
+ * The message that resumes an agent whose turn the provider cut off with a
+ * rate limit or an exhausted plan, once Ralph has waited it out. Its last
+ * call failed, so it may be partway through an edit or a command.
+ */
+export function buildRateLimitResumePrompt(args: {
+  taskId: string;
+  /** Relative to the project root. */
+  handoffPath: string;
+  /** How long Ralph waited before resuming. */
+  waitedMs: number;
+  /** Working time left in the iteration. */
+  leftMs: number;
+}): string {
+  const waited = Math.max(1, Math.round(args.waitedMs / 60_000));
+  const minutes = Math.max(1, Math.round(args.leftMs / 60_000));
+  return [
+    `## Carry on with ${args.taskId}`,
+    ``,
+    `The model provider's rate limit cut your turn off, and Ralph waited ${waited} minute${waited === 1 ? '' : 's'} for it to lift.`,
+    `Your last step may not have gone through: check the state of the working tree (\`git status\`, the`,
+    `file you were editing, the command you were running) before you go on.`,
+    ``,
+    `Then carry on where you left off and finish the task: tests passing, \`passes: true\`, log entry,`,
+    `commit, then \`<promise>${args.taskId}:DONE</promise>\`.`,
+    ``,
+    `You have about ${minutes} minute${minutes === 1 ? '' : 's'} of working time left.`,
+    `If you truly cannot go further in this session, kill any background processes you started, write`,
+    `\`${args.handoffPath}\` with these headings: ${HANDOFF_HEADINGS.join(', ')}. Commit it with your changes as`,
+    `\`wip(${args.taskId}): <state of the work>\`, and end without a promise tag.`,
+  ].join('\n');
+}
